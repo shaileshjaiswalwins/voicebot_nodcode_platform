@@ -1336,8 +1336,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         agent=agent,
         room_options=_RoomOptionsCls(close_on_disconnect=False),
     )
-    # Mute mic immediately — stays muted until the greeting finishes
-    _set_mic(False)
 
     # Force Gemini to speak the greeting immediately on connect by sending a
     # LiveClientContent with a placeholder user turn and turn_complete=True.
