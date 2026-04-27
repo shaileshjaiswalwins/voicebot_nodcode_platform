@@ -518,11 +518,12 @@ async def send_callback(payload: dict, callback_api_url: str = CALLBACK_API_URL)
         f"[CALLBACK] POST {callback_api_url} — "
         f"call_id={payload.get('call_id')} | outcome={payload.get('call_outcome')}"
     )
+    logger.info(f"[CALLBACK] Payload: {json.dumps(payload, ensure_ascii=False)}")
     try:
         session = _get_http_session()
         async with session.post(callback_api_url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             body = await resp.text()
-            logger.info(f"[CALLBACK] {resp.status} — {body[:300]}")
+            logger.info(f"[CALLBACK] Response {resp.status} — {body[:500]}")
     except Exception as e:
         logger.error(f"[CALLBACK] send_callback failed: {e}")
 
