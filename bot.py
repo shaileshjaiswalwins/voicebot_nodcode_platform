@@ -313,6 +313,9 @@ HINDI_LANG_CONFIG = {
         "LANGUAGE NOTES — HINDI (READ CAREFULLY)\n\n"
         "CRITICAL: NEVER output Malayalam, Tamil, Kannada, Marathi, or any other language. Hindi only.\n"
         "If you find yourself writing ക, ശ, ர, ಸ, or any non-Devanagari/non-English script → STOP and rewrite in Hindi.\n\n"
+        "INPUT LANGUAGE: The buyer ALWAYS speaks Hindi, Hinglish (Hindi + English mix), or Indian-accented English.\n"
+        "NEVER interpret or transcribe user audio as Spanish, French, Portuguese, Malay, or any non-Hindi/non-English language.\n"
+        "If audio is unclear or ambiguous, assume Hindi.\n\n"
         "STYLE: Natural spoken Hinglish. NOT formal. NOT literary. Like a real call center agent.\n"
         "  RIGHT: 'हाँ जी', 'अच्छा', 'ठीक है'\n"
         "  WRONG: 'आपकी बात सुनकर खुशी हुई', 'मैं आपकी सहायता के लिए यहाँ हूँ'\n\n"
@@ -499,14 +502,10 @@ async def call_configured_function(func_config: dict, runtime_params: dict) -> d
 
 async def save_call_log_to_backend(payload: dict):
     url = f"{BACKEND_URL}/backend/api/call-logs"
-    logger.info(f"[CALL LOG] POST {url} — call_sid={payload.get('call_sid')}")
     try:
         session = _get_http_session()
         async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            if resp.status in (200, 201):
-                data = await resp.json()
-                logger.info(f"[CALL LOG] Saved — id={data.get('id')}")
-            else:
+            if resp.status not in (200, 201):
                 text = await resp.text()
                 logger.warning(f"[CALL LOG] Backend {resp.status}: {text[:200]}")
     except Exception as e:
@@ -514,16 +513,12 @@ async def save_call_log_to_backend(payload: dict):
 
 
 async def send_callback(payload: dict, callback_api_url: str = CALLBACK_API_URL):
-    logger.info(
-        f"[CALLBACK] POST {callback_api_url} — "
-        f"call_id={payload.get('call_id')} | outcome={payload.get('call_outcome')}"
-    )
-    logger.info(f"[CALLBACK] Payload: {json.dumps(payload, ensure_ascii=False)}")
     try:
         session = _get_http_session()
         async with session.post(callback_api_url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             body = await resp.text()
-            logger.info(f"[CALLBACK] Response {resp.status} — {body[:500]}")
+            if resp.status not in (200, 201):
+                logger.warning(f"[CALLBACK] {resp.status} — {body[:300]}")
     except Exception as e:
         logger.error(f"[CALLBACK] send_callback failed: {e}")
 
@@ -1013,6 +1008,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         voice="Aoede",
         instructions=system_instruction,
         temperature=_temperature,
+        speech_config=types.SpeechConfig(language_code="hi-IN"),
         realtime_input_config=types.RealtimeInputConfig(
             automatic_activity_detection=types.AutomaticActivityDetection(
                 start_of_speech_sensitivity=_vad_start,
@@ -1032,7 +1028,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 lkapi.room.delete_room(DeleteRoomRequest(room=room_name)),
                 timeout=10.0,
             )
-            logger.info(f"[CLOSE] Room {room_name} deleted (attempt {attempt})")
+            pass
         except asyncio.TimeoutError:
             if attempt < 3:
                 await asyncio.sleep(2)
@@ -1053,7 +1049,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             await lkapi.room.remove_participant(
                 _RemoveParticipantRequest(room=room_name, identity=_caller_identity)
             )
-            logger.info(f"[CLOSE] Participant {_caller_identity!r} removed from {room_name}")
+            pass
         except Exception as e:
             logger.warning(f"[CLOSE] remove_participant failed: {e} — falling back to delete_room")
             asyncio.ensure_future(_delete_room_safe())
@@ -1078,17 +1074,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             f"lead_record_present={bool(call_state.get('lead_record'))}"
         )
         transcript = build_transcript_from_session(session)
-        logger.info(f"[TRANSCRIPT] {len(transcript)} turns | status={status}")
-        for i, turn in enumerate(transcript):
-            logger.info(f"[TRANSCRIPT] [{i+1}] {turn['role'].upper()}: {turn['text']}")
-        logger.info(f"[ANALYSIS] Analyzing {len(transcript)} turns | status={status}")
 
         schema = (call_state.get("lead_record") or {}).get("qualification_schema", {})
         analysis = await generate_call_analysis(transcript, status, schema)
-        logger.info(
-            f"[ANALYSIS] outcome={analysis.get('call_outcome')} | "
-            f"qna_count={len(analysis.get('qna', []))}"
-        )
 
         _start = call_state.get("call_start_time")
         _duration = round(time.time() - _start, 1) if _start else 0.0
@@ -1501,7 +1489,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     @ctx.room.on("participant_disconnected")
     def _on_disconnect(p: rtc.RemoteParticipant) -> None:
         nonlocal _call_ended
-        logger.info(f"[DISCONNECT] Participant disconnected: {p.identity}")
+        pass
         _cancel_inactivity()
         if call_state["ended_naturally"]:
             return
