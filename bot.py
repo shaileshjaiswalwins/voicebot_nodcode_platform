@@ -1015,6 +1015,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _t.cancel()
 
         lead_id = call_state.get("record_id")
+        logger.info(
+            f"[SAVE_CALL] save_call_data called | status={status!r} | "
+            f"record_id={lead_id!r} | call_id={call_state.get('call_id')!r} | "
+            f"callback_url={_callback_api_url!r} | "
+            f"lead_record_present={bool(call_state.get('lead_record'))}"
+        )
         transcript = build_transcript_from_session(session)
         logger.info(f"[TRANSCRIPT] {len(transcript)} turns | status={status}")
         for i, turn in enumerate(transcript):
