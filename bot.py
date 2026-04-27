@@ -22,7 +22,6 @@ import json
 import os
 import re
 import time
-import wave
 from datetime import date as _date
 from datetime import datetime
 from pathlib import Path
@@ -302,77 +301,31 @@ async def fetch_bot_config(assistant_id: str) -> dict | None:
 # Language tables
 # ---------------------------------------------------------------------------
 
-LANG_CONFIGS = {
-    "malayalam": {
-        "language_code": "ml-IN",
-        "name": "Malayalam",
-        "greeting_tts": "ഹലോ, ഞാൻ Justdial-ൽ നിന്ന് വിളിക്കുകയാണ്. നിങ്ങളിൽ നിന്ന് {product}-നായി ഒരു enquiry ലഭിച്ചിരുന്നു, അത് ഇപ്പോഴും ആവശ്യമുണ്ടോ?",
-        "timeout_message": "സമയം നൽകിയതിന് നന്ദി. ബന്ധപ്പെട്ട sellers ഉടൻ നിങ്ങളെ contact ചെയ്യും. നന്ദി.",
-    },
-    "kannada": {
-        "language_code": "kn-IN",
-        "name": "Kannada",
-        "greeting_tts": "ಹಲೋ, ನಾನು Justdial-ನಿಂದ call ಮಾಡುತ್ತಿದ್ದೇನೆ. ನಿಮ್ಮ {product} enquiry ಬಗ್ಗೆ ತಿಳಿಯಬೇಕಿತ್ತು. ಈಗಲೂ ಬೇಕಾ?",
-    },
-    "tamil": {
-        "language_code": "ta-IN",
-        "name": "Tamil",
-        "greeting_tts": "ஹலோ, நான் Justdial-லிருந்து call பண்றேன். உங்க {product} enquiry பத்தி தெரிஞ்சுக்கணும். இப்பவும் வேணுமா?",
-    },
-    "hindi": {
-        "language_code": "hi-IN",
-        "name": "Hindi",
-        "greeting_tts": "हेलो, मैं Tanya बोल रही हूँ Justdial से — आपको {product} की requirement है ना?",
-        "timeout_message": "जी, details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए धन्यवाद.",
-        "lang_notes": (
-            "LANGUAGE NOTES — HINDI (READ CAREFULLY)\n\n"
-            "CRITICAL: NEVER output Malayalam, Tamil, Kannada, Marathi, or any other language. Hindi only.\n"
-            "If you find yourself writing ക, ശ, ர, ಸ, or any non-Devanagari/non-English script → STOP and rewrite in Hindi.\n\n"
-            "STYLE: Natural spoken Hinglish. NOT formal. NOT literary. Like a real call center agent.\n"
-            "  RIGHT: 'हाँ जी', 'अच्छा', 'ठीक है'\n"
-            "  WRONG: 'आपकी बात सुनकर खुशी हुई', 'मैं आपकी सहायता के लिए यहाँ हूँ'\n\n"
-            "NUMBER PRONUNCIATION (CRITICAL for TTS):\n"
-            "  NEVER write '1.5 ton' → write 'डेढ़ ton'\n"
-            "  NEVER write '2.5 ton' → write 'ढाई ton'\n\n"
-            "FILLERS — use ONE in ~2 of every 3 responses:\n"
-            '- "अच्छा," — acknowledgement\n'
-            '- "हाँ," — light agreement\n'
-            '- "जी," — respectful filler\n'
-            '- "तो," — connecting thought\n'
-            '- "ठीक है," — soft okay\n\n'
-            "NEVER use: शयनकक्ष, बैठक कक्ष, कार्यालय, स्थापित, आवश्यकता, पर्याप्त, उपयुक्त, उचित, सूचित, प्राप्त, विवरण, अनुसार, सुविधाजनक"
-        ),
-    },
-    "english": {
-        "language_code": "en-IN",
-        "name": "English",
-        "greeting_tts": "Hello, I am calling from Justdial regarding your {product} enquiry. Are you still looking for it?",
-        "timeout_message": "Thank you for your time. The relevant sellers will contact you soon. Goodbye!",
-    },
-    "marathi": {
-        "language_code": "mr-IN",
-        "name": "Marathi",
-        "greeting_tts": "हेलो, मी Justdial-मधून call करत आहे. तुमच्या {product} enquiry बद्दल जाणून घ्यायचे होते. अजूनही हवे आहे का?",
-    },
+HINDI_LANG_CONFIG = {
+    "name": "Hindi",
+    "timeout_message": "जी, details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए धन्यवाद.",
+    "lang_notes": (
+        "LANGUAGE NOTES — HINDI (READ CAREFULLY)\n\n"
+        "CRITICAL: NEVER output Malayalam, Tamil, Kannada, Marathi, or any other language. Hindi only.\n"
+        "If you find yourself writing ക, ശ, ர, ಸ, or any non-Devanagari/non-English script → STOP and rewrite in Hindi.\n\n"
+        "STYLE: Natural spoken Hinglish. NOT formal. NOT literary. Like a real call center agent.\n"
+        "  RIGHT: 'हाँ जी', 'अच्छा', 'ठीक है'\n"
+        "  WRONG: 'आपकी बात सुनकर खुशी हुई', 'मैं आपकी सहायता के लिए यहाँ हूँ'\n\n"
+        "NUMBER PRONUNCIATION (CRITICAL for TTS):\n"
+        "  NEVER write '1.5 ton' → write 'डेढ़ ton'\n"
+        "  NEVER write '2.5 ton' → write 'ढाई ton'\n\n"
+        "FILLERS — use ONE in ~2 of every 3 responses:\n"
+        '- "अच्छा," — acknowledgement\n'
+        '- "हाँ," — light agreement\n'
+        '- "जी," — respectful filler\n'
+        '- "तो," — connecting thought\n'
+        '- "ठीक है," — soft okay\n\n'
+        "NEVER use: शयनकक्ष, बैठक कक्ष, कार्यालय, स्थापित, आवश्यकता, पर्याप्त, उपयुक्त, उचित, सूचित, प्राप्त, विवरण, अनुसार, सुविधाजनक"
+    ),
 }
 
-_INACTIVITY_PHRASE: dict[str, str] = {
-    "hindi":     "क्या आप अभी line पर हैं?",
-    "english":   "Are you still on the line?",
-    "malayalam": "നിങ്ങൾ ഇപ്പോൾ ലൈനിൽ ഉണ്ടോ?",
-    "kannada":   "ನೀವು ಈಗ ಲೈನ್‌ನಲ್ಲಿ ಇದ್ದೀರಾ?",
-    "tamil":     "நீங்கள் இப்போது லைனில் இருக்கிறீர்களா?",
-    "marathi":   "तुम्ही अजूनही लाईनवर आहात का?",
-}
-
-_INACTIVITY_END_PHRASE: dict[str, str] = {
-    "hindi":     "जी, कोई response नहीं आया, इसलिए मैं call समाप्त कर रही हूँ. आपका दिन शुभ हो.",
-    "english":   "Since there's been no response, I'll go ahead and end the call now. Thank you for your time.",
-    "malayalam": "പ്രതികരണം ഇല്ലാത്തതിനാൽ call അവസാനിപ്പിക്കുന്നു. നന്ദി.",
-    "kannada":   "ಯಾವುದೇ ಪ್ರತಿಕ್ರಿಯೆ ಇಲ್ಲದ ಕಾರಣ call ಮುಗಿಸುತ್ತಿದ್ದೇನೆ. ಧನ್ಯವಾದ.",
-    "tamil":     "பதில் இல்லாததால் call முடிக்கிறேன். நன்றி.",
-    "marathi":   "कोणताही प्रतिसाद न आल्यामुळे call संपवत आहे. धन्यवाद.",
-}
+INACTIVITY_PHRASE = "क्या आप अभी line पर हैं?"
+INACTIVITY_END_PHRASE = "जी, कोई response नहीं आया, इसलिए मैं call समाप्त कर रही हूँ. आपका दिन शुभ हो."
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -563,21 +516,13 @@ _GENERIC_OPTIONS = {
 }
 
 
-def _is_generic_options(opts: list[str]) -> bool:
-    return bool(opts) and all(o.strip().lower() in _GENERIC_OPTIONS for o in opts)
-
-
-def _is_brand_question(question_text: str) -> bool:
-    return "brand" in question_text.lower()
-
-
-def build_question_phrase_rules(questions: list[dict], language_name: str = "Hindi") -> str:
+def _build_question_phrase_rules(questions: list[dict]) -> str:
     if not questions:
         return ""
     lines = [
         "QUESTION PHRASE RULES (STRICT — DO NOT DEVIATE)",
         "",
-        f"Ask each question naturally in {language_name}. The English text below is the meaning — express it in {language_name} as a short spoken question.",
+        "Ask each question naturally in Hindi. The English text below is the meaning — express it in Hindi as a short spoken question.",
         "",
     ]
     for i, q in enumerate(questions, 1):
@@ -592,10 +537,11 @@ def build_question_phrase_rules(questions: list[dict], language_name: str = "Hin
             lines.append(f'   Units expected: {units_str}')
             lines.append(f'   ONLY accept: digits or Hindi number words')
         elif opts:
-            if _is_generic_options(opts):
+            normalized_opts = [o.strip().lower() for o in opts]
+            if normalized_opts and all(o in _GENERIC_OPTIONS for o in normalized_opts):
                 lines.append(f'   Answer type: yes/no — ask naturally, do NOT read options aloud')
                 lines.append(f'   Valid answers: {", ".join(opts)}')
-            elif _is_brand_question(text):
+            elif "brand" in text.lower():
                 lines.append(f'   Answer type: brand preference — ask naturally. DO NOT list any brand names')
                 lines.append(f'   Accept: any brand name the user mentions, OR "no preference"')
             else:
@@ -604,7 +550,7 @@ def build_question_phrase_rules(questions: list[dict], language_name: str = "Hin
         lines.append("")
     lines += [
         "RULE:",
-        f"- Ask in {language_name} only",
+        "- Ask in Hindi only",
         "- Keep it short and conversational",
         "- DO NOT combine questions",
         "- DO NOT add new questions",
@@ -659,19 +605,16 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
         base_prompt = _bc.get("system_prompt", "You are Tanya, a product qualification agent for Justdial.")
 
     cfg = _load_prompt_config()
-    lang = lang_key or "malayalam"
-    language_name = cfg.get("language_name") or LANG_CONFIGS.get(lang, LANG_CONFIGS["malayalam"])["name"]
+    language_name = cfg.get("language_name") or HINDI_LANG_CONFIG["name"]
 
     if _pc.get("script_rule"):
         script_rule = _pc["script_rule"]
     elif cfg.get("script_rule"):
         script_rule = cfg["script_rule"]
-    elif lang == "english":
-        script_rule = "Use only English."
     else:
         script_rule = f"Every word MUST be in {language_name} script ONLY."
 
-    lang_notes = LANG_CONFIGS.get(lang, {}).get("lang_notes", "")
+    lang_notes = HINDI_LANG_CONFIG.get("lang_notes", "")
     lang_notes_block = f"\n\nLANGUAGE NOTES\n\n{lang_notes}\n" if lang_notes else ""
 
     base = (
@@ -713,7 +656,7 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     )
 
     questions_block = "\n".join(f"{i}. {q.get('text')}" for i, q in enumerate(questions, 1))
-    mapping_block = "\n" + build_question_phrase_rules(questions, language_name) + "\n"
+    mapping_block = "\n" + _build_question_phrase_rules(questions) + "\n"
 
     closing_instruction = (
         _bc.get("call_end_text")
@@ -955,71 +898,6 @@ def _is_closing_phrase(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Audio recording helper
-# ---------------------------------------------------------------------------
-
-async def _record_room_audio(room: rtc.Room, path: Path) -> None:
-    """Record the first remote participant's audio to a WAV file."""
-    track_ref: list[rtc.RemoteAudioTrack | None] = [None]
-    track_event = asyncio.Event()
-
-    @room.on("track_subscribed")
-    def _on_track(track, publication, participant):
-        if isinstance(track, rtc.RemoteAudioTrack) and track_ref[0] is None:
-            track_ref[0] = track
-            track_event.set()
-
-    # Check tracks already subscribed
-    for p in room.remote_participants.values():
-        for pub in p.track_publications.values():
-            if pub.track and isinstance(pub.track, rtc.RemoteAudioTrack):
-                track_ref[0] = pub.track
-                track_event.set()
-                break
-        if track_event.is_set():
-            break
-
-    try:
-        await asyncio.wait_for(track_event.wait(), timeout=30.0)
-    except asyncio.TimeoutError:
-        logger.warning("[Recorder] No remote audio track within 30 s — skipping recording")
-        return
-
-    track = track_ref[0]
-    if track is None:
-        return
-
-    frames_buf: list[bytes] = []
-    sample_rate = 16000
-    num_channels = 1
-
-    try:
-        stream = rtc.AudioStream(track, sample_rate=sample_rate, num_channels=num_channels)
-        async for frame_event in stream:
-            frame = frame_event.frame
-            frames_buf.append(bytes(frame.data))
-            sample_rate = frame.sample_rate
-            num_channels = frame.num_channels
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        logger.error(f"[Recorder] Audio stream error: {e}")
-    finally:
-        if frames_buf:
-            try:
-                with wave.open(str(path), "wb") as wf:
-                    wf.setnchannels(num_channels)
-                    wf.setsampwidth(2)
-                    wf.setframerate(sample_rate)
-                    wf.writeframes(b"".join(frames_buf))
-                logger.info(f"[Recorder] Saved: {path}")
-            except Exception as e:
-                logger.error(f"[Recorder] Failed to write WAV: {e}")
-        else:
-            logger.warning("[Recorder] No audio frames captured")
-
-
-# ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 
@@ -1054,7 +932,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _mis_api_base       = _api_urls.get("mis_api_base") or MIS_API_BASE
     _callback_api_url   = _api_urls.get("callback_api_url") or CALLBACK_API_URL
     _category_change_api= _api_urls.get("category_change_api") or CATEGORY_CHANGE_API
-    _language           = (_bot_config.get("language") or "malayalam").lower()
+    _language           = "hindi"
     _temperature        = float(_bot_config.get("temperature") or 0.4)
     _vad_start          = _bot_config.get("gemini_start_sensitivity") or "START_SENSITIVITY_LOW"
     _vad_end            = _bot_config.get("gemini_end_sensitivity")   or "END_SENSITIVITY_HIGH"
@@ -1063,7 +941,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _max_call_duration  = int(_bot_config.get("max_call_duration") or 300)
     _functions: list[dict] = _bot_config.get("functions") or []
     _function_calling   = bool(_bot_config.get("function_calling", False)) and bool(_functions)
-    _lang_cfg           = LANG_CONFIGS.get(_language, LANG_CONFIGS["malayalam"])
+    _lang_cfg           = HINDI_LANG_CONFIG
 
     # 3. Per-call state
     call_state = {
@@ -1108,8 +986,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     )
 
     # 6. Inner helpers (defined before event handlers so closures resolve at call time)
-
-    _recording_path = Path("call_records") / f"recording_{room_name}.wav"
 
     async def _delete_room_safe(attempt: int = 1) -> None:
         lkapi = LiveKitAPI()
@@ -1168,7 +1044,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "call_summary": analysis.get("call_summary", ""),
             "product_change": call_state.get("product_change") or analysis.get("product_change") or {},
             "call_duration": _duration,
-            "call_recording": str(_recording_path),
         }
         rescheduled_to = analysis.get("rescheduled_to", "")
         if rescheduled_to:
@@ -1222,7 +1097,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "start_time": _start_ts,
             "end_time": _end_ts,
             "duration_seconds": _duration,
-            "recording_link": str(_recording_path) if _recording_path.exists() else None,
+            "recording_link": None,
             "organization_id": _bot_config.get("organization_id", ""),
             "assistant_id": _assistant_id,
             "status": "completed" if status == "completed" else "disconnected",
@@ -1275,7 +1150,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _inactivity_task = None
             logger.info("[INACTIVITY] 30 s of silence — ending call directly")
             call_state["ended_naturally"] = True
-            end_phrase = _INACTIVITY_END_PHRASE.get(_language, _INACTIVITY_END_PHRASE["hindi"])
+            end_phrase = INACTIVITY_END_PHRASE
             try:
                 await session.say(end_phrase, allow_interruptions=False)
             except Exception:
@@ -1284,7 +1159,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             asyncio.ensure_future(_save_and_close("completed"))
             asyncio.ensure_future(_delete_room_safe())
         else:
-            nudge = _INACTIVITY_PHRASE.get(_language, _INACTIVITY_PHRASE["hindi"])
+            nudge = INACTIVITY_PHRASE
             logger.info(f"[INACTIVITY] 15 s nudge — saying: {nudge!r}")
             try:
                 await session.say(nudge, allow_interruptions=True)
@@ -1512,21 +1387,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         call_state["call_id"] = record["call_id"]
         call_state["lead_record"] = record
         logger.info(f"[CALL SETUP] Using fallback lead for mobile={caller_mobile!r}")
-
-    # Update recording path with caller identity
-    _mobile_slug = normalize_mobile(sip_info["caller_number"]) if sip_info["caller_number"] else ""
-    _buyer = (record.get("buyer_details") or {}).get("buyer_name", "")
-    _name_slug = _buyer.lower().replace(" ", "_")[:12] if _buyer and _buyer != "Customer" else ""
-    _call_slug = _name_slug or _mobile_slug or "unknown"
-    _ts_now = datetime.now().strftime("%Y%m%d_%H%M%S")
-    _recording_dir = Path("call_records")
-    _recording_dir.mkdir(parents=True, exist_ok=True)
-    _recording_path = _recording_dir / f"recording_{_call_slug}_{_ts_now}_{room_name}.wav"
-
-    # 13. Start audio recording in background
-    _recording_task = asyncio.create_task(
-        _record_room_audio(ctx.room, _recording_path)
-    )
 
     # 16. 5-minute hard call timeout
     _DEFAULT_TIMEOUT_MSG = (
