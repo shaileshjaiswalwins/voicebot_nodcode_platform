@@ -41,7 +41,7 @@ from livekit.agents import (
     cli,
     function_tool,
 )
-from livekit.api import DeleteRoomRequest, LiveKitAPI
+from livekit.api import DeleteRoomRequest, LiveKitAPI, RemoveParticipantRequest
 from livekit.plugins import google
 from google.genai import types
 
@@ -1004,6 +1004,22 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         finally:
             await lkapi.aclose()
 
+    async def _kick_caller_safe() -> None:
+        """Remove only the SIP participant — ends the call for the user without deleting the room,
+        keeping the agent alive to complete save_call_data before process exit."""
+        if not _caller_identity:
+            return
+        lkapi = LiveKitAPI()
+        try:
+            await lkapi.room.remove_participant(
+                RemoveParticipantRequest(room=room_name, identity=_caller_identity)
+            )
+            logger.info(f"[CLOSE] Participant {_caller_identity!r} removed from {room_name}")
+        except Exception as e:
+            logger.warning(f"[CLOSE] remove_participant failed: {e}")
+        finally:
+            await lkapi.aclose()
+
     async def save_call_data(status: str) -> None:
         if call_state["save_done"]:
             return
@@ -1135,6 +1151,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     async def _save_and_close(status: str) -> None:
         await save_call_data(status)
+        asyncio.ensure_future(_delete_room_safe())
         try:
             await session.aclose()
         except Exception:
@@ -1162,7 +1179,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             except Exception:
                 pass
             await asyncio.sleep(2)
-            asyncio.ensure_future(_delete_room_safe())
+            asyncio.ensure_future(_kick_caller_safe())
             await _save_and_close("completed")
         else:
             nudge = INACTIVITY_PHRASE
@@ -1198,7 +1215,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _call_ended = True
         _cancel_inactivity()
         await asyncio.sleep(2)
-        asyncio.ensure_future(_delete_room_safe())
+        asyncio.ensure_future(_kick_caller_safe())
         await _save_and_close("completed")
 
     # 7. Function tools
@@ -1249,6 +1266,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _closing_triggered = True
             call_state["ended_naturally"] = True
             logger.info(f"[CLOSE DETECT] Closing phrase matched — scheduling end")
+            _set_mic(False)
             asyncio.create_task(_handle_close())
 
     @session.on("user_input_transcribed")
@@ -1257,35 +1275,48 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if not _call_ended:
             _reset_inactivity()
 
+    _greeting_done = False
+
+    def _set_mic(enabled: bool) -> None:
+        try:
+            if hasattr(session, "input") and hasattr(session.input, "set_audio_enabled"):
+                session.input.set_audio_enabled(enabled)
+        except Exception:
+            pass
+
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        nonlocal _echo_guard_task
+        nonlocal _echo_guard_task, _greeting_done
         new_state = getattr(ev, "new_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
 
         if state_str == "speaking":
             # Cancel running inactivity timer while bot is speaking
             _cancel_inactivity()
-            # 600 ms echo guard — mute mic briefly at start of bot turn
+            # Echo guard — mute mic at start of bot turn
             if _echo_guard_task and not _echo_guard_task.done():
                 _echo_guard_task.cancel()
 
             async def _echo_guard() -> None:
                 try:
-                    if hasattr(session, "input") and hasattr(session.input, "set_audio_enabled"):
-                        session.input.set_audio_enabled(False)
+                    _set_mic(False)
                     await asyncio.sleep(0.6)
-                    if not _call_ended:
-                        if hasattr(session, "input") and hasattr(session.input, "set_audio_enabled"):
-                            session.input.set_audio_enabled(True)
+                    # Only re-enable after greeting is done and call hasn't ended
+                    if _greeting_done and not _call_ended:
+                        _set_mic(True)
                 except asyncio.CancelledError:
-                    if not _call_ended:
-                        if hasattr(session, "input") and hasattr(session.input, "set_audio_enabled"):
-                            session.input.set_audio_enabled(True)
+                    if _greeting_done and not _call_ended:
+                        _set_mic(True)
 
             _echo_guard_task = asyncio.create_task(_echo_guard())
 
         elif state_str in ("listening", "idle"):
+            if not _greeting_done:
+                # First time bot finishes speaking = greeting done; unmute mic
+                _greeting_done = True
+                if not _call_ended:
+                    _set_mic(True)
+                    logger.info("[MIC] Greeting complete — mic enabled")
             # Bot finished speaking — start inactivity timer
             if not _call_ended and not _closing_triggered:
                 _reset_inactivity()
@@ -1297,6 +1328,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         agent=agent,
         room_input_options=RoomInputOptions(close_on_disconnect=False),
     )
+    # Mute mic immediately — stays muted until the greeting finishes
+    _set_mic(False)
 
     # Force Gemini to speak the greeting immediately on connect by sending a
     # LiveClientContent with a placeholder user turn and turn_complete=True.
@@ -1343,6 +1376,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         logger.info(
             f"[SIP] caller={sip_info['caller_number']!r} | dialed={sip_info['dialed_number']!r}"
         )
+
+    _caller_identity: str = participant.identity if participant else ""
 
     call_state["call_start_time"] = time.time()
 
@@ -1416,7 +1451,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         except Exception:
             pass
         await asyncio.sleep(2)
-        asyncio.ensure_future(_delete_room_safe())
+        asyncio.ensure_future(_kick_caller_safe())
         await _save_and_close("completed")
 
     call_state["_timeout_task"] = asyncio.create_task(_call_timeout())
