@@ -1008,7 +1008,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         voice="Aoede",
         instructions=system_instruction,
         temperature=_temperature,
-        speech_config=types.SpeechConfig(language_code="hi-IN"),
+        language="hi-IN",
         realtime_input_config=types.RealtimeInputConfig(
             automatic_activity_detection=types.AutomaticActivityDetection(
                 start_of_speech_sensitivity=_vad_start,
