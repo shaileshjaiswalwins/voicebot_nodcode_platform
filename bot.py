@@ -1236,6 +1236,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _closing_triggered = False
     _echo_guard_task: asyncio.Task | None = None
 
+    # Turn-wise transcript + end-to-end latency tracking
+    _turn_counter = 0
+    _user_turn_time: float | None = None  # timestamp when user transcript arrived
+
     async def _handle_close() -> None:
         nonlocal _call_ended
         _call_ended = True
@@ -1288,6 +1292,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             or ""
         )
         _closing_buffer += " " + text
+        if text:
+            logger.info(f"[TRANSCRIPT] Turn {_turn_counter} | AGENT: {text!r}")
         if _is_closing_phrase(_closing_buffer):
             _closing_triggered = True
             call_state["ended_naturally"] = True
@@ -1297,9 +1303,23 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("user_input_transcribed")
     def _on_user_spoke(ev) -> None:
+        nonlocal _turn_counter, _user_turn_time
         # User spoke — reset inactivity timer
         if not _call_ended:
             _reset_inactivity()
+        # Only log final transcriptions
+        is_final = getattr(ev, "is_final", True)
+        if not is_final:
+            return
+        transcript_text = (
+            getattr(ev, "transcript", None)
+            or getattr(ev, "text", None)
+            or ""
+        ).strip()
+        _user_turn_time = time.time()
+        if transcript_text:
+            _turn_counter += 1
+            logger.info(f"[TRANSCRIPT] Turn {_turn_counter} | USER: {transcript_text!r}")
 
     _greeting_done = False
     _bot_has_spoken = False  # True once the agent first transitions to "speaking"
@@ -1313,12 +1333,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        nonlocal _echo_guard_task, _greeting_done, _bot_has_spoken
+        nonlocal _echo_guard_task, _greeting_done, _bot_has_spoken, _user_turn_time
         new_state = getattr(ev, "new_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
 
         if state_str == "speaking":
             _bot_has_spoken = True
+            # Log end-to-end latency from user speech end to agent speech start
+            if _user_turn_time is not None:
+                latency_ms = round((time.time() - _user_turn_time) * 1000)
+                logger.info(f"[LATENCY] Turn {_turn_counter} | E2E: {latency_ms} ms")
+                _user_turn_time = None
             # Cancel running inactivity timer while bot is speaking
             _cancel_inactivity()
             # Echo guard — mute mic at start of bot turn
