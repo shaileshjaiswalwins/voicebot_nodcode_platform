@@ -707,14 +707,14 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     product_name = keyword or product.get("product_name", "")
     questions = schema.get("question", [])
 
+    mandatory_opening = (
+        f"हेलो, मैं Tanya बोल रही हूँ Justdial से — "
+        f"आपको {product_name} की requirement है ना?"
+    )
+
     questions_block = "\n".join(f"{i}. {q.get('text')}" for i, q in enumerate(questions, 1))
     mapping_block = "\n" + build_question_phrase_rules(questions, language_name) + "\n"
 
-    opening_instruction = (
-        _pc.get("opening_instruction")
-        or cfg.get("opening_instruction")
-        or "Greet the customer and confirm they still need the product."
-    )
     closing_instruction = (
         _bc.get("call_end_text")
         or _pc.get("closing_instruction")
@@ -729,10 +729,16 @@ Customer: {name}
 Product search: {keyword}
 Product: {product_name}
 
+━━━ MANDATORY OPENING ━━━
+Your VERY FIRST utterance MUST be EXACTLY this line, word-for-word, no additions, no preamble, no translation:
+
+{mandatory_opening}
+
+Speak it immediately. Do not wait for the customer to say anything.
+
 ━━━ CALL FLOW ━━━
 
-Step 1 — Opening:
-{opening_instruction}
+Step 1 — Opening (already done — you spoke the mandatory greeting above).
 
 Step 2 — Questions (ask in this exact order, one at a time):
 {questions_block}
@@ -1409,14 +1415,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         agent=agent,
     )
 
-    # Trigger the opening greeting: Gemini 3.1 is audio-native and only generates
-    # when it receives audio activity events.  We wait for the Gemini websocket to
-    # connect, then send ActivityStart + ActivityEnd to simulate "user spoke briefly"
-    # — Gemini immediately responds with its opening greeting.
+    # Force Gemini to speak the greeting immediately on connect by sending a
+    # LiveClientContent with a placeholder user turn and turn_complete=True.
+    # This replicates what generate_reply() does internally, bypassing the
+    # mutable_chat_context capability gate that blocks generate_reply() for
+    # Gemini 3.1.  ActivityStart/ActivityEnd are ignored in automatic-AAD mode.
     _rt = getattr(session._activity, "_rt_session", None) if session._activity else None
     if _rt is not None:
         async def _trigger_greeting() -> None:
-            for _ in range(50):  # wait up to 5 s for the Gemini connection
+            for _ in range(50):  # wait up to 5 s for the Gemini websocket connection
                 async with _rt._session_lock:
                     connected = _rt._active_session is not None
                 if connected:
@@ -1425,14 +1432,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             else:
                 logger.warning("[GREETING] Gemini did not connect within 5 s; skipping trigger")
                 return
-            await asyncio.sleep(0.2)  # let session stabilise
+            await asyncio.sleep(0.2)  # let initial chat-history replay finish
             _rt._send_client_event(
-                types.LiveClientRealtimeInput(activity_start=types.ActivityStart())
+                types.LiveClientContent(
+                    turns=[types.Content(parts=[types.Part(text=".")], role="user")],
+                    turn_complete=True,
+                )
             )
-            await asyncio.sleep(0.3)
-            _rt._send_client_event(
-                types.LiveClientRealtimeInput(activity_end=types.ActivityEnd())
-            )
+            logger.info("[GREETING] Trigger pushed; awaiting Gemini's opening turn")
 
         asyncio.create_task(_trigger_greeting())
 
