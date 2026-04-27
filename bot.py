@@ -36,7 +36,6 @@ from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
-    RoomInputOptions,
     RunContext,
     WorkerOptions,
     cli,
@@ -656,7 +655,7 @@ def _load_prompt_config() -> dict:
     return {}
 
 
-def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_config: dict | None = None) -> str:
+def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_config: dict | None = None, initial_greeting: str | None = None) -> str:
     _bc = bot_config or {}
     _pc = _bc.get("prompt_config") or {}
     if _bc.get("system_prompt"):
@@ -701,6 +700,13 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
             "If they reconfirm the original product: continue without calling the function.\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         )
+
+    if initial_greeting:
+        base = (
+            f"MANDATORY OPENING — your very first spoken output MUST be EXACTLY:\n"
+            f"«{initial_greeting}»\n"
+            f"Do NOT add, omit, or rephrase anything. Say it verbatim.\n\n"
+        ) + base
 
     if not record or not record.get("buyer_details"):
         return base
@@ -766,7 +772,13 @@ def build_transcript_from_session(session: AgentSession) -> list[dict]:
     if history is None:
         return transcript
 
-    messages = getattr(history, "messages", None) or getattr(history, "items", None) or []
+    _msg_attr = getattr(history, "messages", None) or getattr(history, "items", None)
+    if callable(_msg_attr):
+        messages = _msg_attr()
+    elif _msg_attr is not None:
+        messages = _msg_attr
+    else:
+        messages = []
 
     for msg in messages:
         role = getattr(msg, "role", None)
@@ -1061,6 +1073,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _function_calling   = bool(_bot_config.get("function_calling", False)) and bool(_functions)
     _lang_cfg           = LANG_CONFIGS.get(_language, LANG_CONFIGS["malayalam"])
 
+    # Pre-compute greeting from prefetched lead so it can be baked into the system prompt.
+    # Gemini 3.1 Flash Live Preview has immutable instructions — we cannot update them mid-session.
+    _prefetch_search = (_prefetched_lead or {}).get("search_context", {})
+    _prefetch_product = (
+        _prefetch_search.get("searched_keyword", "")
+        or (_prefetch_search.get("searched_product") or {}).get("product_name", "")
+        or _room_meta_raw.get("srchterm", "")
+    )
+    _initial_greeting = build_greeting_text(_lang_cfg, _prefetch_product)
+
     # 3. Per-call state
     call_state = {
         "record_id": None,
@@ -1084,7 +1106,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # 4. Build system instruction from lead (or base rules if no lead yet)
     system_instruction = build_system_prompt(
-        _prefetched_lead, lang_key=_language, bot_config=_bot_config
+        _prefetched_lead, lang_key=_language, bot_config=_bot_config,
+        initial_greeting=_initial_greeting,
     )
 
     # 5. RealtimeModel — same Gemini config as the Pipecat bot
@@ -1100,9 +1123,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 silence_duration_ms=_vad_silence_ms,
                 prefix_padding_ms=_vad_prefix_ms,
             ),
-        ),
-        input_audio_transcription=types.AudioTranscriptionConfig(
-            language_code=_lang_cfg["language_code"],
         ),
     )
 
@@ -1139,6 +1159,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
         lead_id = call_state.get("record_id")
         transcript = build_transcript_from_session(session)
+        logger.info(f"[TRANSCRIPT] {len(transcript)} turns | status={status}")
+        for i, turn in enumerate(transcript):
+            logger.info(f"[TRANSCRIPT] [{i+1}] {turn['role'].upper()}: {turn['text']}")
         logger.info(f"[ANALYSIS] Analyzing {len(transcript)} turns | status={status}")
 
         schema = (call_state.get("lead_record") or {}).get("qualification_schema", {})
@@ -1405,11 +1428,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if not _call_ended and not _closing_triggered:
                 _reset_inactivity()
 
-    # 10. Start session — mic gated off until first greeting finishes (MuteUntilFirstBotComplete)
+    # 10. Start session with audio enabled — the echo_guard mutes input during bot speech.
     await session.start(
         room=ctx.room,
         agent=agent,
-        room_input_options=RoomInputOptions(audio_enabled=False),
     )
 
     # 11. Read SIP info from participant attributes
@@ -1482,36 +1504,23 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         call_state["lead_record"] = record
         logger.info(f"[CALL SETUP] Using fallback lead for mobile={caller_mobile!r}")
 
-    _search = record.get("search_context", {})
-    greeting_product = (
-        _search.get("searched_keyword", "")
-        or (_search.get("searched_product") or {}).get("product_name", "")
-    )
-
     # Update recording path with caller identity
     _mobile_slug = normalize_mobile(sip_info["caller_number"]) if sip_info["caller_number"] else ""
     _buyer = (record.get("buyer_details") or {}).get("buyer_name", "")
     _name_slug = _buyer.lower().replace(" ", "_")[:12] if _buyer and _buyer != "Customer" else ""
     _call_slug = _name_slug or _mobile_slug or "unknown"
     _ts_now = datetime.now().strftime("%Y%m%d_%H%M%S")
-    _recording_path = Path("call_records") / f"recording_{_call_slug}_{_ts_now}_{room_name}.wav"
+    _recording_dir = Path("call_records")
+    _recording_dir.mkdir(parents=True, exist_ok=True)
+    _recording_path = _recording_dir / f"recording_{_call_slug}_{_ts_now}_{room_name}.wav"
 
     # 13. Start audio recording in background
     _recording_task = asyncio.create_task(
         _record_room_audio(ctx.room, _recording_path)
     )
 
-    # 14. Greeting — Gemini 3.1 disallows generate_reply mid-session, so use session.say()
-    greeting = build_greeting_text(_lang_cfg, greeting_product)
-    logger.info(f"[GREETING] Saying: {greeting!r}")
-    await session.say(greeting, allow_interruptions=False)
+    logger.info(f"[GREETING] Ready: {_initial_greeting!r}")
 
-    # 15. Open mic after greeting completes
-    try:
-        if hasattr(session, "input") and hasattr(session.input, "set_audio_enabled"):
-            session.input.set_audio_enabled(True)
-    except Exception as e:
-        logger.warning(f"[MIC] Could not re-enable audio input: {e}")
 
     # 16. 5-minute hard call timeout
     _DEFAULT_TIMEOUT_MSG = (
