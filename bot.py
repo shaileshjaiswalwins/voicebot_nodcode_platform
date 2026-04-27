@@ -35,6 +35,7 @@ from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
+    RoomInputOptions,
     RunContext,
     WorkerOptions,
     cli,
@@ -114,7 +115,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Customer says NO (nahi, nahi chahiye, nahi tha, cancel, etc.):\n"
         "→ Ask: \"जी, तो क्या आप कोई और product देख रहे हैं?\"\n"
         "→ If they name a different product: treat as a product change and proceed with new product.\n"
-        "→ If they confirm they don't need anything: \"ठीक है जी, कोई बात नहीं. आपका दिन शुभ हो.\" End the call.\n\n"
+        "→ If they confirm they don't need anything: say \"ठीक है जी, कोई बात नहीं. आपका दिन शुभ हो.\" then stop — the call ends after this.\n\n"
         "Customer says something else (unclear, asks a question, changes topic, gives partial info):\n"
         "→ Understand their intent first.\n"
         "→ If they seem interested but unclear: re-confirm — \"जी, तो क्या आपको [product] की ज़रूरत है?\"\n"
@@ -127,8 +128,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "No questions outside the schema list.\n\n"
         "Step 3 — Closing\n"
         "After all questions are answered:\n"
-        "\"ठीक है जी, सारी details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए शुक्रिया.\"\n"
-        "End the call.\n\n"
+        "\"ठीक है जी, सारी details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए शुक्रिया.\" then stop — the call ends after this.\n\n"
         "HANDLING SCHEMA QUESTIONS\n\n"
         "The QUESTION PHRASE RULES section below gives you the exact question list and how to handle each one.\n"
         "Follow those rules exactly for how to ask and what to accept.\n\n"
@@ -187,9 +187,9 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Never combine apology with positive acknowledgement.\n"
         "Right: \"माफ कीजिए, मैं समझ नहीं पाई — [re-ask question]?\"\n"
         "Wrong: \"समझ गई, माफ कीजिए — [re-ask question]?\"\n\n"
-        "Not interested: \"ठीक है जी, कोई बात नहीं. आपका दिन शुभ हो.\" End the call.\n"
-        "Rude or wants to hang up: \"ठीक है जी, धन्यवाद. आपका दिन शुभ हो.\" End immediately.\n"
-        "Reschedule: \"ठीक है जी, [time] पर बात करेंगे.\" End the call.\n\n"
+        "Not interested: say \"ठीक है जी, कोई बात नहीं. आपका दिन शुभ हो.\" then stop.\n"
+        "Rude or wants to hang up: say \"ठीक है जी, धन्यवाद. आपका दिन शुभ हो.\" then stop.\n"
+        "Reschedule: say \"ठीक है जी, [time] पर बात करेंगे.\" then stop.\n\n"
         "HARD RULES\n\n"
         "One question per response — no exceptions.\n"
         "Never advance to the next schema question until the current one has a direct, valid answer.\n"
@@ -1290,10 +1290,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if not _call_ended and not _closing_triggered:
                 _reset_inactivity()
 
-    # 10. Start session with audio enabled — the echo_guard mutes input during bot speech.
+    # 10. Start session — disable close_on_disconnect so the process stays alive
+    # long enough for save_call_data (Gemini analysis + HTTP callback) to finish.
     await session.start(
         room=ctx.room,
         agent=agent,
+        room_input_options=RoomInputOptions(close_on_disconnect=False),
     )
 
     # Force Gemini to speak the greeting immediately on connect by sending a
