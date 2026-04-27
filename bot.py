@@ -23,7 +23,7 @@ import os
 import re
 import time
 from datetime import date as _date
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import aiohttp
@@ -63,6 +63,7 @@ BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 MIS_API_BASE = "http://192.168.14.101:3006"
 CALLBACK_API_URL = "http://192.168.14.101:3006/leads/ai-lead-qualify/callback"
 CATEGORY_CHANGE_API = "http://192.168.20.105:1080/services/abd/abd_beta.php"
+IST = timezone(timedelta(hours=5, minutes=30))
 
 _http_session: aiohttp.ClientSession | None = None
 
@@ -423,11 +424,27 @@ async def _execute_function_call(fn_name: str, fn_args: dict, functions: list[di
         if fn_name == "FetchCategorySchema":
             questions = result.get("question", [])
             catname = result.get("catname", "the new product")
-            old_product = (call_state.get("lead_record") or {}).get("catname", "")
-            call_state["product_change"] = {"old_product": old_product, "new_product": catname}
+            lead_record = call_state.get("lead_record") or {}
+            old_product = lead_record.get("catname", "")
+
+            # Persist new schema so save_call_data / generate_call_analysis
+            # analyze the buyer's answers against the NEW questions.
+            lead_record["qualification_schema"] = result
+            lead_record["catname"] = catname
+            search_ctx = lead_record.setdefault("search_context", {})
+            search_ctx["searched_keyword"] = catname
+            search_ctx.setdefault("searched_product", {})["product_name"] = catname
+            call_state["lead_record"] = lead_record
+
+            # Receiver expects {"product_name": "<new product>"} only.
+            call_state["product_change"] = {"product_name": catname}
+
             questions_text = build_questions_text({"question": questions})
             first_q = questions[0].get("text", "").strip() if questions else ""
-            logger.info(f"[FetchCategorySchema] Product changed: {old_product!r} → {catname!r} | {len(questions)} questions")
+            logger.info(
+                f"[FetchCategorySchema] Product changed: {old_product!r} → {catname!r} "
+                f"| {len(questions)} questions | schema persisted to lead_record"
+            )
             return {
                 "success": True,
                 "product": catname,
@@ -808,10 +825,10 @@ async def generate_call_analysis(transcript: list[dict], base_status: str, schem
         if base_status == "disconnected" else ""
     )
     disposition_options = "\n".join(f'  "{k}": {v}' for k, v in DISPOSITION_MAP.items())
-    current_dt_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    current_dt_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
 
     prompt = f"""Analyze this JustDial AI product qualification call between an AI agent and a buyer.{cut_note}
-Current date and time: {current_dt_str}
+Current date and time (IST, GMT+5:30): {current_dt_str}
 
 Transcript:
 {lines}
@@ -828,8 +845,8 @@ Return a single JSON object with exactly these keys:
 - "call_summary": 1-2 sentence English summary
 - "is_business": "True" if purchasing for business, "False" if personal, "" if unknown
 - "qna": array of objects for answered questions: {{"id": <qid>, "quest": <question text>, "answ": <normalized answer>, "opt_id": <matched option id or null>}}
-- "product_change": {{"old_product": ..., "new_product": ...}} if product changed mid-call, else {{}}
-- "rescheduled_to": ISO datetime "YYYY-MM-DDTHH:MM:SS" if rescheduled, else ""
+- "product_change": {{"product_name": <new product name>}} if the buyer switched products mid-call, else {{}}
+- "rescheduled_to": ISO datetime "YYYY-MM-DDTHH:MM:SS" in IST (GMT+5:30, no timezone suffix) if rescheduled, else ""
 
 Return ONLY the JSON — no markdown, no explanation."""
 
@@ -857,6 +874,10 @@ Return ONLY the JSON — no markdown, no explanation."""
             result.setdefault("qna", [])
             result.setdefault("product_change", {})
             result.setdefault("rescheduled_to", "")
+            # Normalize legacy LLM shape {old_product, new_product} → {product_name}
+            pc = result.get("product_change") or {}
+            if isinstance(pc, dict) and "new_product" in pc and "product_name" not in pc:
+                result["product_change"] = {"product_name": pc.get("new_product", "")}
             return result
     except Exception as e:
         logger.error(f"[ANALYSIS] LLM analysis failed: {type(e).__name__}: {e}")
@@ -1073,9 +1094,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "product_change": call_state.get("product_change") or analysis.get("product_change") or {},
             "call_duration": _duration,
         }
-        rescheduled_to = analysis.get("rescheduled_to", "")
-        if rescheduled_to:
-            callback_payload["rescheduled_to"] = rescheduled_to
+        callback_payload["rescheduled_to"] = analysis.get("rescheduled_to", "") or ""
 
         spec_ques: dict = {}
         spec_count = 0
