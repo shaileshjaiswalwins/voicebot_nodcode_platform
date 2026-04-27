@@ -634,13 +634,6 @@ def build_questions_text(schema: dict) -> str:
     return "\n".join(lines)
 
 
-def build_greeting_text(lang_cfg: dict, product: str) -> str:
-    template = lang_cfg.get(
-        "greeting_tts",
-        "Hello, I am calling from Justdial regarding your {product} enquiry. Are you still looking for it?",
-    )
-    return template.format(product=product or "product")
-
 
 _PROMPT_FILE = Path(__file__).parent / "system_prompt.txt"
 _CONFIG_FILE = Path(__file__).parent / "prompt_config.json"
@@ -655,7 +648,7 @@ def _load_prompt_config() -> dict:
     return {}
 
 
-def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_config: dict | None = None, initial_greeting: str | None = None) -> str:
+def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_config: dict | None = None) -> str:
     _bc = bot_config or {}
     _pc = _bc.get("prompt_config") or {}
     if _bc.get("system_prompt"):
@@ -700,13 +693,6 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
             "If they reconfirm the original product: continue without calling the function.\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         )
-
-    if initial_greeting:
-        base = (
-            f"MANDATORY OPENING — your very first spoken output MUST be EXACTLY:\n"
-            f"«{initial_greeting}»\n"
-            f"Do NOT add, omit, or rephrase anything. Say it verbatim.\n\n"
-        ) + base
 
     if not record or not record.get("buyer_details"):
         return base
@@ -1073,16 +1059,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _function_calling   = bool(_bot_config.get("function_calling", False)) and bool(_functions)
     _lang_cfg           = LANG_CONFIGS.get(_language, LANG_CONFIGS["malayalam"])
 
-    # Pre-compute greeting from prefetched lead so it can be baked into the system prompt.
-    # Gemini 3.1 Flash Live Preview has immutable instructions — we cannot update them mid-session.
-    _prefetch_search = (_prefetched_lead or {}).get("search_context", {})
-    _prefetch_product = (
-        _prefetch_search.get("searched_keyword", "")
-        or (_prefetch_search.get("searched_product") or {}).get("product_name", "")
-        or _room_meta_raw.get("srchterm", "")
-    )
-    _initial_greeting = build_greeting_text(_lang_cfg, _prefetch_product)
-
     # 3. Per-call state
     call_state = {
         "record_id": None,
@@ -1106,8 +1082,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # 4. Build system instruction from lead (or base rules if no lead yet)
     system_instruction = build_system_prompt(
-        _prefetched_lead, lang_key=_language, bot_config=_bot_config,
-        initial_greeting=_initial_greeting,
+        _prefetched_lead, lang_key=_language, bot_config=_bot_config
     )
 
     # 5. RealtimeModel — same Gemini config as the Pipecat bot
@@ -1434,6 +1409,33 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         agent=agent,
     )
 
+    # Trigger the opening greeting: Gemini 3.1 is audio-native and only generates
+    # when it receives audio activity events.  We wait for the Gemini websocket to
+    # connect, then send ActivityStart + ActivityEnd to simulate "user spoke briefly"
+    # — Gemini immediately responds with its opening greeting.
+    _rt = getattr(session._activity, "_rt_session", None) if session._activity else None
+    if _rt is not None:
+        async def _trigger_greeting() -> None:
+            for _ in range(50):  # wait up to 5 s for the Gemini connection
+                async with _rt._session_lock:
+                    connected = _rt._active_session is not None
+                if connected:
+                    break
+                await asyncio.sleep(0.1)
+            else:
+                logger.warning("[GREETING] Gemini did not connect within 5 s; skipping trigger")
+                return
+            await asyncio.sleep(0.2)  # let session stabilise
+            _rt._send_client_event(
+                types.LiveClientRealtimeInput(activity_start=types.ActivityStart())
+            )
+            await asyncio.sleep(0.3)
+            _rt._send_client_event(
+                types.LiveClientRealtimeInput(activity_end=types.ActivityEnd())
+            )
+
+        asyncio.create_task(_trigger_greeting())
+
     # 11. Read SIP info from participant attributes
     participant = next(iter(ctx.room.remote_participants.values()), None)
     if participant:
@@ -1518,9 +1520,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _recording_task = asyncio.create_task(
         _record_room_audio(ctx.room, _recording_path)
     )
-
-    logger.info(f"[GREETING] Ready: {_initial_greeting!r}")
-
 
     # 16. 5-minute hard call timeout
     _DEFAULT_TIMEOUT_MSG = (
