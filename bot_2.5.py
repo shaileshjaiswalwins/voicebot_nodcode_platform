@@ -39,6 +39,7 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     function_tool,
+    room_io,
 )
 from livekit.api import DeleteRoomRequest, LiveKitAPI
 from livekit.plugins import google
@@ -1245,10 +1246,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             logger.info(f"[CLOSE DETECT] Closing phrase matched — scheduling end")
             asyncio.create_task(_handle_close())
 
-    @session.on("user_input_transcribed")
-    def _on_user_spoke(ev) -> None:
-        # User spoke — reset inactivity timer
-        if not _call_ended:
+    @session.on("user_state_changed")
+    def _on_user_state_changed(ev) -> None:
+        # On native-audio realtime models we may not always get transcription events.
+        # Use user state changes as the signal that audio is flowing / user is active.
+        if _call_ended:
+            return
+        new_state = getattr(ev, "new_state", None)
+        state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
+        if state_str in ("speaking", "listening"):
             _reset_inactivity()
 
     @session.on("agent_state_changed")
@@ -1288,6 +1294,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     await session.start(
         room=ctx.room,
         agent=agent,
+        room_options=room_io.RoomOptions(
+            close_on_disconnect=True,
+            audio_input=room_io.AudioInputOptions(),
+        ),
     )
 
     # Gemini 2.5 native-audio models support generating an opening turn.
