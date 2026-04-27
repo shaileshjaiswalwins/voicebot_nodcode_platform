@@ -712,6 +712,18 @@ Step 3 — Closing:
 {closing_instruction}
 
 One question per turn — always.
+
+━━━ ANSWER COMPLETENESS RULE (MANDATORY) ━━━
+
+NEVER move to the next question or close the call if the current question has no answer.
+
+- If the buyer skips a question, ignores it, or only talks about something else: gently re-ask the SAME question once before moving on.
+  Example: "जी, [question] — यह भी बता दीजिए."
+- If the buyer says they don't know / not sure / can't say: accept "पता नहीं" or "Not sure" as the answer and move on.
+- NEVER leave a question with a completely blank answer.
+- ONLY close the call after every question has received at least some response (even "not sure").
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
     return base + lead_section + mapping_block
 
