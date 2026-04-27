@@ -35,12 +35,15 @@ from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
-    RoomInputOptions,
     RunContext,
     WorkerOptions,
     cli,
     function_tool,
 )
+try:
+    from livekit.agents import RoomOptions as _RoomOptionsCls
+except ImportError:
+    from livekit.agents import RoomInputOptions as _RoomOptionsCls
 from livekit.api import DeleteRoomRequest, LiveKitAPI
 try:
     from livekit.api import RoomParticipantIdentity as _RemoveParticipantRequest
@@ -1282,6 +1285,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _reset_inactivity()
 
     _greeting_done = False
+    _bot_has_spoken = False  # True once the agent first transitions to "speaking"
 
     def _set_mic(enabled: bool) -> None:
         try:
@@ -1292,11 +1296,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        nonlocal _echo_guard_task, _greeting_done
+        nonlocal _echo_guard_task, _greeting_done, _bot_has_spoken
         new_state = getattr(ev, "new_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
 
         if state_str == "speaking":
+            _bot_has_spoken = True
             # Cancel running inactivity timer while bot is speaking
             _cancel_inactivity()
             # Echo guard — mute mic at start of bot turn
@@ -1317,8 +1322,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _echo_guard_task = asyncio.create_task(_echo_guard())
 
         elif state_str in ("listening", "idle"):
-            if not _greeting_done:
-                # First time bot finishes speaking = greeting done; unmute mic
+            if _bot_has_spoken and not _greeting_done:
+                # Bot spoke and is now listening = greeting finished; unmute mic
                 _greeting_done = True
                 if not _call_ended:
                     _set_mic(True)
@@ -1332,7 +1337,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     await session.start(
         room=ctx.room,
         agent=agent,
-        room_input_options=RoomInputOptions(close_on_disconnect=False),
+        room_options=_RoomOptionsCls(close_on_disconnect=False),
     )
     # Mute mic immediately — stays muted until the greeting finishes
     _set_mic(False)
