@@ -288,8 +288,8 @@ _HARDCODED_BOT_CONFIG: dict = {
     "language": "hindi",
     "temperature": 0.4,
     "gemini_start_sensitivity": "START_SENSITIVITY_LOW",
-    "gemini_end_sensitivity": "END_SENSITIVITY_HIGH",
-    "gemini_silence_duration_ms": 800,
+    "gemini_end_sensitivity": "END_SENSITIVITY_LOW",
+    "gemini_silence_duration_ms": 1500,
     "gemini_prefix_padding_ms": 100,
     "max_call_duration": 300,
     "filler_message": ["अच्छा,", "हाँ,", "जी,", "तो,", "ठीक है,"],
@@ -968,8 +968,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _language           = "hindi"
     _temperature        = float(_bot_config.get("temperature") or 0.4)
     _vad_start          = _bot_config.get("gemini_start_sensitivity") or "START_SENSITIVITY_LOW"
-    _vad_end            = _bot_config.get("gemini_end_sensitivity")   or "END_SENSITIVITY_HIGH"
-    _vad_silence_ms     = int(_bot_config.get("gemini_silence_duration_ms") or 800)
+    _vad_end            = _bot_config.get("gemini_end_sensitivity")   or "END_SENSITIVITY_LOW"
+    _vad_silence_ms     = int(_bot_config.get("gemini_silence_duration_ms") or 1500)
     _vad_prefix_ms      = int(_bot_config.get("gemini_prefix_padding_ms")   or 100)
     _max_call_duration  = int(_bot_config.get("max_call_duration") or 300)
     _functions: list[dict] = _bot_config.get("functions") or []
