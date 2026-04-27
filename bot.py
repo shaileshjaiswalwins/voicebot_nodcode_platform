@@ -1162,7 +1162,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             except Exception:
                 pass
             await asyncio.sleep(2)
-            asyncio.ensure_future(_save_and_close("completed"))
+            await _save_and_close("completed")
             asyncio.ensure_future(_delete_room_safe())
         else:
             nudge = INACTIVITY_PHRASE
@@ -1198,7 +1198,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _call_ended = True
         _cancel_inactivity()
         await asyncio.sleep(2)
-        asyncio.ensure_future(_save_and_close("completed"))
+        await _save_and_close("completed")
         asyncio.ensure_future(_delete_room_safe())
 
     # 7. Function tools
@@ -1414,7 +1414,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         except Exception:
             pass
         await asyncio.sleep(2)
-        asyncio.ensure_future(_save_and_close("completed"))
+        await _save_and_close("completed")
         asyncio.ensure_future(_delete_room_safe())
 
     call_state["_timeout_task"] = asyncio.create_task(_call_timeout())
