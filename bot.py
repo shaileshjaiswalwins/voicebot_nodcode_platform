@@ -40,10 +40,7 @@ from livekit.agents import (
     cli,
     function_tool,
 )
-try:
-    from livekit.agents import RoomOptions as _RoomOptionsCls
-except ImportError:
-    from livekit.agents import RoomInputOptions as _RoomOptionsCls
+from livekit.agents.voice.room_io import RoomOptions as _RoomOptionsCls
 from livekit.api import DeleteRoomRequest, LiveKitAPI
 try:
     from livekit.api import RoomParticipantIdentity as _RemoveParticipantRequest
