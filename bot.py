@@ -1087,17 +1087,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         """Remove only the SIP participant — ends the call for the user without deleting the room,
         keeping the agent alive to complete save_call_data before process exit."""
         if not _caller_identity or _RemoveParticipantRequest is None:
-            asyncio.ensure_future(_delete_room_safe())
             return
         lkapi = LiveKitAPI()
         try:
             await lkapi.room.remove_participant(
                 _RemoveParticipantRequest(room=room_name, identity=_caller_identity)
             )
-            pass
         except Exception as e:
-            logger.warning(f"[CLOSE] remove_participant failed: {e} — falling back to delete_room")
-            asyncio.ensure_future(_delete_room_safe())
+            logger.warning(f"[CLOSE] remove_participant failed: {e}")
         finally:
             await lkapi.aclose()
 
