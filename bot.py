@@ -1305,8 +1305,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             except Exception:
                 pass
             await asyncio.sleep(2)
-            asyncio.ensure_future(_kick_caller_safe())
-            await _save_and_close("completed")
+            await _kick_caller_safe()
+            asyncio.ensure_future(_save_and_close("completed"))
         else:
             nudge = INACTIVITY_PHRASE
             logger.info(f"[INACTIVITY] 15 s nudge — saying: {nudge!r}")
@@ -1345,8 +1345,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _call_ended = True
         _cancel_inactivity()
         await asyncio.sleep(2)
-        asyncio.ensure_future(_kick_caller_safe())
-        await _save_and_close("completed")
+        await _kick_caller_safe()
+        asyncio.ensure_future(_save_and_close("completed"))
 
     # 7. Function tools
     @function_tool
@@ -1628,8 +1628,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         except Exception:
             pass
         await asyncio.sleep(2)
-        asyncio.ensure_future(_kick_caller_safe())
-        await _save_and_close("completed")
+        await _kick_caller_safe()
+        asyncio.ensure_future(_save_and_close("completed"))
 
     call_state["_timeout_task"] = asyncio.create_task(_call_timeout())
 
