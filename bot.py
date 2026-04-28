@@ -454,8 +454,9 @@ async def _execute_function_call(fn_name: str, fn_args: dict, functions: list[di
                 "total_questions": len(questions),
                 "questions_text": questions_text,
                 "instruction": (
-                    f"Product changed to {catname}. "
-                    f"Say ONE brief acknowledgment sentence, then IMMEDIATELY ask Question 1: '{first_q}'. "
+                    f"The buyer now needs {catname}. "
+                    f"Acknowledge their new requirement naturally and briefly (do NOT say 'product change' or announce a change — just acknowledge what they need). "
+                    f"Then IMMEDIATELY ask Question 1: '{first_q}'. "
                     f"Do NOT say anything about sellers or closing the call."
                 ),
             }
@@ -824,9 +825,13 @@ async def generate_call_analysis(transcript: list[dict], base_status: str, schem
 
     questions = schema.get("question", []) if schema else []
     q_list = json.dumps(
-        [{"id": q.get("id", ""), "text": q.get("text", ""),
-          "options": [{"id": o.get("id", ""), "text": o.get("text", "")} for o in (q.get("option") or []) if o.get("text")]}
-         for q in questions],
+        [{
+            "id": q.get("id", ""),
+            "text": q.get("text", ""),
+            "type": q.get("type", ""),
+            "quantity_unit": q.get("quantity_unit") or [],
+            "options": [{"id": o.get("id", ""), "text": o.get("text", "")} for o in (q.get("option") or []) if o.get("text")],
+        } for q in questions],
         ensure_ascii=False,
     )
     lines = "\n".join(f"{t['role'].upper()}: {t['text']}" for t in transcript)
@@ -862,6 +867,7 @@ Return a single JSON object with exactly these keys:
   3. Include a question if the buyer gave ANY relevant response: a number, an option value, a free-text answer, or "others/other". Do NOT skip answers just because the agent did not re-confirm them aloud.
   4. Do NOT reassign an answer from one question to another because it "looks like" a different question's data type (e.g. do not map a GSM/grade answer to a Quantity question).
   5. For "opt_id": if the normalized answer matches one of the question's options exactly (case-insensitive), set opt_id to that option's id; otherwise set to null.
+  6. For questions with type=="quantity": "answ" MUST be in the form "<number> <unit>" (e.g. "5 pieces", "100 boxes"). Use the unit from the buyer's answer if stated; otherwise use the first value from that question's "quantity_unit" list. If the buyer answered "Not Sure" / "पता नहीं" / could not give a number, set answ to "Not Sure" with no unit.
   Each entry: {{"id": <qid>, "quest": <question text>, "answ": <normalized English answer>, "opt_id": <matching option id or null>}}
 - "product_change": {{"product_name": <new product name>}} if the buyer switched products mid-call, else {{}}
 - "rescheduled_to": ISO datetime "YYYY-MM-DDTHH:MM:SS" in IST (GMT+5:30, no timezone suffix) if rescheduled, else ""
@@ -1107,19 +1113,51 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         }
         callback_payload["rescheduled_to"] = analysis.get("rescheduled_to", "") or ""
 
+        schema_qs = schema.get("question", []) if schema else []
+        qna_by_id = {qa.get("id"): qa for qa in (analysis.get("qna") or []) if qa.get("id")}
+        quantity_units_by_id = {
+            q.get("id"): q.get("quantity_unit") or []
+            for q in schema_qs
+            if q.get("type") == "quantity"
+        }
+
+        ordered_entries: list[dict] = []
+        quantity_entries: list[dict] = []
+        for q in schema_qs:
+            qid = q.get("id")
+            qa = qna_by_id.get(qid)
+            if not qa or not qa.get("answ"):
+                continue
+            answ = str(qa.get("answ", "")).strip()
+            if q.get("type") == "quantity":
+                # Defensive unit fill: append unit if not already present in answ
+                units = quantity_units_by_id.get(qid) or []
+                unit = units[0] if units else None
+                if unit and answ and answ.lower() not in {"not sure", "पता नहीं"}:
+                    if not any(u and u.lower() in answ.lower() for u in units):
+                        answ = f"{answ} {unit}".strip()
+            entry = {
+                "Qid": qid or "",
+                "Quest": qa.get("quest", "") or q.get("text", ""),
+                "Answ": answ,
+                "OptId": qa.get("opt_id"),
+            }
+            if q.get("type") == "quantity":
+                quantity_entries.append(entry)
+            else:
+                ordered_entries.append(entry)
+
+        # Always reserve a slot for the quantity question so it is never
+        # dropped by the 4-entry cap when schemas have 5+ questions.
+        MAX_SPEC = 4
+        if quantity_entries:
+            final_entries = ordered_entries[: MAX_SPEC - 1] + [quantity_entries[0]]
+        else:
+            final_entries = ordered_entries[:MAX_SPEC]
+
         spec_ques: dict = {}
-        spec_count = 0
-        for qa in analysis.get("qna", []):
-            if spec_count >= 4:
-                break
-            if qa.get("answ"):
-                spec_count += 1
-                spec_ques[f"spec_ques_{spec_count}"] = {
-                    "Qid": qa.get("id", ""),
-                    "Quest": qa.get("quest", ""),
-                    "Answ": qa.get("answ", ""),
-                    "OptId": qa.get("opt_id"),
-                }
+        for i, entry in enumerate(final_entries, 1):
+            spec_ques[f"spec_ques_{i}"] = entry
         callback_payload.update(spec_ques)
 
         if lead_id:
@@ -1392,6 +1430,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         room_options=_RoomOptionsCls(close_on_disconnect=False),
     )
 
+    # Hard-mute mic immediately — prevents any user audio (background noise,
+    # early "hello?") from reaching Gemini during the connection→greeting window.
+    # Mic is re-enabled by _on_agent_state once the greeting is fully spoken.
+    _set_mic(False)
+    logger.info("[MIC] Muted at session start — awaiting greeting completion")
+
     # Force Gemini to speak the greeting immediately on connect by sending a
     # LiveClientContent with a placeholder user turn and turn_complete=True.
     # This replicates what generate_reply() does internally, bypassing the
@@ -1408,6 +1452,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 await asyncio.sleep(0.1)
             else:
                 logger.warning("[GREETING] Gemini did not connect within 5 s; skipping trigger")
+                # Safety net: don't leave the call permanently deaf
+                if not _call_ended:
+                    _set_mic(True)
+                    logger.info("[MIC] Enabled (Gemini timeout fallback)")
                 return
             await asyncio.sleep(0.2)  # let initial chat-history replay finish
             _rt._send_client_event(
