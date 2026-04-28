@@ -513,18 +513,31 @@ async def save_call_log_to_backend(payload: dict):
         logger.error(f"[CALL LOG] Failed to save: {e}")
 
 
-async def send_callback(payload: dict, callback_api_url: str = CALLBACK_API_URL):
-    logger.info(f"[CALLBACK] Sending to {callback_api_url} | payload={json.dumps(payload, ensure_ascii=False)}")
-    try:
-        session = _get_http_session()
-        async with session.post(callback_api_url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            body = await resp.text()
-            if resp.status not in (200, 201):
-                logger.warning(f"[CALLBACK] {resp.status} — {body[:300]}")
-            else:
-                logger.info(f"[CALLBACK] {resp.status} OK — {body[:300]}")
-    except Exception as e:
-        logger.error(f"[CALLBACK] send_callback failed: {e}")
+async def send_callback(payload: dict, callback_api_url: str = CALLBACK_API_URL) -> bool:
+    """Send callback with up to 3 attempts (2s, 4s backoff). Returns True on success."""
+    delays = [0, 2, 4]
+    for attempt, delay in enumerate(delays, 1):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            logger.info(
+                f"[CALLBACK] Sending to {callback_api_url} (attempt {attempt}/3) | "
+                f"payload={json.dumps(payload, ensure_ascii=False)}"
+            )
+            session = _get_http_session()
+            async with session.post(
+                callback_api_url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                body = await resp.text()
+                if resp.status not in (200, 201):
+                    logger.warning(f"[CALLBACK] attempt {attempt} — {resp.status}: {body[:300]}")
+                else:
+                    logger.info(f"[CALLBACK] attempt {attempt} — {resp.status} OK: {body[:300]}")
+                    return True
+        except Exception as e:
+            logger.error(f"[CALLBACK] attempt {attempt} failed: {type(e).__name__}: {e}")
+    logger.error(f"[CALLBACK] All 3 attempts failed — callback not delivered")
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1130,7 +1143,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         transcript = build_transcript_from_session(session)
 
         schema = (call_state.get("lead_record") or {}).get("qualification_schema", {})
-        analysis = await generate_call_analysis(transcript, status, schema)
+        try:
+            analysis = await generate_call_analysis(transcript, status, schema)
+        except BaseException as e:
+            # CancelledError (task shutdown) must not skip the callback — fall back gracefully.
+            logger.warning(f"[SAVE_CALL] generate_call_analysis raised {type(e).__name__} — using fallback analysis")
+            fallback_outcome = _status_to_outcome(status)
+            analysis = {
+                "call_outcome": fallback_outcome,
+                "call_outcome_description": DISPOSITION_MAP.get(fallback_outcome, ""),
+                "call_summary": "", "is_business": "", "qna": [],
+                "product_change": {}, "rescheduled_to": "",
+            }
 
         _start = call_state.get("call_start_time")
         _duration = round(time.time() - _start, 1) if _start else 0.0
@@ -1278,13 +1302,24 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         }
         await save_call_log_to_backend(call_log_payload)
 
+    _save_done_event = asyncio.Event()
+
     async def _save_and_close(status: str) -> None:
+        # Snapshot save_done BEFORE the call so only the path that actually
+        # runs save_call_data sets the done-event.  Without this the
+        # disconnected-event (fired when we kick the caller) sets the event
+        # early while the Gemini analysis is still in flight, causing the
+        # entrypoint to exit and the framework to cancel the task before
+        # send_callback is ever reached.
+        _was_done = call_state["save_done"]
         await save_call_data(status)
         asyncio.ensure_future(_delete_room_safe())
         try:
             await session.aclose()
         except Exception:
             pass
+        if not _was_done:
+            _save_done_event.set()
 
     # Inactivity tracking
     _nudge_count = 0
@@ -1649,6 +1684,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             return
         _call_ended = True
         asyncio.ensure_future(_save_and_close("disconnected"))
+
+    # Keep entrypoint alive until save_call_data + callback finish.
+    # Prevents the event loop from shutting down before the HTTP POST
+    # when the caller hangs up or we kick them after the closing phrase.
+    try:
+        await asyncio.wait_for(_save_done_event.wait(), timeout=120.0)
+    except asyncio.TimeoutError:
+        logger.warning("[SAVE_CALL] Timed out waiting for save to complete — process will exit")
 
 
 # ---------------------------------------------------------------------------
