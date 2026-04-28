@@ -140,7 +140,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "When the user answers a question:\n\n"
         "ANSWER VALIDATION — apply BEFORE acknowledging or moving on:\n"
         "A valid answer is ONE of:\n"
-        "  (a) Option match: the user's words clearly align with one of the listed Options, even if paraphrased (e.g. \"cement\" matches \"Cement Plastering\"; \"wall\" matches \"Wall Plastering\"). Pick the option whose meaning the user expressed.\n"
+        "  (a) Option match: the user's words directly and clearly name or describe one of the listed Options, even if paraphrased (e.g. \"cement\" matches \"Cement Plastering\"; \"wall\" matches \"Wall Plastering\"). The answer must explicitly refer to the option — do NOT infer an option from a colloquial, sarcastic, or indirect remark (e.g. \"पैदल-पैदल लेने आ जाना\" does NOT match \"pickup\" — it is a sarcastic expression, not a delivery choice).\n"
         "  (b) Valid quantity: a recognisable number — digits or unambiguous Hindi number words — for quantity questions only.\n"
         "  (c) Valid budget: a clear numeric amount or range, for budget questions only.\n"
         "  (d) Explicit Not Sure: the user says they don't know — \"पता नहीं\" / \"not sure\" / \"decide नहीं किया\" / \"कुछ भी चलेगा\" / \"no preference\".\n\n"
