@@ -793,7 +793,7 @@ DISPOSITION_MAP: dict[str, str] = {
     "Could Not Confirm":                "The customer was uncertain and could not confirm whether they still need the product.",
     "Alternate Number":                 "The customer provided a different or alternate contact number.",
     "Already Spoken":                   "The customer has already discussed or interacted about the requirement with JD or the seller.",
-    "Will do it Myself":                "The customer prefers to take action on their own, declining further assistance.",
+    "Will do it Myself":                "The customer still has the requirement but will source/handle it themselves without JD's help — they explicitly declined seller connections (e.g. 'मैं खुद देख लूँगा', 'I'll manage it myself'). The need exists; only JD's assistance is rejected. Distinct from Not Interested.",
     "Call Rescheduled":                 "The customer asked to call at a specific date and time.",
     "Abruptly disconnected and not Receiving": "The customer disconnected or stopped responding before confirming whether they need the product — zero product confirmation was obtained.",
     "Abusive Lead":                     "The recipient exhibited abusive or inappropriate behavior during the call.",
@@ -876,12 +876,14 @@ Transcript:
 Qualification questions:
 {q_list}
 
-OUTCOME SELECTION RULES (apply these FIRST before considering any other outcome):
-1. Did the customer confirm they need the product AND answer ALL specification questions? → "Approved"
-2. Did the customer confirm they need the product AND answer at least one (but not all) specification questions? → "Enriched"
-3. Did the customer confirm they need the product but answer ZERO specification questions? → "Product Confirmed"
-4. Did the customer NOT confirm the product at all (no product confirmation obtained)? → "Abruptly disconnected and not Receiving"
-Only fall through to the other outcomes below if none of rules 1–4 apply (e.g. Not Interested, Wrong Number, etc.).
+OUTCOME SELECTION RULES — work through these in order and stop at the first match:
+1. Customer confirmed the product AND answered ALL specification questions → "Approved"
+2. Customer confirmed the product AND answered at least one (but not all) specification questions → "Enriched"
+3. Customer confirmed the product but answered ZERO specification questions → "Product Confirmed"
+4. Customer said they will source/handle the requirement themselves without JD's help (e.g. "मैं खुद देख लूँगा", "I'll manage it myself", "don't need sellers") — the need still exists but they rejected JD's assistance → "Will do it Myself"
+   IMPORTANT: distinguish from "Not Interested" — "Will do it Myself" means the need is real but they want no help; "Not Interested" means the need itself is gone.
+5. Any other clear outcome (Not Interested, Wrong Number, Voicemail, Rescheduled, Already Spoken, Language Issue, etc.) → use the matching outcome from the list below.
+6. LAST RESORT — only if the call ended with no meaningful conclusion and none of rules 1–5 apply → "Abruptly disconnected and not Receiving"
 
 Choose the BEST matching call_outcome from ONLY these exact values:
 {disposition_options}
