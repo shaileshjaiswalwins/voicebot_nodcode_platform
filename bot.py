@@ -1430,12 +1430,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         room_options=_RoomOptionsCls(close_on_disconnect=False),
     )
 
-    # Hard-mute mic immediately — prevents any user audio (background noise,
-    # early "hello?") from reaching Gemini during the connection→greeting window.
-    # Mic is re-enabled by _on_agent_state once the greeting is fully spoken.
-    _set_mic(False)
-    logger.info("[MIC] Muted at session start — awaiting greeting completion")
-
     # Force Gemini to speak the greeting immediately on connect by sending a
     # LiveClientContent with a placeholder user turn and turn_complete=True.
     # This replicates what generate_reply() does internally, bypassing the
@@ -1452,10 +1446,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 await asyncio.sleep(0.1)
             else:
                 logger.warning("[GREETING] Gemini did not connect within 5 s; skipping trigger")
-                # Safety net: don't leave the call permanently deaf
-                if not _call_ended:
-                    _set_mic(True)
-                    logger.info("[MIC] Enabled (Gemini timeout fallback)")
                 return
             await asyncio.sleep(0.2)  # let initial chat-history replay finish
             _rt._send_client_event(
@@ -1464,7 +1454,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     turn_complete=True,
                 )
             )
-            logger.info("[GREETING] Trigger pushed; awaiting Gemini's opening turn")
+            # Mute the mic NOW — Gemini has received the trigger and will generate
+            # the greeting. We mute here (not at session.start) to avoid disrupting
+            # the Gemini session during its initialization phase.
+            # The mic is re-enabled by _on_agent_state when greeting finishes.
+            if not _call_ended:
+                _set_mic(False)
+                logger.info("[MIC] Muted after greeting trigger — awaiting greeting completion")
 
         asyncio.create_task(_trigger_greeting())
 
