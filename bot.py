@@ -513,12 +513,15 @@ async def save_call_log_to_backend(payload: dict):
 
 
 async def send_callback(payload: dict, callback_api_url: str = CALLBACK_API_URL):
+    logger.info(f"[CALLBACK] Sending to {callback_api_url} | payload={json.dumps(payload, ensure_ascii=False)}")
     try:
         session = _get_http_session()
         async with session.post(callback_api_url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             body = await resp.text()
             if resp.status not in (200, 201):
                 logger.warning(f"[CALLBACK] {resp.status} — {body[:300]}")
+            else:
+                logger.info(f"[CALLBACK] {resp.status} OK — {body[:300]}")
     except Exception as e:
         logger.error(f"[CALLBACK] send_callback failed: {e}")
 
