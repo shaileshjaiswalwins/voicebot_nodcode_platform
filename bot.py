@@ -813,6 +813,30 @@ def _status_to_outcome(status: str) -> str:
     }.get(status, "Abruptly disconnected and not Receiving")
 
 
+def _fuzzy_match_opt_id(answ: str, options: list[dict]) -> str | None:
+    """Return the option id whose text best matches answ, handling STT digit-drops.
+
+    Handles: exact match (case-insensitive) and numeric-suffix match where STT
+    drops a leading digit (e.g. buyer says "40 GSM" but option is "140 GSM").
+    """
+    if not answ or not options:
+        return None
+    normalized = re.sub(r"\s+", " ", answ.strip().lower())
+    answ_digits = re.sub(r"[^0-9]", "", normalized)
+    for opt in options:
+        opt_text = (opt.get("text") or "").strip().lower()
+        if normalized == opt_text:
+            return opt.get("id")
+    if answ_digits:
+        for opt in options:
+            opt_text = (opt.get("text") or "").strip().lower()
+            opt_digits = re.sub(r"[^0-9]", "", opt_text)
+            # Numeric suffix match: "40" matches "140", "20" matches "120"
+            if opt_digits and opt_digits.endswith(answ_digits) and len(opt_digits) > len(answ_digits):
+                return opt.get("id")
+    return None
+
+
 async def generate_call_analysis(transcript: list[dict], base_status: str, schema: dict) -> dict:
     if not transcript:
         fallback = _status_to_outcome(base_status)
@@ -861,13 +885,18 @@ Return a single JSON object with exactly these keys:
 - "call_summary": 1-2 sentence English summary
 - "is_business": "True" if purchasing for business, "False" if personal, "" if unknown
 - "qna": For EVERY qualification question answered in the call, include one object.
+  PRE-STEP (REQUIRED before filling qna): Read the transcript sequentially. Each time the AGENT asks one of the listed qualification questions (in any language/paraphrase), record the question id and the IMMEDIATELY FOLLOWING BUYER turn as its answer. Build an ordered list of (question_id → buyer_answer) pairs using ONLY conversation position. Never reassign an answer to a different question after building these pairs.
   EXTRACTION RULES (follow strictly):
   1. Go through the transcript in ORDER. For each BUYER turn, identify which qualification question the AGENT was asking immediately before that turn.
-  2. Attribute the BUYER's response to THAT question — use CONVERSATION POSITION, NOT answer format or data type to decide attribution.
+  2. Attribute the BUYER's response to THAT question — use CONVERSATION POSITION, NOT answer format or data type to decide attribution. The Nth qualification question asked by the agent gets the Nth buyer answer — full stop.
   3. Include a question if the buyer gave ANY relevant response: a number, an option value, a free-text answer, or "others/other". Do NOT skip answers just because the agent did not re-confirm them aloud.
-  4. Do NOT reassign an answer from one question to another because it "looks like" a different question's data type (e.g. do not map a GSM/grade answer to a Quantity question).
-  5. For "opt_id": if the normalized answer matches one of the question's options exactly (case-insensitive), set opt_id to that option's id; otherwise set to null.
-  6. For questions with type=="quantity": "answ" MUST be in the form "<number> <unit>" (e.g. "5 pieces", "100 boxes"). Use the unit from the buyer's answer if stated; otherwise use the first value from that question's "quantity_unit" list. If the buyer answered "Not Sure" / "पता नहीं" / could not give a number, set answ to "Not Sure" with no unit.
+  4. Do NOT reassign an answer from one question to another because the answer "looks like" a different question's data type.
+     — CRITICAL: An answer containing a grade/specification value (e.g., "140 GSM", "40 GSM", "120 GSM") is a GRADE answer, NOT a Quantity answer — even though it has a number and unit. Keep it with whichever grade/spec question the agent asked immediately before it.
+     — CRITICAL: An answer like "50 units", "100 pieces" is a QUANTITY answer only if the agent was asking about quantity at that point. Position decides attribution; data format does not.
+  5. For "opt_id": if the normalized answer matches one of the question's options exactly (case-insensitive), set opt_id to that option's id.
+     STT digit-drop correction — speech-to-text frequently drops a leading digit. If the buyer's answer is NOT an exact option match, check whether any option's text has the buyer's numeric value as a numeric suffix (e.g., buyer said "40 GSM" but an option is "140 GSM"; buyer said "20" but an option is "120 GSM"). If a suffix match exists, use that option and set opt_id to its id.
+     If no match at all: set opt_id to null.
+  6. For questions with type=="quantity": "answ" MUST be in the form "<number> <unit>" (e.g. "5 pieces", "100 boxes"). Apply this formatting rule ONLY to the answer of the quantity question itself — never apply it to grade, GSM, or specification answers that happen to contain a number. Use the unit from the buyer's answer if stated; otherwise use the first value from that question's "quantity_unit" list. If the buyer answered "Not Sure" / "पता नहीं" / could not give a number, set answ to "Not Sure" with no unit.
   Each entry: {{"id": <qid>, "quest": <question text>, "answ": <normalized English answer>, "opt_id": <matching option id or null>}}
 - "product_change": {{"product_name": <new product name>}} if the buyer switched products mid-call, else {{}}
 - "rescheduled_to": ISO datetime "YYYY-MM-DDTHH:MM:SS" in IST (GMT+5:30, no timezone suffix) if rescheduled, else ""
@@ -1120,6 +1149,23 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             for q in schema_qs
             if q.get("type") == "quantity"
         }
+        options_by_qid = {
+            q.get("id"): q.get("option") or []
+            for q in schema_qs
+        }
+
+        # Patch any null opt_ids using fuzzy matching (catches STT digit-drops like "40 GSM" → "140 GSM")
+        for qa in qna_by_id.values():
+            if not qa.get("opt_id"):
+                opts = options_by_qid.get(qa.get("id")) or []
+                if opts:
+                    matched = _fuzzy_match_opt_id(str(qa.get("answ", "")), opts)
+                    if matched:
+                        qa["opt_id"] = matched
+                        # Also correct answ to the canonical option text
+                        opt_text = next((o.get("text", "") for o in opts if o.get("id") == matched), "")
+                        if opt_text:
+                            qa["answ"] = opt_text
 
         ordered_entries: list[dict] = []
         quantity_entries: list[dict] = []
