@@ -1481,6 +1481,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _rt = getattr(session._activity, "_rt_session", None) if session._activity else None
     if _rt is not None:
         async def _trigger_greeting() -> None:
+            nonlocal _greeting_done, _bot_has_spoken
             for _ in range(50):  # wait up to 5 s for the Gemini websocket connection
                 async with _rt._session_lock:
                     connected = _rt._active_session is not None
@@ -1504,6 +1505,25 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if not _call_ended:
                 _set_mic(False)
                 logger.info("[MIC] Muted after greeting trigger — awaiting greeting completion")
+
+            # Fallback: if Gemini silently fails to produce the greeting (e.g. "no active
+            # generation" race), _on_agent_state never fires → mic stays muted forever.
+            # Retry the greeting trigger once; force-unmute only if retry also fails.
+            await asyncio.sleep(8)
+            if not _greeting_done and not _call_ended:
+                logger.warning("[GREETING] Gemini did not complete greeting within 8 s — retrying trigger")
+                _rt._send_client_event(
+                    types.LiveClientContent(
+                        turns=[types.Content(parts=[types.Part(text=".")], role="user")],
+                        turn_complete=True,
+                    )
+                )
+                await asyncio.sleep(8)
+                if not _greeting_done and not _call_ended:
+                    _greeting_done = True
+                    _bot_has_spoken = True
+                    _set_mic(True)
+                    logger.warning("[MIC] Greeting retry also failed — force-enabling mic")
 
         asyncio.create_task(_trigger_greeting())
 
