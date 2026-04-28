@@ -1080,7 +1080,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         try:
             await asyncio.wait_for(
                 lkapi.room.delete_room(DeleteRoomRequest(room=room_name)),
-                timeout=10.0,
+                timeout=60.0,
             )
             pass
         except asyncio.TimeoutError:
