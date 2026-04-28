@@ -786,16 +786,16 @@ def build_transcript_from_session(session: AgentSession) -> list[dict]:
 DISPOSITION_MAP: dict[str, str] = {
     "Voicemail":                        "The call went to the recipient's voicemail instead of connecting directly.",
     "Wrong Number":                     "The number dialed does not belong to the intended customer.",
-    "Approved":                         "The customer confirmed the product and all the specs.",
-    "Enriched":                         "The customer confirmed the product and at least one spec.",
-    "Product Confirmed":                "The customer only confirmed the product and not the specs.",
+    "Approved":                         "The customer confirmed the product and answered ALL specification questions.",
+    "Enriched":                         "The customer confirmed the product and answered at least one (but not all) specification questions.",
+    "Product Confirmed":                "The customer confirmed they need the product but answered ZERO specification questions.",
     "Not Interested":                   "The customer clearly stated they are not interested or do not need the product.",
     "Could Not Confirm":                "The customer was uncertain and could not confirm whether they still need the product.",
     "Alternate Number":                 "The customer provided a different or alternate contact number.",
     "Already Spoken":                   "The customer has already discussed or interacted about the requirement with JD or the seller.",
     "Will do it Myself":                "The customer prefers to take action on their own, declining further assistance.",
     "Call Rescheduled":                 "The customer asked to call at a specific date and time.",
-    "Abruptly disconnected and not Receiving": "The customer disconnected the call abruptly before concluding the call.",
+    "Abruptly disconnected and not Receiving": "The customer disconnected or stopped responding before confirming whether they need the product — zero product confirmation was obtained.",
     "Abusive Lead":                     "The recipient exhibited abusive or inappropriate behavior during the call.",
     "DNC Client : Don't Call Further":  "The customer explicitly requested not to be contacted again.",
     "Other Cases":                      "The call outcome does not fit into any predefined categories.",
@@ -875,6 +875,13 @@ Transcript:
 
 Qualification questions:
 {q_list}
+
+OUTCOME SELECTION RULES (apply these FIRST before considering any other outcome):
+1. Did the customer confirm they need the product AND answer ALL specification questions? → "Approved"
+2. Did the customer confirm they need the product AND answer at least one (but not all) specification questions? → "Enriched"
+3. Did the customer confirm they need the product but answer ZERO specification questions? → "Product Confirmed"
+4. Did the customer NOT confirm the product at all (no product confirmation obtained)? → "Abruptly disconnected and not Receiving"
+Only fall through to the other outcomes below if none of rules 1–4 apply (e.g. Not Interested, Wrong Number, etc.).
 
 Choose the BEST matching call_outcome from ONLY these exact values:
 {disposition_options}
