@@ -852,7 +852,14 @@ Return a single JSON object with exactly these keys:
 - "call_outcome_description": the corresponding description string
 - "call_summary": 1-2 sentence English summary
 - "is_business": "True" if purchasing for business, "False" if personal, "" if unknown
-- "qna": array of objects for answered questions: {{"id": <qid>, "quest": <question text>, "answ": <normalized answer>, "opt_id": <matched option id or null>}}
+- "qna": For EVERY qualification question answered in the call, include one object.
+  EXTRACTION RULES (follow strictly):
+  1. Go through the transcript in ORDER. For each BUYER turn, identify which qualification question the AGENT was asking immediately before that turn.
+  2. Attribute the BUYER's response to THAT question — use CONVERSATION POSITION, NOT answer format or data type to decide attribution.
+  3. Include a question if the buyer gave ANY relevant response: a number, an option value, a free-text answer, or "others/other". Do NOT skip answers just because the agent did not re-confirm them aloud.
+  4. Do NOT reassign an answer from one question to another because it "looks like" a different question's data type (e.g. do not map a GSM/grade answer to a Quantity question).
+  5. For "opt_id": if the normalized answer matches one of the question's options exactly (case-insensitive), set opt_id to that option's id; otherwise set to null.
+  Each entry: {{"id": <qid>, "quest": <question text>, "answ": <normalized English answer>, "opt_id": <matching option id or null>}}
 - "product_change": {{"product_name": <new product name>}} if the buyer switched products mid-call, else {{}}
 - "rescheduled_to": ISO datetime "YYYY-MM-DDTHH:MM:SS" in IST (GMT+5:30, no timezone suffix) if rescheduled, else ""
 
