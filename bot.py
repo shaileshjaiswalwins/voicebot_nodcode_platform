@@ -40,6 +40,7 @@ from livekit.agents import (
     cli,
     function_tool,
 )
+from livekit.agents.utils.aio.itertools import tee as _aio_tee
 from livekit.agents.voice.room_io import RoomOptions as _RoomOptionsCls
 from livekit.api import DeleteRoomRequest, LiveKitAPI
 try:
@@ -1369,6 +1370,28 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         await _kick_caller_safe()
         asyncio.ensure_future(_save_and_close("completed"))
 
+    async def _consume_sniff(text_iter) -> None:
+        """Consume one branch of a tee'd text_stream, muting the mic as soon as
+        a partial closing phrase is detected in the streaming chunks."""
+        nonlocal _early_close_muting
+        buf = ""
+        try:
+            async for chunk in text_iter:
+                buf += chunk
+                if not _early_close_muting and not _closing_triggered:
+                    buf_lower = buf.lower()
+                    if any(m in buf_lower for m in (
+                        "details मिल गईं",
+                        "relevant sellers",
+                        "sellers will contact",
+                        "all details",
+                    )):
+                        _early_close_muting = True
+                        _set_mic(False)
+                        logger.info(f"[STREAM-DETECT] Closing phrase in stream — mic muted | buf={buf!r}")
+        except Exception:
+            pass
+
     # 7. Function tools
     @function_tool
     async def FetchCategorySchema(tool_ctx: RunContext, srchterm: str) -> dict:
@@ -1427,7 +1450,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             )):
                 _early_close_muting = True
                 _set_mic(False)
-                logger.info("[CLOSE DETECT] Partial closing phrase detected — mic muted early")
+                logger.info("[CLOSE DETECT] Partial closing phrase detected in commit — mic muted")
         if _is_closing_phrase(_closing_buffer):
             _closing_triggered = True
             call_state["ended_naturally"] = True
@@ -1524,6 +1547,28 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # Gemini 3.1.  ActivityStart/ActivityEnd are ignored in automatic-AAD mode.
     _rt = getattr(session._activity, "_rt_session", None) if session._activity else None
     if _rt is not None:
+        # Swap the framework's generation_created listener so we can tee each
+        # message's text_stream.  Our sniffer branch detects partial closing phrases
+        # from the streaming chunks — before the item is committed — and mutes the mic
+        # while the LLM is still speaking, preventing VAD-triggered interruptions.
+        _orig_gen_handler = getattr(session._activity, "_on_generation_created", None)
+        if _orig_gen_handler is not None:
+            def _gen_created_with_sniff(ev) -> None:
+                orig_stream = ev.message_stream
+
+                async def _wrapped_messages():
+                    async for msg in orig_stream:
+                        t = _aio_tee(msg.text_stream, 2)
+                        msg.text_stream = t[0]   # framework consumes this branch
+                        asyncio.create_task(_consume_sniff(t[1]))
+                        yield msg
+
+                ev.message_stream = _wrapped_messages()
+                _orig_gen_handler(ev)
+
+            _rt.off("generation_created", _orig_gen_handler)
+            _rt.on("generation_created", _gen_created_with_sniff)
+
         async def _trigger_greeting() -> None:
             nonlocal _greeting_done, _bot_has_spoken
             for _ in range(50):  # wait up to 5 s for the Gemini websocket connection
@@ -1648,7 +1693,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _lang_cfg.get("timeout_message")
         or "Thank you for your time. The relevant sellers will contact you soon. Goodbye!"
     )
-
     async def _call_timeout() -> None:
         await asyncio.sleep(_max_call_duration)
         if call_state.get("ended_naturally") or call_state.get("save_done"):
