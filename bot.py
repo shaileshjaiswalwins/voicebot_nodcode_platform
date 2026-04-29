@@ -1419,7 +1419,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         # immediately so the user cannot interrupt before the full phrase is committed.
         if not _early_close_muting and not _closing_triggered:
             _buf_lower = _closing_buffer.lower()
-            if any(m in _buf_lower for m in ("relevant sellers", "sellers will contact")):
+            if any(m in _buf_lower for m in (
+                "details मिल गईं",   # start of Hindi closing line — appears before interruption can truncate
+                "relevant sellers",
+                "sellers will contact",
+                "all details",        # English equivalent
+            )):
                 _early_close_muting = True
                 _set_mic(False)
                 logger.info("[CLOSE DETECT] Partial closing phrase detected — mic muted early")
