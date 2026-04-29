@@ -1354,6 +1354,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # Closing-phrase handler
     _closing_buffer = ""
     _closing_triggered = False
+    _early_close_muting = False  # True once partial closing phrases appear — keeps mic muted
     _echo_guard_task: asyncio.Task | None = None
 
     # Turn-wise transcript + end-to-end latency tracking
@@ -1400,7 +1401,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("conversation_item_added")
     def _on_item_added(ev) -> None:
-        nonlocal _closing_buffer, _closing_triggered
+        nonlocal _closing_buffer, _closing_triggered, _early_close_muting
         item = ev.item if hasattr(ev, "item") else ev
         role = getattr(item, "role", None)
         role_str = role.value if hasattr(role, "value") else str(role) if role else ""
@@ -1414,6 +1415,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _closing_buffer += " " + text
         if text:
             logger.info(f"[TRANSCRIPT] Turn {_turn_counter} | AGENT: {text!r}")
+        # Early mute: partial closing phrases are unique to the wrap-up line — mute
+        # immediately so the user cannot interrupt before the full phrase is committed.
+        if not _early_close_muting and not _closing_triggered:
+            _buf_lower = _closing_buffer.lower()
+            if any(m in _buf_lower for m in ("relevant sellers", "sellers will contact")):
+                _early_close_muting = True
+                _set_mic(False)
+                logger.info("[CLOSE DETECT] Partial closing phrase detected — mic muted early")
         if _is_closing_phrase(_closing_buffer):
             _closing_triggered = True
             call_state["ended_naturally"] = True
@@ -1474,11 +1483,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 try:
                     _set_mic(False)
                     await asyncio.sleep(0.6)
-                    # Only re-enable after greeting is done and call hasn't ended
-                    if _greeting_done and not _call_ended:
+                    # Only re-enable after greeting is done, call hasn't ended,
+                    # and no (partial) closing phrase has been detected yet.
+                    if _greeting_done and not _call_ended and not _closing_triggered and not _early_close_muting:
                         _set_mic(True)
                 except asyncio.CancelledError:
-                    if _greeting_done and not _call_ended:
+                    if _greeting_done and not _call_ended and not _closing_triggered and not _early_close_muting:
                         _set_mic(True)
 
             _echo_guard_task = asyncio.create_task(_echo_guard())
@@ -1671,7 +1681,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # Prevents the event loop from shutting down before the HTTP POST
     # when the caller hangs up or we kick them after the closing phrase.
     try:
-        await asyncio.wait_for(_save_done_event.wait(), timeout=120.0)
+        await asyncio.wait_for(_save_done_event.wait(), timeout=_max_call_duration + 120)
     except asyncio.TimeoutError:
         logger.warning("[SAVE_CALL] Timed out waiting for save to complete — process will exit")
 
