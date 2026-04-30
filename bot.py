@@ -1024,7 +1024,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _vad_end            = _bot_config.get("gemini_end_sensitivity")   or "END_SENSITIVITY_LOW"
     _vad_silence_ms     = int(_bot_config.get("gemini_silence_duration_ms") or 1500)
     _vad_prefix_ms      = int(_bot_config.get("gemini_prefix_padding_ms")   or 100)
-    _max_call_duration  = int(_bot_config.get("max_call_duration") or 300)
+    _max_call_duration  = 300
     _functions: list[dict] = _bot_config.get("functions") or []
     _function_calling   = bool(_bot_config.get("function_calling", False)) and bool(_functions)
     _lang_cfg           = HINDI_LANG_CONFIG
