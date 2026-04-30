@@ -1,0 +1,21 @@
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from the repo root (parent of this package)
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
+
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://192.168.13.65:27017")
+MONGO_DB = "ai_lead_qualify"
+MONGO_COLLECTION = "call_transcripts"
+
+CALLBACK_API_URL = os.getenv(
+    "CALLBACK_API_URL",
+    "http://192.168.14.101:3006/leads/ai-lead-qualify/callback",
+)
+
+GEMINI_API_KEY = os.getenv("GEMINI_LIVE_API_KEY", "")
+
+POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "60"))
+BATCH_LIMIT = int(os.getenv("BATCH_LIMIT", "50"))

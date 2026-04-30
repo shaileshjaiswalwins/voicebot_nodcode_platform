@@ -62,9 +62,12 @@ if not os.environ.get("GOOGLE_API_KEY"):
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 MIS_API_BASE = "http://192.168.14.101:3006"
-CALLBACK_API_URL = "http://192.168.14.101:3006/leads/ai-lead-qualify/callback"
 CATEGORY_CHANGE_API = "http://192.168.20.105:1080/services/abd/abd_beta.php"
 IST = timezone(timedelta(hours=5, minutes=30))
+
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://192.168.13.65:27017")
+MONGO_DB = "ai_lead_qualify"
+MONGO_COLLECTION = "call_transcripts"
 
 _http_session: aiohttp.ClientSession | None = None
 
@@ -74,6 +77,18 @@ def _get_http_session() -> aiohttp.ClientSession:
     if _http_session is None or _http_session.closed:
         _http_session = aiohttp.ClientSession()
     return _http_session
+
+
+from motor.motor_asyncio import AsyncIOMotorClient as _MotorClient
+
+_mongo_client: _MotorClient | None = None
+
+
+def _get_mongo_collection():
+    global _mongo_client
+    if _mongo_client is None:
+        _mongo_client = _MotorClient(MONGO_URI)
+    return _mongo_client[MONGO_DB][MONGO_COLLECTION]
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +255,6 @@ _HARDCODED_BOT_CONFIG: dict = {
     ],
     "api_urls": {
         "mis_api_base": "http://192.168.14.101:3006",
-        "callback_api_url": "http://192.168.14.101:3006/leads/ai-lead-qualify/callback",
         "category_change_api": "http://192.168.20.105:1080/services/abd/abd_beta.php",
     },
     "prompt_config": {
@@ -416,7 +430,7 @@ async def _execute_function_call(fn_name: str, fn_args: dict, functions: list[di
             lead_record = call_state.get("lead_record") or {}
             old_product = lead_record.get("catname", "")
 
-            # Persist new schema so save_call_data / generate_call_analysis
+            # Persist new schema so save_call_data and the callback worker
             # analyze the buyer's answers against the NEW questions.
             lead_record["qualification_schema"] = result
             lead_record["catname"] = catname
@@ -498,32 +512,6 @@ async def save_call_log_to_backend(payload: dict):
     except Exception as e:
         logger.error(f"[CALL LOG] Failed to save: {e}")
 
-
-async def send_callback(payload: dict, callback_api_url: str = CALLBACK_API_URL) -> bool:
-    """Send callback with up to 3 attempts (2s, 4s backoff). Returns True on success."""
-    delays = [0, 2, 4]
-    for attempt, delay in enumerate(delays, 1):
-        if delay:
-            await asyncio.sleep(delay)
-        try:
-            logger.info(
-                f"[CALLBACK] Sending to {callback_api_url} (attempt {attempt}/3) | "
-                f"payload={json.dumps(payload, ensure_ascii=False)}"
-            )
-            session = _get_http_session()
-            async with session.post(
-                callback_api_url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
-                body = await resp.text()
-                if resp.status not in (200, 201):
-                    logger.warning(f"[CALLBACK] attempt {attempt} — {resp.status}: {body[:300]}")
-                else:
-                    logger.info(f"[CALLBACK] attempt {attempt} — {resp.status} OK: {body[:300]}")
-                    return True
-        except Exception as e:
-            logger.error(f"[CALLBACK] attempt {attempt} failed: {type(e).__name__}: {e}")
-    logger.error(f"[CALLBACK] All 3 attempts failed — callback not delivered")
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -775,181 +763,6 @@ def build_transcript_from_session(session: AgentSession) -> list[dict]:
     return transcript
 
 
-# ---------------------------------------------------------------------------
-# Call analysis (post-call Gemini analysis — identical to Pipecat bot)
-# ---------------------------------------------------------------------------
-
-DISPOSITION_MAP: dict[str, str] = {
-    "Voicemail":                        "The call went to the recipient's voicemail instead of connecting directly.",
-    "Wrong Number":                     "The number dialed does not belong to the intended customer.",
-    "Approved":                         "The customer confirmed the product and answered ALL specification questions.",
-    "Enriched":                         "The customer confirmed the product and answered at least one (but not all) specification questions.",
-    "Product Confirmed":                "The customer confirmed they need the product but answered ZERO specification questions.",
-    "Not Interested":                   "The customer clearly stated they are not interested or do not need the product.",
-    "Could Not Confirm":                "The customer was uncertain and could not confirm whether they still need the product.",
-    "Alternate Number":                 "The customer provided a different or alternate contact number.",
-    "Already Spoken":                   "The customer has already discussed or interacted about the requirement with JD or the seller.",
-    "Will do it Myself":                "The customer still has the requirement but will source/handle it themselves without JD's help — they explicitly declined seller connections (e.g. 'मैं खुद देख लूँगा', 'I'll manage it myself'). The need exists; only JD's assistance is rejected. Distinct from Not Interested.",
-    "Call Rescheduled":                 "The customer asked to call at a specific date and time.",
-    "Abruptly disconnected and not Receiving": "The customer disconnected or stopped responding before confirming whether they need the product — zero product confirmation was obtained.",
-    "Abusive Lead":                     "The recipient exhibited abusive or inappropriate behavior during the call.",
-    "DNC Client : Don't Call Further":  "The customer explicitly requested not to be contacted again.",
-    "Other Cases":                      "The call outcome does not fit into any predefined categories.",
-    "Technical Issue - Call Connected": "The call connected but was disrupted by technical issues.",
-    "Language Issue":                   "Communication was not possible due to a language mismatch.",
-}
-
-_VALID_OUTCOMES = set(DISPOSITION_MAP.keys())
-
-
-def _status_to_outcome(status: str) -> str:
-    return {
-        "completed": "Could Not Confirm",
-        "disconnected": "Abruptly disconnected and not Receiving",
-    }.get(status, "Abruptly disconnected and not Receiving")
-
-
-def _fuzzy_match_opt_id(answ: str, options: list[dict]) -> str | None:
-    """Return the option id whose text best matches answ, handling STT digit-drops.
-
-    Handles: exact match (case-insensitive) and numeric-suffix match where STT
-    drops a leading digit (e.g. buyer says "40 GSM" but option is "140 GSM").
-    """
-    if not answ or not options:
-        return None
-    normalized = re.sub(r"\s+", " ", answ.strip().lower())
-    answ_digits = re.sub(r"[^0-9]", "", normalized)
-    for opt in options:
-        opt_text = (opt.get("text") or "").strip().lower()
-        if normalized == opt_text:
-            return opt.get("id")
-    if answ_digits:
-        for opt in options:
-            opt_text = (opt.get("text") or "").strip().lower()
-            opt_digits = re.sub(r"[^0-9]", "", opt_text)
-            # Numeric suffix match: "40" matches "140", "20" matches "120"
-            if opt_digits and opt_digits.endswith(answ_digits) and len(opt_digits) > len(answ_digits):
-                return opt.get("id")
-    return None
-
-
-async def generate_call_analysis(transcript: list[dict], base_status: str, schema: dict) -> dict:
-    if not transcript:
-        fallback = _status_to_outcome(base_status)
-        return {
-            "call_outcome": fallback,
-            "call_outcome_description": DISPOSITION_MAP.get(fallback, ""),
-            "call_summary": "", "is_business": "", "qna": [],
-            "product_change": {}, "rescheduled_to": "",
-        }
-
-    questions = schema.get("question", []) if schema else []
-    q_list = json.dumps(
-        [{
-            "id": q.get("id", ""),
-            "text": q.get("text", ""),
-            "type": q.get("type", ""),
-            "quantity_unit": q.get("quantity_unit") or [],
-            "options": [{"id": o.get("id", ""), "text": o.get("text", "")} for o in (q.get("option") or []) if o.get("text")],
-        } for q in questions],
-        ensure_ascii=False,
-    )
-    lines = "\n".join(f"{t['role'].upper()}: {t['text']}" for t in transcript)
-    cut_note = (
-        "\nNote: The call ended before the bot's closing phrase. "
-        "Determine the outcome based on what was actually collected."
-        if base_status == "disconnected" else ""
-    )
-    disposition_options = "\n".join(f'  "{k}": {v}' for k, v in DISPOSITION_MAP.items())
-    current_dt_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
-
-    prompt = f"""Analyze this JustDial AI product qualification call between an AI agent and a buyer.{cut_note}
-Current date and time (IST, GMT+5:30): {current_dt_str}
-
-Transcript:
-{lines}
-
-Qualification questions:
-{q_list}
-
-OUTCOME SELECTION RULES — work through these in order and stop at the first match:
-1. Customer confirmed the product AND answered ALL specification questions → "Approved"
-2. Customer confirmed the product AND answered at least one (but not all) specification questions → "Enriched"
-3. Customer confirmed the product but answered ZERO specification questions → "Product Confirmed"
-4. Customer said they will source/handle the requirement themselves without JD's help (e.g. "मैं खुद देख लूँगा", "I'll manage it myself", "don't need sellers") — the need still exists but they rejected JD's assistance → "Will do it Myself"
-   IMPORTANT: distinguish from "Not Interested" — "Will do it Myself" means the need is real but they want no help; "Not Interested" means the need itself is gone.
-5. Any other clear outcome (Not Interested, Wrong Number, Voicemail, Rescheduled, Already Spoken, Language Issue, etc.) → use the matching outcome from the list below.
-6. LAST RESORT — only if the call ended with no meaningful conclusion and none of rules 1–5 apply → "Abruptly disconnected and not Receiving"
-
-Choose the BEST matching call_outcome from ONLY these exact values:
-{disposition_options}
-
-Return a single JSON object with exactly these keys:
-- "call_outcome": one of the exact strings listed above
-- "call_outcome_description": the corresponding description string
-- "call_summary": 1-2 sentence English summary
-- "is_business": "True" if purchasing for business, "False" if personal, "" if unknown
-- "qna": For EVERY qualification question answered in the call, include one object.
-  PRE-STEP (REQUIRED before filling qna): Read the transcript sequentially. Each time the AGENT asks one of the listed qualification questions (in any language/paraphrase), record the question id and the IMMEDIATELY FOLLOWING BUYER turn as its answer. Build an ordered list of (question_id → buyer_answer) pairs using ONLY conversation position. Never reassign an answer to a different question after building these pairs.
-  EXTRACTION RULES (follow strictly):
-  1. Go through the transcript in ORDER. For each BUYER turn, identify which qualification question the AGENT was asking immediately before that turn.
-  2. Attribute the BUYER's response to THAT question — use CONVERSATION POSITION, NOT answer format or data type to decide attribution. The Nth qualification question asked by the agent gets the Nth buyer answer — full stop.
-  3. Include a question if the buyer gave ANY relevant response: a number, an option value, a free-text answer, or "others/other". Do NOT skip answers just because the agent did not re-confirm them aloud.
-  4. AGENT-CONFIRMATION RULE: If the buyer's response to a question is garbled, unclear, or ambiguous (STT noise), but the AGENT's very next turn explicitly states a confirmed value for that question (e.g., "Industrial नोट कर लिया", "okay, X", "समझ गई, X"), treat that agent-confirmed value as the buyer's answer. Include this question in qna even if the raw buyer turn looks like noise.
-  5. Do NOT reassign an answer from one question to another because the answer "looks like" a different question's data type.
-     — CRITICAL: An answer containing a grade/specification value (e.g., "140 GSM", "40 GSM", "120 GSM") is a GRADE answer, NOT a Quantity answer — even though it has a number and unit. Keep it with whichever grade/spec question the agent asked immediately before it.
-     — CRITICAL: An answer like "50 units", "100 pieces" is a QUANTITY answer only if the agent was asking about quantity at that point. Position decides attribution; data format does not.
-  6. REPEAT/CORRECTION RULE: If a buyer turn contains a value (especially a number+unit) that clearly belongs to a PREVIOUSLY asked question and does NOT match any option of the current question, treat it as the buyer correcting or confirming the prior question's answer — update that prior answer and do NOT assign it to the current question.
-  7. POST-WRAP-UP RULE: If the buyer speaks AFTER the agent's closing/wrap-up statement, check whether the utterance clearly answers any unanswered qualification question from earlier in the call. If yes, include it in qna as the answer to that question. The call is not fully closed until both sides stop speaking.
-  8. For "opt_id": if the normalized answer matches one of the question's options exactly (case-insensitive), set opt_id to that option's id.
-     STT digit-drop correction — speech-to-text frequently drops a leading digit. If the buyer's answer is NOT an exact option match, check whether any option's text has the buyer's numeric value as a numeric suffix (e.g., buyer said "40 GSM" but an option is "140 GSM"; buyer said "20" but an option is "120 GSM"). If a suffix match exists, use that option and set opt_id to its id.
-     If no match at all: set opt_id to null.
-  9. For questions with type=="quantity": "answ" MUST be in the form "<number> <unit>" (e.g. "5 pieces", "100 boxes"). Apply this formatting rule ONLY to the answer of the quantity question itself — never apply it to grade, GSM, or specification answers that happen to contain a number. Use the unit from the buyer's answer if stated; otherwise use the first value from that question's "quantity_unit" list. If the buyer answered "Not Sure" / "पता नहीं" / could not give a number, set answ to "Not Sure" with no unit.
-  Each entry: {{"id": <qid>, "quest": <question text>, "answ": <normalized English answer>, "opt_id": <matching option id or null>}}
-- "product_change": {{"product_name": <new product name>}} if the buyer switched products mid-call, else {{}}
-- "rescheduled_to": ISO datetime "YYYY-MM-DDTHH:MM:SS" in IST (GMT+5:30, no timezone suffix) if rescheduled, else ""
-
-Return ONLY the JSON — no markdown, no explanation."""
-
-    try:
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.5-flash:generateContent?key={os.getenv('GEMINI_LIVE_API_KEY')}"
-        )
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
-        }
-        http = _get_http_session()
-        async with http.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-            data = await resp.json()
-            if "candidates" not in data or not data["candidates"]:
-                raise ValueError(f"No candidates: {data.get('error') or data}")
-            raw = data["candidates"][0]["content"]["parts"][0]["text"]
-            result = json.loads(raw)
-            outcome = result.get("call_outcome", "")
-            if outcome not in _VALID_OUTCOMES:
-                outcome = _status_to_outcome(base_status)
-                result["call_outcome"] = outcome
-            result["call_outcome_description"] = DISPOSITION_MAP.get(outcome, "")
-            result.setdefault("qna", [])
-            result.setdefault("product_change", {})
-            result.setdefault("rescheduled_to", "")
-            # Normalize legacy LLM shape {old_product, new_product} → {product_name}
-            pc = result.get("product_change") or {}
-            if isinstance(pc, dict) and "new_product" in pc and "product_name" not in pc:
-                result["product_change"] = {"product_name": pc.get("new_product", "")}
-            return result
-    except Exception as e:
-        logger.error(f"[ANALYSIS] LLM analysis failed: {type(e).__name__}: {e}")
-        fallback = _status_to_outcome(base_status)
-        return {
-            "call_outcome": fallback,
-            "call_outcome_description": DISPOSITION_MAP.get(fallback, ""),
-            "call_summary": "", "is_business": "", "qna": [],
-            "product_change": {}, "rescheduled_to": "",
-        }
-
 
 # ---------------------------------------------------------------------------
 # Closing-phrase detection (CallEndDetector equivalent)
@@ -1015,9 +828,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
 
     _api_urls = _bot_config.get("api_urls") or {}
-    _mis_api_base       = _api_urls.get("mis_api_base") or MIS_API_BASE
-    _callback_api_url   = _api_urls.get("callback_api_url") or CALLBACK_API_URL
-    _category_change_api= _api_urls.get("category_change_api") or CATEGORY_CHANGE_API
+    _mis_api_base        = _api_urls.get("mis_api_base") or MIS_API_BASE
+    _category_change_api = _api_urls.get("category_change_api") or CATEGORY_CHANGE_API
     _language           = "hindi"
     _temperature        = float(_bot_config.get("temperature") or 0.4)
     _vad_start          = _bot_config.get("gemini_start_sensitivity") or "START_SENSITIVITY_LOW"
@@ -1120,112 +932,38 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         logger.info(
             f"[SAVE_CALL] save_call_data called | status={status!r} | "
             f"record_id={lead_id!r} | call_id={call_state.get('call_id')!r} | "
-            f"callback_url={_callback_api_url!r} | "
             f"lead_record_present={bool(call_state.get('lead_record'))}"
         )
         transcript = build_transcript_from_session(session)
 
-        schema = (call_state.get("lead_record") or {}).get("qualification_schema", {})
-        try:
-            analysis = await generate_call_analysis(transcript, status, schema)
-        except BaseException as e:
-            # CancelledError (task shutdown) must not skip the callback — fall back gracefully.
-            logger.warning(f"[SAVE_CALL] generate_call_analysis raised {type(e).__name__} — using fallback analysis")
-            fallback_outcome = _status_to_outcome(status)
-            analysis = {
-                "call_outcome": fallback_outcome,
-                "call_outcome_description": DISPOSITION_MAP.get(fallback_outcome, ""),
-                "call_summary": "", "is_business": "", "qna": [],
-                "product_change": {}, "rescheduled_to": "",
-            }
-
         _start = call_state.get("call_start_time")
-        _duration = round(time.time() - _start, 1) if _start else 0.0
-        outcome = analysis.get("call_outcome", _status_to_outcome(status))
-        if status == "disconnected" and outcome in ("Approved", "Enriched"):
-            status = "completed"
+        _end_time = time.time()
+        _duration = round(_end_time - _start, 1) if _start else 0.0
 
-        callback_payload: dict = {
-            "call_id": call_state.get("call_id", ""),
+        # Persist transcript + metadata to MongoDB; callback worker will pick it up
+        _mongo_doc = {
             "lead_id": lead_id,
-            "is_business": analysis.get("is_business", ""),
-            "ai_partner": "inh-suny-bot",
-            "call_outcome": outcome,
-            "call_outcome_desc": analysis.get("call_outcome_description", DISPOSITION_MAP.get(outcome, "")),
-            "call_summary": analysis.get("call_summary", ""),
-            "product_change": call_state.get("product_change") or analysis.get("product_change") or {},
-            "call_duration": _duration,
+            "call_id": call_state.get("call_id"),
+            "assistant_id": _assistant_id,
+            "room_name": room_name,
+            "status": status,
+            "ended_naturally": call_state.get("ended_naturally"),
+            "product_change": call_state.get("product_change"),
+            "transcript": transcript,
+            "lead_record": call_state.get("lead_record"),
+            "sip_info": sip_info,
+            "call_start_time": _start,
+            "call_end_time": _end_time,
+            "call_duration_sec": _duration,
+            "tagged": False,
+            "tagged_at": None,
+            "created_at": datetime.utcnow(),
         }
-        callback_payload["rescheduled_to"] = analysis.get("rescheduled_to", "") or ""
-
-        schema_qs = schema.get("question", []) if schema else []
-        qna_by_id = {qa.get("id"): qa for qa in (analysis.get("qna") or []) if qa.get("id")}
-        quantity_units_by_id = {
-            q.get("id"): q.get("quantity_unit") or []
-            for q in schema_qs
-            if q.get("type") == "quantity"
-        }
-        options_by_qid = {
-            q.get("id"): q.get("option") or []
-            for q in schema_qs
-        }
-
-        # Patch any null opt_ids using fuzzy matching (catches STT digit-drops like "40 GSM" → "140 GSM")
-        for qa in qna_by_id.values():
-            if not qa.get("opt_id"):
-                opts = options_by_qid.get(qa.get("id")) or []
-                if opts:
-                    matched = _fuzzy_match_opt_id(str(qa.get("answ", "")), opts)
-                    if matched:
-                        qa["opt_id"] = matched
-                        # Also correct answ to the canonical option text
-                        opt_text = next((o.get("text", "") for o in opts if o.get("id") == matched), "")
-                        if opt_text:
-                            qa["answ"] = opt_text
-
-        ordered_entries: list[dict] = []
-        quantity_entries: list[dict] = []
-        for q in schema_qs:
-            qid = q.get("id")
-            qa = qna_by_id.get(qid)
-            if not qa or not qa.get("answ"):
-                continue
-            answ = str(qa.get("answ", "")).strip()
-            if q.get("type") == "quantity":
-                # Defensive unit fill: append unit if not already present in answ
-                units = quantity_units_by_id.get(qid) or []
-                unit = units[0] if units else None
-                if unit and answ and answ.lower() not in {"not sure", "पता नहीं"}:
-                    if not any(u and u.lower() in answ.lower() for u in units):
-                        answ = f"{answ} {unit}".strip()
-            entry = {
-                "Qid": qid or "",
-                "Quest": qa.get("quest", "") or q.get("text", ""),
-                "Answ": answ,
-                "OptId": qa.get("opt_id"),
-            }
-            if q.get("type") == "quantity":
-                quantity_entries.append(entry)
-            else:
-                ordered_entries.append(entry)
-
-        # Always reserve a slot for the quantity question so it is never
-        # dropped by the 4-entry cap when schemas have 5+ questions.
-        MAX_SPEC = 4
-        if quantity_entries:
-            final_entries = ordered_entries[: MAX_SPEC - 1] + [quantity_entries[0]]
-        else:
-            final_entries = ordered_entries[:MAX_SPEC]
-
-        spec_ques: dict = {}
-        for i, entry in enumerate(final_entries, 1):
-            spec_ques[f"spec_ques_{i}"] = entry
-        callback_payload.update(spec_ques)
-
-        if lead_id:
-            await send_callback(callback_payload, callback_api_url=_callback_api_url)
-        else:
-            logger.warning(f"[CALLBACK] SKIPPED — no lead_id | room={room_name!r} | status={status!r}")
+        try:
+            await _get_mongo_collection().insert_one(_mongo_doc)
+            logger.info(f"[MONGO] Transcript saved | lead_id={lead_id!r} | call_id={call_state.get('call_id')!r}")
+        except Exception as e:
+            logger.error(f"[MONGO] insert failed: {e}")
 
         _lead = call_state.get("lead_record") or {}
         _search_ctx = _lead.get("search_context") or {}
@@ -1259,29 +997,24 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "organization_id": _bot_config.get("organization_id", ""),
             "assistant_id": _assistant_id,
             "status": "completed" if status == "completed" else "disconnected",
-            "summary": analysis.get("call_summary", ""),
+            "summary": "",
             "call_type": "inbound",
-            "outcome": outcome,
+            "outcome": status,
             "transcripts": _transcripts,
             "meta_data": {
                 "lead_id": call_state.get("record_id", ""),
                 "lead_call_id": call_state.get("call_id", ""),
                 "product": _product,
-                "qna": analysis.get("qna", []),
-                **spec_ques,
-                "is_business": analysis.get("is_business", ""),
-                "rescheduled_to": analysis.get("rescheduled_to", ""),
-                "product_change": call_state.get("product_change") or analysis.get("product_change") or {},
+                "qna": [],
+                "is_business": "",
+                "rescheduled_to": "",
+                "product_change": call_state.get("product_change") or {},
                 "buyer_name": (_lead.get("buyer_details") or {}).get("buyer_name", ""),
                 "buyer_city": (_lead.get("buyer_details") or {}).get("buyer_city", ""),
-                "call_outcome_desc": analysis.get("call_outcome_description", ""),
+                "call_outcome_desc": "",
             },
-            "tags": [status, outcome.lower().replace(" ", "_").replace(":", "")] if outcome else [status],
-            "sentiment": (
-                "positive" if outcome in ("Approved", "Enriched")
-                else "negative" if outcome in ("Abusive Lead", "DNC Client : Don't Call Further")
-                else "neutral"
-            ),
+            "tags": [status],
+            "sentiment": "neutral",
         }
         await save_call_log_to_backend(call_log_payload)
 
@@ -1291,9 +1024,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         # Snapshot save_done BEFORE the call so only the path that actually
         # runs save_call_data sets the done-event.  Without this the
         # disconnected-event (fired when we kick the caller) sets the event
-        # early while the Gemini analysis is still in flight, causing the
-        # entrypoint to exit and the framework to cancel the task before
-        # send_callback is ever reached.
+        # early while the Mongo insert is still in flight.
         _was_done = call_state["save_done"]
         await save_call_data(status)
         asyncio.ensure_future(_delete_room_safe())
@@ -1533,7 +1264,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _reset_inactivity()
 
     # 10. Start session — disable close_on_disconnect so the process stays alive
-    # long enough for save_call_data (Gemini analysis + HTTP callback) to finish.
+    # long enough for save_call_data (Mongo insert + call-log POST) to finish.
     await session.start(
         room=ctx.room,
         agent=agent,
