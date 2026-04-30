@@ -6,7 +6,7 @@ from datetime import datetime
 
 import aiohttp
 from loguru import logger
-from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ASCENDING, MongoClient
 
 from .analysis import fallback_analysis, generate_call_analysis
 from .callback import CALLBACK_API_URL, build_callback_payload, send_callback
@@ -23,13 +23,14 @@ def _handle_signal(*_):
 async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSession) -> None:
     lead_id = doc.get("lead_id")
     doc_id = doc["_id"]
+    loop = asyncio.get_running_loop()
 
     if not lead_id:
         logger.warning(f"[WORKER] Skipping doc {doc_id} — no lead_id")
-        await collection.update_one(
+        await loop.run_in_executor(None, lambda: collection.update_one(
             {"_id": doc_id},
             {"$set": {"tagged": True, "tagged_at": datetime.utcnow(), "skipped_reason": "no_lead_id"}},
-        )
+        ))
         return
 
     schema = (doc.get("lead_record") or {}).get("qualification_schema", {}) or {}
@@ -45,18 +46,18 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
     ok = await send_callback(payload, http_session, CALLBACK_API_URL)
 
     if ok:
-        await collection.update_one(
+        await loop.run_in_executor(None, lambda: collection.update_one(
             {"_id": doc_id},
             {"$set": {"tagged": True, "tagged_at": datetime.utcnow()}},
-        )
+        ))
         logger.info(f"[WORKER] Tagged doc {doc_id} | lead_id={lead_id!r}")
     else:
         logger.warning(f"[WORKER] Callback failed for doc {doc_id} | lead_id={lead_id!r} — will retry next tick")
 
 
 async def _tick(collection, http_session: aiohttp.ClientSession) -> None:
-    cursor = collection.find({"tagged": False}).limit(BATCH_LIMIT)
-    docs = await cursor.to_list(length=BATCH_LIMIT)
+    loop = asyncio.get_running_loop()
+    docs = await loop.run_in_executor(None, lambda: list(collection.find({"tagged": False}).limit(BATCH_LIMIT)))
     if not docs:
         return
     logger.info(f"[WORKER] Processing {len(docs)} untagged doc(s)")
@@ -73,11 +74,13 @@ async def main() -> None:
 
     logger.info(f"[WORKER] Starting | mongo={MONGO_URI} | db={MONGO_DB} | collection={MONGO_COLLECTION} | poll={POLL_INTERVAL_SEC}s | batch={BATCH_LIMIT}")
 
-    client = AsyncIOMotorClient(MONGO_URI)
+    client = MongoClient(MONGO_URI)
     collection = client[MONGO_DB][MONGO_COLLECTION]
 
-    # Ensure index for efficient untagged queries
-    await collection.create_index([("tagged", 1), ("created_at", 1)], background=True)
+    await loop.run_in_executor(None, lambda: collection.create_index(
+        [("tagged", ASCENDING), ("created_at", ASCENDING)],
+        background=True,
+    ))
 
     async with aiohttp.ClientSession() as http_session:
         while not _stop.is_set():

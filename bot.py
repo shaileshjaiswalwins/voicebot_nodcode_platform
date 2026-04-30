@@ -79,15 +79,15 @@ def _get_http_session() -> aiohttp.ClientSession:
     return _http_session
 
 
-from motor.motor_asyncio import AsyncIOMotorClient as _MotorClient
+from pymongo import MongoClient as _MongoClient
 
-_mongo_client: _MotorClient | None = None
+_mongo_client: _MongoClient | None = None
 
 
 def _get_mongo_collection():
     global _mongo_client
     if _mongo_client is None:
-        _mongo_client = _MotorClient(MONGO_URI)
+        _mongo_client = _MongoClient(MONGO_URI)
     return _mongo_client[MONGO_DB][MONGO_COLLECTION]
 
 
@@ -960,7 +960,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "created_at": datetime.utcnow(),
         }
         try:
-            await _get_mongo_collection().insert_one(_mongo_doc)
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, lambda: _get_mongo_collection().insert_one(_mongo_doc))
             logger.info(f"[MONGO] Transcript saved | lead_id={lead_id!r} | call_id={call_state.get('call_id')!r}")
         except Exception as e:
             logger.error(f"[MONGO] insert failed: {e}")
