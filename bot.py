@@ -955,6 +955,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "call_start_time": _start,
             "call_end_time": _end_time,
             "call_duration_sec": _duration,
+            "greeting_retry": _greeting_retry_triggered,
             "tagged": False,
             "tagged_at": None,
             "created_at": datetime.utcnow(),
@@ -1212,6 +1213,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     _greeting_done = False
     _bot_has_spoken = False  # True once the agent first transitions to "speaking"
+    _greeting_retry_triggered = False
 
     def _set_mic(enabled: bool) -> None:
         try:
@@ -1302,7 +1304,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _rt.on("generation_created", _gen_created_with_sniff)
 
         async def _trigger_greeting() -> None:
-            nonlocal _greeting_done, _bot_has_spoken
+            nonlocal _greeting_done, _bot_has_spoken, _greeting_retry_triggered
             for _ in range(50):  # wait up to 5 s for the Gemini websocket connection
                 async with _rt._session_lock:
                     connected = _rt._active_session is not None
@@ -1332,6 +1334,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # Retry the greeting trigger once; force-unmute only if retry also fails.
             await asyncio.sleep(8)
             if not _greeting_done and not _call_ended:
+                _greeting_retry_triggered = True
                 logger.warning("[GREETING] Gemini did not complete greeting within 8 s — retrying trigger")
                 _rt._send_client_event(
                     types.LiveClientContent(
