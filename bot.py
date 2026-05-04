@@ -204,7 +204,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Right: \"माफ कीजिए, मैं समझ नहीं पाई — [re-ask question]?\"\n"
         "Wrong: \"समझ गई, माफ कीजिए — [re-ask question]?\"\n\n"
         "Not interested: say \"ठीक है जी, कोई बात नहीं. अगर future में आपको किसी भी तरह की requirement हो, तो आप Justdial पर कभी भी call कर सकते हैं. धन्यवाद.\" then stop.\n"
-        "Rude or wants to hang up: say \"ठीक है जी, धन्यवाद. आपका दिन शुभ हो.\" then stop.\n"
+        "Rude or wants to hang up: say \"ठीक है जी, कोई बात नहीं. अगर future में आपको किसी भी तरह की requirement हो, तो आप Justdial पर कभी भी call कर सकते हैं. धन्यवाद.\" then stop.\n"
         "Reschedule: say \"ठीक है जी, [time] पर बात करेंगे.\" then stop.\n\n"
         "PRE-RESPONSE CHECKLIST\n\n"
         "□ VALIDATION GATE: Did the user's last turn satisfy ANSWER VALIDATION (a)–(d) for the current question?\n"
@@ -333,7 +333,7 @@ HINDI_LANG_CONFIG = {
 }
 
 INACTIVITY_PHRASE = "क्या आप अभी line पर हैं?"
-INACTIVITY_END_PHRASE = "जी, कोई response नहीं आया, इसलिए मैं call समाप्त कर रही हूँ. आपका दिन शुभ हो."
+INACTIVITY_END_PHRASE = "जी, कोई response नहीं आया, इसलिए मैं call समाप्त कर रही हूँ. अगर future में आपको किसी भी तरह की requirement हो, तो आप Justdial पर कभी भी call कर सकते हैं. धन्यवाद."
 
 # ---------------------------------------------------------------------------
 # Helpers
