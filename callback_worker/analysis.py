@@ -109,13 +109,22 @@ Qualification questions:
 {q_list}
 
 OUTCOME SELECTION RULES — work through these in order and stop at the first match:
+
+BEFORE YOU BEGIN: Determine if the customer confirmed the product.
+"Product confirmed" = the customer clearly indicated they still need the product. This includes ANY of:
+  - Saying "हाँ" / "जी हाँ" / "हां" / "yes" / "ji" or any affirmative response to "do you need X?" or "आपको X की requirement है ना?"
+  - Naming a specific product variant (e.g. "gate वाला", "stainless चाहिए")
+  - Providing any product specification or quantity
+If ANY of the above happened, the product IS confirmed — proceed to rules 1–3. Do NOT select "Could Not Confirm".
+
 1. Customer confirmed the product AND answered ALL specification questions → "Approved"
 2. Customer confirmed the product AND answered at least one (but not all) specification questions → "Enriched"
 3. Customer confirmed the product but answered ZERO specification questions → "Product Confirmed"
 4. Customer said they will source/handle the requirement themselves without JD's help (e.g. "मैं खुद देख लूँगा", "I'll manage it myself", "don't need sellers") — the need still exists but they rejected JD's assistance → "Will do it Myself"
    IMPORTANT: distinguish from "Not Interested" — "Will do it Myself" means the need is real but they want no help; "Not Interested" means the need itself is gone.
 5. Any other clear outcome (Not Interested, Wrong Number, Voicemail, Rescheduled, Already Spoken, Language Issue, etc.) → use the matching outcome from the list below.
-6. LAST RESORT — only if the call ended with no meaningful conclusion and none of rules 1–5 apply → "Abruptly disconnected and not Receiving"
+6. "Could Not Confirm" — ONLY if the customer gave genuinely vague or non-committal responses specifically about whether they still need the product (e.g. "शायद", "पता नहीं", "I'll think about it", "not sure if I still need it") AND gave no spec answers and no affirmative confirmation. Do NOT use this when the customer said "हाँ/yes" or provided any spec details.
+7. LAST RESORT — only if the call ended with no meaningful conclusion and none of rules 1–6 apply → "Abruptly disconnected and not Receiving"
 
 Choose the BEST matching call_outcome from ONLY these exact values:
 {disposition_options}
