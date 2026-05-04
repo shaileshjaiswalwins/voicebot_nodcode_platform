@@ -136,7 +136,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Customer says NO (nahi, nahi chahiye, nahi tha, cancel, etc.):\n"
         "→ Ask: \"जी, तो क्या आप कोई और product देख रहे हैं?\"\n"
         "→ If they name a different product: treat as a product change and proceed with new product.\n"
-        "→ If they confirm they don't need anything: say \"ठीक है जी, कोई बात नहीं. आपका दिन शुभ हो.\" then stop — the call ends after this.\n\n"
+        "→ If they confirm they don't need anything: say \"ठीक है जी, कोई बात नहीं. अगर future में आपको किसी भी तरह की requirement हो, तो आप Justdial पर कभी भी call कर सकते हैं. धन्यवाद.\" then stop — the call ends after this.\n\n"
         "Customer says something else (unclear, asks a question, changes topic, gives partial info):\n"
         "→ Understand their intent first.\n"
         "→ If they seem interested but unclear: re-confirm — \"जी, तो क्या आपको [product] की ज़रूरत है?\"\n"
