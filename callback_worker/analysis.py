@@ -118,122 +118,181 @@ QUALIFICATION QUESTIONS
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 1 — CLASSIFY THE CALL OUTCOME
-Work through the numbered rules below in ORDER. Stop at the FIRST rule that matches. Do not skip ahead or apply a lower-numbered rule if a higher-numbered one already matched.
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
-RULE 0 — SHORT HANGUP (check this BEFORE everything else):
+⚠ READ THE ENTIRE TRANSCRIPT BEFORE CLASSIFYING ⚠
+Do NOT stop at the first negative word. Buyers often say "नहीं" reflexively at the start and then engage positively. The classification must reflect the OVERALL and FINAL state of the conversation, not a single early statement.
+
+TWO CRITICAL META-RULES (apply throughout):
+
+  PROGRESSION RULE: If the buyer starts negatively ("नहीं", "requirement नहीं है") but then CONTINUES talking, asks questions, provides specs, or engages with the product — that is POSITIVE PROGRESSION. Classify based on the positive engagement, not the initial "नहीं". Initial reflex negatives that are followed by substantive conversation are NOT "Not Interested."
+
+  RETRACTION RULE: If the buyer initially seems to confirm the product but then CLEARLY and EXPLICITLY retracts (e.g. "मशीन नहीं लेना है", "actually I don't need it") — the retraction takes precedence over the earlier engagement. The buyer's final clear stance wins.
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+TIER 1 — DEFINITIVE CALL-ENDERS
+Apply these first. Each is a complete, unambiguous signal that overrides everything else. STOP at the first match.
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+RULE 0 — SHORT HANGUP:
   Condition: The call ended with ZERO substantive buyer engagement. This means EITHER:
     (a) The buyer said absolutely nothing at all, OR
     (b) The buyer's ONLY utterance(s) across the ENTIRE call are bare, non-substantive words — including but not limited to: "हाँ", "हां", "जी", "yes", "no", "नहीं", "ok", "okay", "hello", "हेलो", "सर", "sir", "जब", or similar single-word non-answers — AND no product discussion or spec answers were obtained.
-  IMPORTANT: The agent may have spoken multiple turns (including spec questions) before the buyer responded. This does NOT disqualify Short Hangup. What matters is whether the BUYER gave any substantive response. If the buyer only ever uttered bare words/greetings and the call ended, this is Short Hangup regardless of how many agent turns occurred.
-  → Output: "Short Hangup". STOP. Do not evaluate any further rule.
+  NOTE: The agent may have spoken multiple turns before the buyer responded. This does NOT disqualify Short Hangup. If the buyer only ever uttered bare words/greetings, classify as Short Hangup regardless of how many agent turns occurred.
+  → "Short Hangup". STOP.
 
-RULE 1 — SELLER INTENT (check second):
+RULE 1 — SELLER INTENT:
   Condition: The caller is NOT a buyer — they are on the supply/service side. This includes ANY of:
-    • A vendor/supplier offering their own products or services ("हम supply करते हैं", "हमारे पास stock है", "we provide X")
-    • A manufacturer or sub-contractor seeking job work / manufacturing contracts from other companies (e.g. "स्पेयर पार्ट बना रहा हूं", "जॉब वर्क करना है", "उससे मेरे को काम लेना है", "मैं manufacturing करता हूं")
-    • Someone trying to list their business on JustDial ("I want to list my business")
-    • Someone whose company already manufactures/supplies the exact product being discussed and they want to be a seller, not a buyer
-  STRICT: Seller Intent must be clear from what the caller SAYS — not inferred from their industry. If someone is a manufacturer AND is genuinely buying materials/machinery for their own use, they are still a buyer.
-  CRITICAL SIGNAL: If the caller says they want to GET work / contracts / job orders FROM other companies (not buy a product FROM JD's sellers), that is Seller Intent.
-  → Output: "Seller Intent". STOP.
+    • A vendor/supplier offering their own products or services ("हम supply करते हैं", "हमारे पास stock है", "we provide X", "हमारी कंपनी यही करती है")
+    • A manufacturer or sub-contractor seeking job work / manufacturing contracts ("स्पेयर पार्ट बना रहा हूं", "जॉब वर्क करना है", "उससे मेरे को काम लेना है")
+    • Someone trying to list their business on JustDial
+    • Someone whose company already manufactures/supplies the exact product being discussed and wants to be a seller
+  STRICT: Must be clear from what the caller SAYS, not inferred from their industry. A manufacturer genuinely buying materials for their own use is still a buyer.
+  CRITICAL SIGNAL: Caller wants to GET work/contracts FROM other companies, not buy FROM JD's sellers → Seller Intent.
+  → "Seller Intent". STOP.
 
 RULE 2 — VOICEMAIL:
-  Condition: The call was answered by an automated voicemail/IVR system and no human spoke.
-  → Output: "Voicemail". STOP.
+  Condition: The call was answered by an automated voicemail or IVR system rather than a live human.
+  WHY THIS IS TRICKY: The voicemail system's recorded greeting gets transcribed into the transcript (usually as a "buyer" turn). The model must detect this automated text and classify as Voicemail — even if the words sound unusual or include dismissive phrases that might otherwise look like human rudeness.
 
-RULE 3 — LANGUAGE ISSUE:
-  Condition: Communication was entirely impossible because neither party could understand the other's language throughout the call.
-  → Output: "Language Issue". STOP.
+  VOICEMAIL SIGNAL PHRASES — if ANY of the following appear anywhere in any transcript turn, classify as Voicemail immediately:
+    English signals:
+      • "leave a message", "leave your message", "please leave a message"
+      • "after the beep", "after the tone", "at the beep"
+      • "when you are finished recording", "when you have finished recording", "finished recording hang up"
+      • "not available", "unable to take your call", "cannot take your call"
+      • "you have reached", "you've reached", "you have reached the voicemail"
+      • "record your message", "record a message"
+      • "hang up or press", "press pound", "press hash"
+      • "mailbox is full", "mailbox full"
+    Hindi/Hinglish signals:
+      • "sandesh chhod", "sandesh chhodein", "message chhod", "message chhodein"
+      • "beep ke baad", "tone ke baad"
+      • "uplabdh nahi", "उपलब्ध नहीं", "abhi available nahi"
+      • "recording ke baad hang up", "recording khatam hone ke baad"
+      • "aap ka call", "aapka call abhi"
+      • "subscriber", "is number par", "yeh number"
 
-RULE 4 — ABUSIVE LEAD:
-  Condition: The recipient was abusive, used profanity, or behaved inappropriately.
-  → Output: "Abusive Lead". STOP.
+  ADDITIONAL VOICEMAIL PATTERNS (any one is sufficient):
+    • The agent's opening line is cut off mid-sentence in the very first agent turn (voicemail picks up during the greeting before it finishes)
+    • A buyer/response turn contains a robotic or templated phrase with no conversational structure
+    • The response sounds like a system announcement rather than a human reply
+    • No back-and-forth human dialogue occurs — only the agent's turns and a system-style message
 
-RULE 5 — DNC:
-  Condition: The customer explicitly said they do NOT want to be called again (e.g. "dobara mat call karna", "remove my number", "मुझे call मत करो").
-  → Output: "DNC Client : Don't Call Further". STOP.
+  CRITICAL: Do NOT let voicemail message content trigger Abusive Lead or any other rule. The voicemail system may say things like "hang up", "your call cannot be taken", "please try later" — these are automated system phrases, NOT human responses. Always classify as Voicemail if signals are present.
+  → "Voicemail". STOP.
 
-RULE 6 — WRONG NUMBER:
-  Condition: The person who answered confirmed the number does not belong to the intended customer.
-  → Output: "Wrong Number". STOP.
+RULE 3 — WRONG NUMBER:
+  Condition: Person who answered confirmed the number does not belong to the intended customer.
+  → "Wrong Number". STOP.
+
+RULE 4 — LANGUAGE ISSUE:
+  Condition: Communication was entirely impossible due to a language mismatch throughout the entire call.
+  → "Language Issue". STOP.
+
+RULE 5 — ABUSIVE LEAD:
+  Condition: A live HUMAN recipient was abusive, used profanity, or behaved inappropriately toward the agent.
+  STRICT: This requires a real human response — not an automated system message. If there is ANY possibility the turn is from a voicemail or IVR system (even without explicit voicemail phrases), check Rule 2 first. Automated phrases like "hang up", "call cannot be taken", "please try again" are NEVER abusive — they are system messages.
+  → "Abusive Lead". STOP.
+
+RULE 6 — DNC:
+  Condition: The customer explicitly said they do NOT want to be called again ("dobara mat call karna", "remove my number", "मुझे call मत करो", "number हटा दो").
+  → "DNC Client : Don't Call Further". STOP.
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+TIER 2 — POSITIVE & SPECIFIC OUTCOMES
+Check ALL of these BEFORE considering any negative outcome.
+A call with even one positive signal belongs in this tier.
+━━━━━━━━━━━━━━━━━━━━━━━━
 
 ━━ PRODUCT CONFIRMATION GATE ━━
-Before applying Rules 7–12, determine: Did the customer confirm the product?
+Before applying Rules 7–9, determine: Did the customer confirm the product?
 "Product confirmed" = the customer clearly indicated they still need the product via ANY of:
   • Saying "हाँ" / "जी हाँ" / "हां" / "yes" / "ji" / "bilkul" in response to "do you need X?" or "आपको X की requirement है ना?"
   • Naming a specific product variant or material (e.g. "gate वाला", "stainless चाहिए")
   • Providing ANY specific product specification, grade, or quantity value
-  • Asking the agent a question about the product (pricing, delivery, etc.) — implicit confirmation
-If ANY of the above happened → product IS confirmed. Proceed to Rules 7–9.
-If NONE of the above happened → skip Rules 7–9 and go to Rule 10.
+  • Asking the agent a question about the product (pricing, delivery, timeline etc.) — implicit confirmation
+  PROGRESSION: If buyer said "नहीं" initially but then provided a spec or asked about the product → product IS confirmed. The later positive action overrides the initial "नहीं."
+If ANY of the above happened anywhere in the call → product IS confirmed. Go to Rules 7–9.
+If NONE of the above happened → skip Rules 7–9, go to Rule 10.
 
 ━━ WHAT COUNTS AS A VALID SPEC ANSWER ━━
-A specification question is "answered" ONLY if the buyer provided a SPECIFIC value:
-  ✓ Valid: a named option ("Rubber", "Three Phase", "Double Door"), a number+unit ("500 pieces", "20 L"), a material name, a grade, any concrete choice from the question's options.
-  ✗ NOT valid: "हाँ" / "हां" / "yes" / "जी" / "ok" said in response to a spec question — these are bare acknowledgements, NOT spec values. Saying "yes" to "capacity कितनी चाहिए — 20L, 25L, 30L?" does NOT count as answering the capacity question.
-  ✗ NOT valid: vague answers like "standard", "whatever is normal", "you decide", "don't know" — these give no usable data.
-Count a spec question as answered ONLY when the buyer supplied an actual value from the options or a concrete free-text equivalent.
+  ✓ Valid: a named option ("Rubber", "Three Phase", "Double Door"), a number+unit ("500 pieces", "20 L"), a material/grade name, any concrete choice.
+  ✗ NOT valid: "हाँ" / "हां" / "yes" / "जी" / "ok" in response to a spec question — bare acknowledgements, NOT spec values.
+  ✗ NOT valid: vague filler sounds ("हम्म", "umm") — even if the agent assumed a value afterwards, the assumption does NOT count as a buyer answer.
+  ✗ NOT valid: "standard", "whatever is normal", "you decide", "don't know" — no usable data.
 
 RULE 7 — APPROVED:
   Condition: Product confirmed AND buyer answered ALL {len(questions)} specification questions with valid specific values.
-  → Output: "Approved". STOP.
+  → "Approved". STOP.
 
 RULE 8 — ENRICHED:
   Condition: Product confirmed AND buyer answered at least ONE but NOT ALL specification questions with valid specific values.
-  → Output: "Enriched". STOP.
+  → "Enriched". STOP.
 
 RULE 9 — PRODUCT CONFIRMED:
   Condition: Product confirmed AND buyer answered ZERO specification questions with valid specific values.
-  → Output: "Product Confirmed". STOP.
+  → "Product Confirmed". STOP.
 
-RULE 10 — INTERESTED (positive engagement without explicit confirmation):
-  Condition: The customer did NOT give an explicit product confirmation but showed CLEAR positive interest — they engaged meaningfully with the product topic, asked follow-up questions about it, or showed enthusiasm — without ever rejecting or denying the need.
-  STRICT: Do NOT use "Interested" if the customer was vague or non-committal. There must be a clearly positive, engaged response.
-  → Output: "Interested". STOP.
+RULE 10 — INTERESTED:
+  Condition: Customer did NOT give an explicit product confirmation but showed CLEAR positive interest — engaged meaningfully with the product topic, asked follow-up questions, or showed enthusiasm — without a final clear rejection.
+  STRICT: There must be a clearly positive, engaged response. Vague or non-committal → use Could Not Confirm (Tier 3). Reflex "नहीं" followed by genuine questions about the product → use Interested.
+  → "Interested". STOP.
 
-RULE 11 — NOT INTERESTED:
-  Condition: The customer clearly stated they do NOT need the product or are not interested. The requirement itself is gone.
-  Signals: "नहीं चाहिए", "requirement नहीं है", "cancel कर दो", "I don't need it", "already purchased", "work is done".
-  STRICT: Do NOT confuse with "Will do it Myself" (need exists but rejects JD's help) or "Could Not Confirm" (unsure).
-  → Output: "Not Interested". STOP.
+RULE 11 — CALL RESCHEDULED:
+  Condition: Customer asked to be called back at a SPECIFIC date and/or time.
+  STRICT: A vague "call later" / "baad mein call karo" without a specific time is NOT rescheduled.
+  → "Call Rescheduled". STOP.
 
-RULE 12 — WILL DO IT MYSELF:
-  Condition: The customer STILL has the requirement but will source/handle it themselves without JD's help. They explicitly declined seller connections.
+RULE 12 — ALREADY SPOKEN:
+  Condition: Customer explicitly stated they have already spoken about this requirement with JD staff or the seller.
+  → "Already Spoken". STOP.
+
+RULE 13 — ALTERNATE NUMBER:
+  Condition: Customer provided a DIFFERENT contact number for follow-up.
+  → "Alternate Number". STOP.
+
+RULE 14 — WILL DO IT MYSELF:
+  Condition: Customer STILL has the requirement but will source/handle it themselves without JD's help. They explicitly declined seller connections.
   Signals: "मैं खुद देख लूँगा", "I'll manage it myself", "don't send sellers", "khud khareed lenge".
-  STRICT: The need must be real and present; only JD's assistance is rejected.
-  → Output: "Will do it Myself". STOP.
+  STRICT: The need must be real and present; only JD's assistance is rejected. If the requirement itself is gone, use Not Interested (Tier 3).
+  → "Will do it Myself". STOP.
 
-RULE 13 — CALL RESCHEDULED:
-  Condition: The customer asked to be called back at a SPECIFIC date and/or time.
-  STRICT: A vague "call later" is NOT rescheduled — there must be a specific time commitment.
-  → Output: "Call Rescheduled". STOP.
+━━━━━━━━━━━━━━━━━━━━━━━━
+TIER 3 — NEGATIVE & UNCERTAIN OUTCOMES
+Reach this tier ONLY if NONE of Rules 0–14 matched.
+If ANY Tier 2 rule was even partially applicable, re-examine before falling here.
+━━━━━━━━━━━━━━━━━━━━━━━━
 
-RULE 14 — ALREADY SPOKEN:
-  Condition: The customer explicitly stated they have already spoken about this requirement with JD staff or the seller.
-  → Output: "Already Spoken". STOP.
+RULE 15 — COULD NOT CONFIRM:
+  Condition: Customer gave genuinely vague or non-committal responses about whether they STILL need the product (e.g. "शायद", "पता नहीं", "I'll think about it", "not sure yet"). No spec answers, no clear confirmation, no clear rejection.
+  STRICT: Do NOT use this if the customer said "हाँ/yes" or provided any spec detail → that is product confirmed (Tier 2). Do NOT use this if the customer was clearly positively interested → use Interested (Rule 10). Do NOT use this if the customer clearly rejected the product → use Not Interested (Rule 16).
+  → "Could Not Confirm". STOP.
 
-RULE 15 — ALTERNATE NUMBER:
-  Condition: The customer provided a DIFFERENT contact number for follow-up.
-  → Output: "Alternate Number". STOP.
+RULE 16 — NOT INTERESTED:
+  Condition: Customer CONSISTENTLY and CLEARLY stated they do NOT need the product. The requirement itself is entirely gone.
+  MANDATORY CHECKS before selecting this — ALL must be true:
+    ✓ Buyer explicitly said they don't need the product (not just an initial reflex "नहीं")
+    ✓ There is NO positive engagement, NO spec answers, NO product questions anywhere in the call
+    ✓ The buyer's FINAL and OVERALL stance is negative — not just an early statement that was later reversed
+    ✓ Cannot be explained by Seller Intent, Will do it Myself, Already Spoken, or Wrong Number
+  Signals: "नहीं चाहिए", "requirement नहीं है", "cancel कर दो", "already purchased", "kaam ho gaya".
+  ⚠ DO NOT USE if: the buyer said "नहीं" once but then asked any question or provided any information → use Interested or Could Not Confirm.
+  → "Not Interested". STOP.
 
-RULE 16 — TECHNICAL ISSUE:
-  Condition: The call connected but was cut or disrupted purely by technical problems (line drops, audio failure) with no meaningful exchange.
-  → Output: "Technical Issue - Call Connected". STOP.
+RULE 17 — TECHNICAL ISSUE:
+  Condition: The call connected but was disrupted entirely by technical problems (severe audio drops, line cuts) with no meaningful exchange achieved.
+  STRICT: If any positive exchange occurred before the technical issue, use the appropriate Tier 2 outcome instead.
+  → "Technical Issue - Call Connected". STOP.
 
-RULE 17 — COULD NOT CONFIRM:
-  Condition: The customer gave genuinely vague or non-committal responses about whether they STILL need the product (e.g. "शायद", "पता नहीं", "I'll think about it", "not sure yet"). No spec answers, no affirmative confirmation, no clear rejection.
-  STRICT: Do NOT use this if the customer said "हाँ/yes" or provided any spec detail — that is product confirmed. Do NOT use this for customers who were clearly interested (use "Interested" instead).
-  → Output: "Could Not Confirm". STOP.
-
-RULE 18 — ABRUPTLY DISCONNECTED (LAST RESORT ONLY):
-  Condition: The call ended abruptly (line dropped, no goodbye) with zero product confirmation and none of Rules 0–17 applied.
-  STRICT: Only use this when the call was clearly cut mid-conversation. Do NOT use this as a default when another rule fits better.
-  → Output: "Abruptly disconnected and not Receiving". STOP.
+RULE 18 — ABRUPTLY DISCONNECTED (last resort):
+  Condition: Call ended abruptly with zero product confirmation and none of Rules 0–17 matched.
+  STRICT: Only when the call was clearly cut mid-conversation with nothing achieved. Do NOT use as a default.
+  → "Abruptly disconnected and not Receiving". STOP.
 
 RULE 19 — OTHER CASES (absolute last resort):
-  Condition: Truly none of the above rules apply.
-  → Output: "Other Cases".
+  Condition: Truly none of the above rules apply after careful evaluation of all tiers.
+  → "Other Cases".
 
 Valid outcome values (use EXACT strings only):
 {disposition_options}
