@@ -62,7 +62,7 @@ if not os.environ.get("GOOGLE_API_KEY"):
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 MIS_API_BASE = "http://192.168.14.101:3006"
-CATEGORY_CHANGE_API = "http://192.168.20.105:1080/services/abd/abd_beta.php"
+CATEGORY_CHANGE_API = f"{MIS_API_BASE}/leads/ai-lead-qualify/search"
 IST = timezone(timedelta(hours=5, minutes=30))
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://192.168.13.65:27017")
@@ -238,10 +238,10 @@ _HARDCODED_BOT_CONFIG: dict = {
         {
             "name": "FetchCategorySchema",
             "description": "Call this when the buyer changes their product requirement mid-call. Fetches the new qualification schema for the new product category.",
-            "url": "http://192.168.20.105:1080/services/abd/abd_beta.php",
+            "url": f"{MIS_API_BASE}/leads/ai-lead-qualify/search",
             "method": "GET",
             "headers": {},
-            "query_params": {"v": "1", "chatbot": "1", "pos_change": "1", "srchterm": ""},
+            "query_params": {"lead_id": "", "search_term": ""},
             "body_format": "json",
             "custom_body": "",
             "schema": {
@@ -255,7 +255,7 @@ _HARDCODED_BOT_CONFIG: dict = {
     ],
     "api_urls": {
         "mis_api_base": "http://192.168.14.101:3006",
-        "category_change_api": "http://192.168.20.105:1080/services/abd/abd_beta.php",
+        "category_change_api": f"{MIS_API_BASE}/leads/ai-lead-qualify/search",
     },
     "prompt_config": {
         "script_rule": (
@@ -379,16 +379,17 @@ async def fetch_lead(lead_id: str = "", mobile: str = "", mis_api_base: str = MI
     return None
 
 
-async def _build_sample_from_search(srchterm: str, buyer_name: str, category_api: str) -> dict | None:
+async def _build_sample_from_search(srchterm: str, buyer_name: str, category_api: str, lead_id: str = "test_lead") -> dict | None:
     if not category_api:
         return None
     try:
-        params = {"v": "1", "chatbot": "1", "pos_change": "1", "srchterm": srchterm}
+        params = {"lead_id": lead_id, "search_term": srchterm}
         async with aiohttp.ClientSession() as sess:
             async with sess.get(category_api, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 data = json.loads(await resp.text())
-        catname = data.get("catname", srchterm)
-        questions = data.get("question", [])
+        schema = data.get("results", {}).get("search_result", {}) if isinstance(data, dict) else {}
+        catname = schema.get("catname", srchterm)
+        questions = schema.get("question", [])
         return {
             "_id": "test_lead", "call_id": "TEST_CALL",
             "buyer_details": {"buyer_name": buyer_name, "buyer_number": "0000000000", "buyer_city": "", "is_business": 0},
@@ -397,7 +398,7 @@ async def _build_sample_from_search(srchterm: str, buyer_name: str, category_api
                 "searched_product": {"product_name": catname, "product_id": "", "attributes": {}},
             },
             "catname": catname,
-            "qualification_schema": data,
+            "qualification_schema": schema,
         }
     except Exception as e:
         logger.error(f"[Sample] Failed to fetch schema for '{srchterm}': {e}")
@@ -413,6 +414,13 @@ async def _execute_function_call(fn_name: str, fn_args: dict, functions: list[di
     method = fn_cfg.get("method", "POST").upper()
     headers = fn_cfg.get("headers") or {}
     merged = {**(fn_cfg.get("query_params") or {}), **fn_args}
+    if fn_name == "FetchCategorySchema":
+        # New search API expects lead_id + search_term; we keep tool arg name as `srchterm`
+        # for LLM friendliness and map it here.
+        srchterm = merged.pop("srchterm", "") or merged.pop("search_term", "")
+        lead_id = call_state.get("record_id") or (call_state.get("lead_record") or {}).get("_id") or ""
+        merged["lead_id"] = lead_id
+        merged["search_term"] = srchterm
     logger.info(f"[FnCall] {method} {url} | args={merged}")
 
     try:
@@ -425,14 +433,15 @@ async def _execute_function_call(fn_name: str, fn_args: dict, functions: list[di
                     result = json.loads(await resp.text())
 
         if fn_name == "FetchCategorySchema":
-            questions = result.get("question", [])
-            catname = result.get("catname", "the new product")
+            schema = result.get("results", {}).get("search_result", {}) if isinstance(result, dict) else {}
+            questions = schema.get("question", [])
+            catname = schema.get("catname", "the new product")
             lead_record = call_state.get("lead_record") or {}
             old_product = lead_record.get("catname", "")
 
             # Persist new schema so save_call_data and the callback worker
             # analyze the buyer's answers against the NEW questions.
-            lead_record["qualification_schema"] = result
+            lead_record["qualification_schema"] = schema
             lead_record["catname"] = catname
             search_ctx = lead_record.setdefault("search_context", {})
             search_ctx["searched_keyword"] = catname
@@ -1391,6 +1400,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 srchterm=_srchterm,
                 buyer_name=_room_meta_raw.get("buyer_name", "Customer"),
                 category_api=_category_change_api,
+                lead_id=_room_meta_raw.get("lead_id", "") or "test_lead",
             )
             if record:
                 call_state["record_id"] = "test_lead"
