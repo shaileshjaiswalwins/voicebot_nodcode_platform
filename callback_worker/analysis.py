@@ -135,10 +135,15 @@ Apply these first. Each is a complete, unambiguous signal that overrides everyth
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
 RULE 0 — SHORT HANGUP:
-  Condition: The call ended with ZERO substantive buyer engagement. This means EITHER:
-    (a) The buyer said absolutely nothing at all, OR
-    (b) The buyer's ONLY utterance(s) across the ENTIRE call are bare, non-substantive words — including but not limited to: "हाँ", "हां", "जी", "yes", "no", "नहीं", "ok", "okay", "hello", "हेलो", "सर", "sir", "जब", or similar single-word non-answers — AND no product discussion or spec answers were obtained.
-  NOTE: The agent may have spoken multiple turns before the buyer responded. This does NOT disqualify Short Hangup. If the buyer only ever uttered bare words/greetings, classify as Short Hangup regardless of how many agent turns occurred.
+  Condition: The call ended with ZERO substantive buyer engagement. ALL of the following must be true simultaneously:
+    (a) The agent has NOT moved past the opening product-confirmation question (i.e. the agent has not yet asked any follow-up or spec question). If the agent already asked a follow-up like "कोई और product देख रहे हैं?" or any spec question, Short Hangup is IMPOSSIBLE — some conversation occurred.
+    (b) The buyer's ONLY utterance(s) are bare, single-word non-answers with NO informal address words. Bare words include: "हाँ", "हां", "जी", "yes", "no", "नहीं", "ok", "okay", "hello", "हेलो", "सर", "sir", "जब".
+    (c) The buyer did NOT combine a bare word with a colloquial address or filler that signals human conversation — e.g. "नहीं भाई", "नहीं यार", "हाँ जी बताइए", "नो bhai", "हाँ boss" all contain an address/filler and are human responses, NOT bare words.
+  THREE-PART TEST — Short Hangup ONLY if ALL three pass:
+    ✓ Agent still on opener (no follow-up asked yet)
+    ✓ Buyer's words are single isolated tokens with no address/filler words attached
+    ✓ No product discussion, no spec, no question from the buyer
+  FAIL ANY ONE → do NOT use Short Hangup. Continue to the next rule.
   → "Short Hangup". STOP.
 
 RULE 1 — SELLER INTENT:
