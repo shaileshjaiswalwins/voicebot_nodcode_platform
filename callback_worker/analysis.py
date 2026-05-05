@@ -12,6 +12,7 @@ from .config import GEMINI_API_KEY
 IST = timezone(timedelta(hours=5, minutes=30))
 
 DISPOSITION_MAP: dict[str, str] = {
+    "Short Hangup":                      "The call ended after the agent's opening line only — the customer said nothing, or gave a single bare yes/no, and disconnected before any product discussion or qualification questions occurred.",
     "Voicemail":                        "The call went to the recipient's voicemail instead of connecting directly.",
     "Wrong Number":                     "The number dialed does not belong to the intended customer.",
     "Approved":                         "The customer confirmed the product and answered ALL specification questions.",
@@ -109,6 +110,9 @@ Qualification questions:
 {q_list}
 
 OUTCOME SELECTION RULES — work through these in order and stop at the first match:
+
+0. SHORT HANGUP CHECK (evaluate first, before anything else):
+   If the transcript contains ONLY the agent's opening introduction line (e.g. "हेलो, मैं Tanya बोल रही हूँ Justdial से — आपको X की requirement है ना?") and the customer either said NOTHING at all, OR gave only a single bare acknowledgement (e.g. "हाँ", "जी", "yes", "no", "नहीं") and then the call ended — with NO further product discussion, NO specification questions asked, and NO meaningful exchange — select "Short Hangup" immediately and stop. Do NOT apply any other rule.
 
 BEFORE YOU BEGIN: Determine if the customer confirmed the product.
 "Product confirmed" = the customer clearly indicated they still need the product. This includes ANY of:
