@@ -12,7 +12,7 @@ MONGO_COLLECTION = "call_transcripts"
 
 CALLBACK_API_URL = os.getenv(
     "CALLBACK_API_URL",
-    "http://192.168.14.101:3006/leads/ai-lead-qualify/callback",
+    "http://192.168.8.67:8000/leads/ai-lead-qualify/callback",
 )
 
 GEMINI_API_KEY = os.getenv("GEMINI_LIVE_API_KEY", "")
