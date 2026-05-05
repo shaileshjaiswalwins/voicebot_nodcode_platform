@@ -129,8 +129,13 @@ RULE 0 — SHORT HANGUP (check this BEFORE everything else):
   → Output: "Short Hangup". STOP. Do not evaluate any further rule.
 
 RULE 1 — SELLER INTENT (check second):
-  Condition: The caller is acting as a SELLER or VENDOR — they are offering their own products/services, trying to list on JustDial, or pitching their business. They are NOT a buyer with a requirement.
-  Signals: phrases like "हम supply करते हैं", "हमारे पास stock है", "मैं manufacturer हूँ", "I want to list my business", "we provide X".
+  Condition: The caller is NOT a buyer — they are on the supply/service side. This includes ANY of:
+    • A vendor/supplier offering their own products or services ("हम supply करते हैं", "हमारे पास stock है", "we provide X")
+    • A manufacturer or sub-contractor seeking job work / manufacturing contracts from other companies (e.g. "स्पेयर पार्ट बना रहा हूं", "जॉब वर्क करना है", "उससे मेरे को काम लेना है", "मैं manufacturing करता हूं")
+    • Someone trying to list their business on JustDial ("I want to list my business")
+    • Someone whose company already manufactures/supplies the exact product being discussed and they want to be a seller, not a buyer
+  STRICT: Seller Intent must be clear from what the caller SAYS — not inferred from their industry. If someone is a manufacturer AND is genuinely buying materials/machinery for their own use, they are still a buyer.
+  CRITICAL SIGNAL: If the caller says they want to GET work / contracts / job orders FROM other companies (not buy a product FROM JD's sellers), that is Seller Intent.
   → Output: "Seller Intent". STOP.
 
 RULE 2 — VOICEMAIL:
@@ -243,6 +248,7 @@ EXTRACTION RULES (all mandatory):
 1. POSITION RULE: Attribute each buyer response to the qualification question the AGENT asked immediately before that buyer turn. Nth question asked = Nth buyer answer. Never reassign based on answer format or data type.
 2. INCLUDE: any relevant buyer response — number, option, free-text, "others/other". Do NOT skip answers because the agent did not re-confirm them.
 3. AGENT-CONFIRMATION RULE: If the buyer's response is garbled/unclear (STT noise) but the AGENT's very next turn explicitly restates a confirmed value (e.g. "Industrial नोट कर लिया", "okay, X"), treat that agent-confirmed value as the buyer's answer. Include the question.
+   ANTI-HALLUCINATION EXCEPTION: This rule ONLY applies when the buyer gave a real (even if garbled) response. If the buyer said a vague filler sound ("हम्म", "umm", "uh", "achha") and the agent then ASSUMED a value and moved on (without the buyer actually confirming), do NOT credit the agent's assumption as the buyer's answer. A vague filler followed by an agent assumption is NOT a confirmed spec answer. Require that the buyer spoke a real value (however garbled) or explicitly echoed/confirmed the agent's restatement.
 4. NO CROSS-TYPE REASSIGNMENT:
    — A grade/specification answer (e.g. "140 GSM", "40 GSM") stays with the spec/grade question — NOT reassigned to a quantity question even though it has a number.
    — A quantity answer (e.g. "50 pieces") is a quantity answer ONLY if the agent was asking about quantity at that moment.
