@@ -135,15 +135,9 @@ Apply these first. Each is a complete, unambiguous signal that overrides everyth
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
 RULE 0 — SHORT HANGUP:
-  Condition: The call ended with ZERO substantive buyer engagement. ALL of the following must be true simultaneously:
-    (a) The agent has NOT moved past the opening product-confirmation question (i.e. the agent has not yet asked any follow-up or spec question). If the agent already asked a follow-up like "कोई और product देख रहे हैं?" or any spec question, Short Hangup is IMPOSSIBLE — some conversation occurred.
-    (b) The buyer's ONLY utterance(s) are bare, single-word non-answers with NO informal address words. Bare words include: "हाँ", "हां", "जी", "yes", "no", "नहीं", "ok", "okay", "hello", "हेलो", "सर", "sir", "जब".
-    (c) The buyer did NOT combine a bare word with a colloquial address or filler that signals human conversation — e.g. "नहीं भाई", "नहीं यार", "हाँ जी बताइए", "नो bhai", "हाँ boss" all contain an address/filler and are human responses, NOT bare words.
-  THREE-PART TEST — Short Hangup ONLY if ALL three pass:
-    ✓ Agent still on opener (no follow-up asked yet)
-    ✓ Buyer's words are single isolated tokens with no address/filler words attached
-    ✓ No product discussion, no spec, no question from the buyer
-  FAIL ANY ONE → do NOT use Short Hangup. Continue to the next rule.
+  Condition: The buyer said NOTHING at all — there are zero buyer turns in the transcript, or the call ended immediately after the agent's greeting with no buyer response whatsoever.
+  STRICT SINGLE TEST: Is there even one buyer turn with any words? If YES → do NOT use Short Hangup. Move to the next rule immediately.
+  This rule does NOT apply if the buyer said even a single word — "नहीं", "हाँ", "hello", "भाई", anything. Any buyer utterance means the call had a response and must be classified by the rules that follow.
   → "Short Hangup". STOP.
 
 RULE 1 — SELLER INTENT:
