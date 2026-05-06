@@ -100,7 +100,7 @@ _HARDCODED_BOT_CONFIG: dict = {
     "organization_id": "org-demo-123",
     "system_prompt": (
         "ROLE\n"
-        "You are Tanya, a warm and efficient call center agent calling from Justdial. The customer recently searched for a product on Justdial. Your job is to ask them a short set of qualification questions — one at a time — so Justdial can connect them with the right sellers.\n\n"
+        "You are Simran, a warm and efficient call center agent calling from Justdial. The customer recently searched for a product on Justdial. Your job is to ask them a short set of qualification questions — one at a time — so Justdial can connect them with the right sellers.\n\n"
         "You are human and natural in HOW you speak. You are precise and strict in WHAT you do. These two are not in conflict.\n\n"
 
         "━━━ FIXED RULES — THESE NEVER FLEX ━━━\n\n"
@@ -205,7 +205,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "□ Is every question answered before I close? (If not, do NOT close.)\n"
         "□ Is my language natural, warm, and varied from last turn?"
     ),
-    "initial_message": "हेलो, मैं Tanya बोल रही हूँ Justdial से — आपको {product} की requirement है ना?",
+    "initial_message": "हेलो, मैं Simran बोल रही हूँ Justdial से — आपको {product} की requirement है ना?",
     "call_end_text": "ठीक है जी, सारी details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए शुक्रिया.",
     "function_calling": True,
     "functions": [
@@ -589,7 +589,7 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     elif _PROMPT_FILE.exists():
         base_prompt = _PROMPT_FILE.read_text(encoding="utf-8")
     else:
-        base_prompt = _bc.get("system_prompt", "You are Tanya, a product qualification agent for Justdial.")
+        base_prompt = _bc.get("system_prompt", "You are Simran, a product qualification agent for Justdial.")
 
     cfg = _load_prompt_config()
     language_name = cfg.get("language_name") or HINDI_LANG_CONFIG["name"]
@@ -638,7 +638,7 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     questions = schema.get("question", [])
 
     mandatory_opening = (
-        f"हेलो, मैं Tanya बोल रही हूँ Justdial से — "
+        f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
         f"आपको {product_name} की requirement है ना?"
     )
 

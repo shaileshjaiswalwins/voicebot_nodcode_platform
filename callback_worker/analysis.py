@@ -17,8 +17,7 @@ DISPOSITION_MAP: dict[str, str] = {
     "Wrong Number":                     "The number dialed does not belong to the intended customer.",
     "Approved":                         "The customer confirmed the product and answered ALL specification questions.",
     "Enriched":                         "The customer confirmed the product and answered at least one (but not all) specification questions.",
-    "Interested":                       "The customer showed clear positive interest in the product during the conversation (engaged meaningfully, asked follow-up questions, showed enthusiasm) but did NOT give an explicit confirmation of their requirement. The buyer's intent seems positive but no direct 'हाँ/yes' or product confirmation was obtained.",
-    "Product Confirmed":                "The customer confirmed they need the product but answered ZERO specification questions.",
+    "Interested":                       "The customer confirmed they need the product but answered ZERO specification questions, OR showed clear positive interest (engaged meaningfully, asked follow-up questions, showed enthusiasm) without answering any spec questions. Covers both explicit product confirmation with zero specs and positive-but-unconfirmed engagement.",
     "Not Interested":                   "The customer clearly stated they are not interested or do not need the product.",
     "Could Not Confirm":                "The customer was uncertain and could not confirm whether they still need the product.",
     "Alternate Number":                 "The customer provided a different or alternate contact number.",
@@ -229,11 +228,11 @@ RULE 8 — ENRICHED:
   Condition: Product confirmed AND buyer answered at least ONE but NOT ALL specification questions with valid specific values.
   → "Enriched". STOP.
 
-RULE 9 — PRODUCT CONFIRMED:
+RULE 9 — INTERESTED (product confirmed, zero specs):
   Condition: Product confirmed AND buyer answered ZERO specification questions with valid specific values.
-  → "Product Confirmed". STOP.
+  → "Interested". STOP.
 
-RULE 10 — INTERESTED:
+RULE 10 — INTERESTED (positive engagement, no confirmation):
   Condition: Customer did NOT give an explicit product confirmation but showed CLEAR positive interest — engaged meaningfully with the product topic, asked follow-up questions, or showed enthusiasm — without a final clear rejection.
   STRICT: There must be a clearly positive, engaged response. Vague or non-committal → use Could Not Confirm (Tier 3). Reflex "नहीं" followed by genuine questions about the product → use Interested.
   → "Interested". STOP.
@@ -265,7 +264,7 @@ If ANY Tier 2 rule was even partially applicable, re-examine before falling here
 
 RULE 15 — COULD NOT CONFIRM:
   Condition: Customer gave genuinely vague or non-committal responses about whether they STILL need the product (e.g. "शायद", "पता नहीं", "I'll think about it", "not sure yet"). No spec answers, no clear confirmation, no clear rejection.
-  STRICT: Do NOT use this if the customer said "हाँ/yes" or provided any spec detail → that is product confirmed (Tier 2). Do NOT use this if the customer was clearly positively interested → use Interested (Rule 10). Do NOT use this if the customer clearly rejected the product → use Not Interested (Rule 16).
+  STRICT: Do NOT use this if the customer said "हाँ/yes" or provided any spec detail → that is Interested (Tier 2). Do NOT use this if the customer was clearly positively interested → use Interested (Rule 10). Do NOT use this if the customer clearly rejected the product → use Not Interested (Rule 16).
   → "Could Not Confirm". STOP.
 
 RULE 16 — NOT INTERESTED:
