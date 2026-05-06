@@ -12,20 +12,19 @@ from .config import GEMINI_API_KEY
 IST = timezone(timedelta(hours=5, minutes=30))
 
 DISPOSITION_MAP: dict[str, str] = {
-    "Short Hangup":                      "The call ended after the agent's opening line only — the customer said nothing, or gave a single bare yes/no, and disconnected before any product discussion or qualification questions occurred.",
+    "Short Hangup":                      "The call ended with no product discussion — the customer said nothing at all, OR gave only a bare call-acknowledgment (e.g. hello, haan, hold on, ek second) and disconnected before any product topic was raised.",
     "Voicemail":                        "The call went to the recipient's voicemail instead of connecting directly.",
     "Wrong Number":                     "The number dialed does not belong to the intended customer.",
     "Approved":                         "The customer confirmed the product and answered ALL specification questions.",
     "Enriched":                         "The customer confirmed the product and answered at least one (but not all) specification questions.",
     "Interested":                       "The customer confirmed they need the product but answered ZERO specification questions, OR showed clear positive interest (engaged meaningfully, asked follow-up questions, showed enthusiasm) without answering any spec questions. Covers both explicit product confirmation with zero specs and positive-but-unconfirmed engagement.",
     "Not Interested":                   "The customer clearly stated they are not interested or do not need the product.",
-    "Could Not Confirm":                "The customer was uncertain and could not confirm whether they still need the product.",
+    "Could Not Confirm":                "The customer was uncertain or did not confirm whether they still need the product — includes vague/non-committal responses, mid-conversation disconnections where no product confirmation was obtained, and cases where the call dropped before any meaningful product exchange.",
     "Alternate Number":                 "The customer provided a different or alternate contact number.",
     "Already Spoken":                   "The customer has already discussed or interacted about the requirement with JD or the seller.",
     "Will do it Myself":                "The customer still has the requirement but will source/handle it themselves without JD's help — they explicitly declined seller connections (e.g. 'मैं खुद देख लूँगा', 'I'll manage it myself'). The need exists; only JD's assistance is rejected. Distinct from Not Interested.",
     "Call Rescheduled":                 "The customer asked to call at a specific date and time.",
     "Seller Intent":                    "The caller is a seller or vendor trying to offer their own products/services — they are NOT a buyer with a requirement. They may want to list on JustDial or pitch their business. This is the opposite of a buyer lead.",
-    "Abruptly disconnected and not Receiving": "The customer disconnected or stopped responding before confirming whether they need the product — zero product confirmation was obtained.",
     "Abusive Lead":                     "The recipient exhibited abusive or inappropriate behavior during the call.",
     "DNC Client : Don't Call Further":  "The customer explicitly requested not to be contacted again.",
     "Other Cases":                      "The call outcome does not fit into any predefined categories.",
@@ -37,10 +36,7 @@ _VALID_OUTCOMES = set(DISPOSITION_MAP.keys())
 
 
 def status_to_outcome(status: str) -> str:
-    return {
-        "completed": "Could Not Confirm",
-        "disconnected": "Abruptly disconnected and not Receiving",
-    }.get(status, "Abruptly disconnected and not Receiving")
+    return "Could Not Confirm"
 
 
 def fuzzy_match_opt_id(answ: str, options: list[dict]) -> str | None:
@@ -134,9 +130,10 @@ Apply these first. Each is a complete, unambiguous signal that overrides everyth
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
 RULE 0 — SHORT HANGUP:
-  Condition: The buyer said NOTHING at all — there are zero buyer turns in the transcript, or the call ended immediately after the agent's greeting with no buyer response whatsoever.
-  STRICT SINGLE TEST: Is there even one buyer turn with any words? If YES → do NOT use Short Hangup. Move to the next rule immediately.
-  This rule does NOT apply if the buyer said even a single word — "नहीं", "हाँ", "hello", "भाई", anything. Any buyer utterance means the call had a response and must be classified by the rules that follow.
+  Condition A (zero engagement): The buyer said NOTHING at all — there are zero buyer turns in the transcript, or the call ended immediately after the agent's greeting with no buyer response whatsoever.
+  Condition B (bare acknowledgment only): The buyer's ONLY responses were bare call-acknowledgments — e.g. "hello", "haan", "haan boliye", "ek second", "hold on", "ji", "kaun hai", "kya hai" — and the call ended before the agent even raised the product topic, OR after only the opening line with no product discussion at all.
+  COMBINED TEST: Did the buyer engage with the product topic in any way — hear about it, respond to it, ask about it, or react to it? If YES → do NOT use Short Hangup. Move to the next rule.
+  STRICT: A buyer saying "नहीं" in response to the product question is a product-topic response → do NOT use Short Hangup. Only bare call-presence acknowledgments before the product topic count.
   → "Short Hangup". STOP.
 
 RULE 1 — SELLER INTENT:
@@ -263,8 +260,9 @@ If ANY Tier 2 rule was even partially applicable, re-examine before falling here
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
 RULE 15 — COULD NOT CONFIRM:
-  Condition: Customer gave genuinely vague or non-committal responses about whether they STILL need the product (e.g. "शायद", "पता नहीं", "I'll think about it", "not sure yet"). No spec answers, no clear confirmation, no clear rejection.
-  STRICT: Do NOT use this if the customer said "हाँ/yes" or provided any spec detail → that is Interested (Tier 2). Do NOT use this if the customer was clearly positively interested → use Interested (Rule 10). Do NOT use this if the customer clearly rejected the product → use Not Interested (Rule 16).
+  Condition: Any of the following — (a) customer gave genuinely vague or non-committal responses about whether they STILL need the product (e.g. "शायद", "पता नहीं", "I'll think about it", "not sure yet"); (b) the call disconnected mid-conversation before any product confirmation was obtained and no other rule matched; (c) the call dropped after the product topic was raised but before the customer gave any usable response.
+  No spec answers, no clear confirmation, no clear rejection required to use this outcome.
+  STRICT: Do NOT use this if the customer said "हाँ/yes" or provided any spec detail → that is Interested (Tier 2). Do NOT use this if the customer was clearly positively interested → use Interested (Rule 10). Do NOT use this if the customer clearly rejected the product → use Not Interested (Rule 16). Do NOT use this if the customer never heard the product topic → use Short Hangup (Rule 0).
   → "Could Not Confirm". STOP.
 
 RULE 16 — NOT INTERESTED:
@@ -283,12 +281,7 @@ RULE 17 — TECHNICAL ISSUE:
   STRICT: If any positive exchange occurred before the technical issue, use the appropriate Tier 2 outcome instead.
   → "Technical Issue - Call Connected". STOP.
 
-RULE 18 — ABRUPTLY DISCONNECTED (last resort):
-  Condition: Call ended abruptly with zero product confirmation and none of Rules 0–17 matched.
-  STRICT: Only when the call was clearly cut mid-conversation with nothing achieved. Do NOT use as a default.
-  → "Abruptly disconnected and not Receiving". STOP.
-
-RULE 19 — OTHER CASES (absolute last resort):
+RULE 18 — OTHER CASES (absolute last resort):
   Condition: Truly none of the above rules apply after careful evaluation of all tiers.
   → "Other Cases".
 
