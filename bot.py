@@ -18,10 +18,13 @@ Run::
 """
 
 import asyncio
+import io
 import json
+import logging as _logging
 import os
 import re
 import time
+import wave
 from datetime import date as _date
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -52,6 +55,16 @@ from google.genai import types
 
 load_dotenv(override=True)
 
+# Suppress the benign "failed to send binary stream message / engine is closed"
+# WARNING that the LiveKit framework emits when it tries to push a transcript
+# item to a participant who has already disconnected.  This happens at call
+# teardown and does not indicate data loss — the transcript is already saved.
+class _SuppressSendStreamWarning(_logging.Filter):
+    def filter(self, record: _logging.LogRecord) -> bool:
+        return "failed to send binary stream message" not in record.getMessage()
+
+_logging.getLogger("livekit.agents").addFilter(_SuppressSendStreamWarning())
+
 # The Google plugin reads GOOGLE_API_KEY; reuse the existing GEMINI_LIVE_API_KEY.
 if not os.environ.get("GOOGLE_API_KEY"):
     os.environ["GOOGLE_API_KEY"] = os.environ.get("GEMINI_LIVE_API_KEY", "")
@@ -68,6 +81,10 @@ IST = timezone(timedelta(hours=5, minutes=30))
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://192.168.13.65:27017")
 MONGO_DB = "ai_lead_qualify"
 MONGO_COLLECTION = "call_transcripts"
+
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
+SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
+_SARVAM_AUDIO_MAX_BYTES = 16000 * 2 * 30  # 30 s at 16 kHz, 16-bit, mono
 
 _http_session: aiohttp.ClientSession | None = None
 
@@ -923,6 +940,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             or _live_transcript[-1].get("text") != _pending_assistant_text
         ):
             _live_transcript.append({"role": "assistant", "text": _pending_assistant_text})
+        # Sarvam STT fallback: if user speech is still absent after the Gemini drain,
+        # transcribe the raw audio buffer as a last resort.
+        if (
+            status == "disconnected"
+            and _user_audio["frames"]
+            and (not _live_transcript or _live_transcript[-1].get("role") != "user")
+        ):
+            _sarvam_text = await _sarvam_stt_fallback()
+            if _sarvam_text:
+                _live_transcript.append({"role": "user", "text": _sarvam_text})
         transcript = _live_transcript if _live_transcript else build_transcript_from_session(session)
 
         _start = call_state.get("call_start_time")
@@ -1017,25 +1044,25 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         # disconnected-event (fired when we kick the caller) sets the event
         # early while the Mongo insert is still in flight.
         _was_done = call_state["save_done"]
-        # For abrupt disconnects the Gemini stream and STT pipeline are still
-        # draining — wait long enough for sniffer to accumulate the in-flight
-        # assistant turn into _pending_assistant_text.
+        # For abrupt disconnects the Gemini STT pipeline is still draining —
+        # user_input_transcribed (partials/finals) and conversation_item_added
+        # (user role commit) both fire within this window.  session.aclose() MUST
+        # come AFTER save_call_data so the STT pipeline stays alive long enough
+        # for the user's last utterance to land in _live_transcript before the
+        # snapshot.  Closing first would kill those events and lose the user turn.
         if status == "disconnected":
-            await asyncio.sleep(1.5)
-        # Close the session BEFORE snapshotting the transcript.  This stops the
-        # framework's background transcript-push tasks so they don't try to write
-        # to the dead room engine after the participant has already gone, which
-        # produces "ConnectionError: engine is closed" warnings.
+            # Give Gemini time to complete the dummy-turn generation cycle triggered
+            # in _on_disconnect.  The cycle (send "." → Gemini generates → turn_complete
+            # → _mark_current_generation_done → input_audio_transcription_completed) takes
+            # ~2.25 s empirically (observed: save at T=2.0s, _on_item_added at T=2.258s).
+            # 4.0 s gives 1.75 s margin for slow Gemini responses.
+            await asyncio.sleep(4.0)
+        await save_call_data(status)
+        asyncio.ensure_future(_delete_room_safe())
         try:
             await session.aclose()
         except Exception:
             pass
-        if status == "disconnected":
-            # Brief pause so any conversation_item_added events that aclose()
-            # drains can land in _live_transcript before save_call_data snapshots.
-            await asyncio.sleep(0.05)
-        await save_call_data(status)
-        asyncio.ensure_future(_delete_room_safe())
         if not _was_done:
             _save_done_event.set()
 
@@ -1100,6 +1127,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _pending_user_text: str = ""     # last partial user transcription (may never get a final)
     _pending_assistant_text: str = ""  # last partial assistant turn being streamed (may be cut mid-sentence)
 
+    # Raw PCM audio from the caller, used for Sarvam STT fallback.
+    # Cleared whenever Gemini successfully transcribes a final user turn.
+    _user_audio: dict = {"frames": [], "nbytes": 0}
+
     async def _handle_close() -> None:
         nonlocal _call_ended
         _call_ended = True
@@ -1132,6 +1163,56 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         logger.info(f"[STREAM-DETECT] Closing phrase in stream — mic muted | buf={buf!r}")
         except Exception:
             pass
+
+    async def _buffer_user_audio(track: rtc.RemoteAudioTrack) -> None:
+        """Stream caller audio into a rolling PCM buffer for Sarvam STT fallback."""
+        stream = rtc.AudioStream(track, sample_rate=16000, num_channels=1)
+        async for ev in stream:
+            if _call_ended:
+                break
+            chunk = bytes(ev.frame.data)
+            _user_audio["frames"].append(chunk)
+            _user_audio["nbytes"] += len(chunk)
+            while _user_audio["nbytes"] > _SARVAM_AUDIO_MAX_BYTES and _user_audio["frames"]:
+                old = _user_audio["frames"].pop(0)
+                _user_audio["nbytes"] -= len(old)
+
+    async def _sarvam_stt_fallback() -> str | None:
+        """Transcribe the buffered caller audio via Sarvam STT. Returns transcript or None."""
+        if not _user_audio["frames"] or not SARVAM_API_KEY:
+            return None
+        wav_buf = io.BytesIO()
+        with wave.open(wav_buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            for chunk in _user_audio["frames"]:
+                wf.writeframes(chunk)
+        wav_buf.seek(0)
+        try:
+            form = aiohttp.FormData()
+            form.add_field("file", wav_buf.read(), filename="audio.wav", content_type="audio/wav")
+            form.add_field("language_code", "hi-IN")
+            form.add_field("model", "saaras:v3")
+            form.add_field("mode", "transcribe")
+            async with _get_http_session().post(
+                SARVAM_STT_URL,
+                headers={"api-subscription-key": SARVAM_API_KEY},
+                data=form,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    text = (result.get("transcript") or "").strip()
+                    if text:
+                        logger.info(f"[SARVAM] Fallback STT: {text!r}")
+                        return text
+                else:
+                    body = await resp.text()
+                    logger.warning(f"[SARVAM] STT failed: {resp.status} {body[:200]}")
+        except Exception as e:
+            logger.warning(f"[SARVAM] STT error: {e}")
+        return None
 
     # 7. Function tools
     @function_tool
@@ -1229,6 +1310,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _turn_counter += 1
             logger.info(f"[TRANSCRIPT] Turn {_turn_counter} | USER: {transcript_text!r}")
             _pending_user_text = ""
+            # Gemini confirmed this turn — Sarvam fallback not needed for it
+            _user_audio["frames"].clear()
+            _user_audio["nbytes"] = 0
             # Replace the last entry if it was a partial for this same turn
             if _live_transcript and _live_transcript[-1]["role"] == "user":
                 _live_transcript[-1]["text"] = transcript_text
@@ -1299,7 +1383,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if not _call_ended and not _closing_triggered:
                 _reset_inactivity()
 
-    # 10. Start session — disable close_on_disconnect so the process stays alive
+    # 10. Subscribe to caller audio for Sarvam STT fallback buffering.
+    @ctx.room.on("track_subscribed")
+    def _on_track_subscribed(track, pub, participant) -> None:
+        if isinstance(track, rtc.RemoteAudioTrack):
+            asyncio.ensure_future(_buffer_user_audio(track))
+
+    # Start session — disable close_on_disconnect so the process stays alive
     # long enough for save_call_data (Mongo insert + call-log POST) to finish.
     await session.start(
         room=ctx.room,
@@ -1488,11 +1578,30 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     @ctx.room.on("participant_disconnected")
     def _on_disconnect(p: rtc.RemoteParticipant) -> None:
         nonlocal _call_ended
-        pass
         _cancel_inactivity()
         if call_state["ended_naturally"]:
             return
         _call_ended = True
+        # Force Gemini to finalise any in-flight user turn immediately.
+        # Without this, Gemini waits for silence_duration_ms of silence to
+        # detect end-of-speech — but the audio stream is already gone.
+        # A non-empty turns payload is required: empty turns=[] does NOT trigger
+        # a Gemini generation cycle, so server_content.input_transcription never
+        # fires and the user's last utterance is silently discarded.
+        # Using a dummy user turn (same pattern as _trigger_greeting) forces Gemini
+        # into a generation cycle, which emits server_content.input_transcription
+        # → _mark_current_generation_done → input_audio_transcription_completed
+        # (is_final=True) with the user's buffered speech, before save_call_data runs.
+        if _rt is not None and getattr(_rt, "_active_session", None) is not None:
+            try:
+                _rt._send_client_event(
+                    types.LiveClientContent(
+                        turns=[types.Content(parts=[types.Part(text=".")], role="user")],
+                        turn_complete=True,
+                    )
+                )
+            except Exception:
+                pass
         asyncio.ensure_future(_save_and_close("disconnected"))
 
     # Keep entrypoint alive until save_call_data + callback finish.
