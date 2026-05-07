@@ -911,7 +911,19 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             f"record_id={lead_id!r} | call_id={call_state.get('call_id')!r} | "
             f"lead_record_present={bool(call_state.get('lead_record'))}"
         )
-        transcript = build_transcript_from_session(session)
+        # Flush any partial user turn that never received a final transcription
+        if _pending_user_text and (
+            not _live_transcript or _live_transcript[-1].get("text") != _pending_user_text
+        ):
+            _live_transcript.append({"role": "user", "text": _pending_user_text})
+        # Flush any partial assistant turn that was cut mid-sentence (sniffer buffer)
+        if _pending_assistant_text and (
+            not _live_transcript
+            or _live_transcript[-1].get("role") != "assistant"
+            or _live_transcript[-1].get("text") != _pending_assistant_text
+        ):
+            _live_transcript.append({"role": "assistant", "text": _pending_assistant_text})
+        transcript = _live_transcript if _live_transcript else build_transcript_from_session(session)
 
         _start = call_state.get("call_start_time")
         _end_time = time.time()
@@ -1005,12 +1017,25 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         # disconnected-event (fired when we kick the caller) sets the event
         # early while the Mongo insert is still in flight.
         _was_done = call_state["save_done"]
-        await save_call_data(status)
-        asyncio.ensure_future(_delete_room_safe())
+        # For abrupt disconnects the Gemini stream and STT pipeline are still
+        # draining — wait long enough for sniffer to accumulate the in-flight
+        # assistant turn into _pending_assistant_text.
+        if status == "disconnected":
+            await asyncio.sleep(1.5)
+        # Close the session BEFORE snapshotting the transcript.  This stops the
+        # framework's background transcript-push tasks so they don't try to write
+        # to the dead room engine after the participant has already gone, which
+        # produces "ConnectionError: engine is closed" warnings.
         try:
             await session.aclose()
         except Exception:
             pass
+        if status == "disconnected":
+            # Brief pause so any conversation_item_added events that aclose()
+            # drains can land in _live_transcript before save_call_data snapshots.
+            await asyncio.sleep(0.05)
+        await save_call_data(status)
+        asyncio.ensure_future(_delete_room_safe())
         if not _was_done:
             _save_done_event.set()
 
@@ -1071,6 +1096,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # Turn-wise transcript + end-to-end latency tracking
     _turn_counter = 0
     _user_turn_time: float | None = None  # timestamp when user transcript arrived
+    _live_transcript: list = []  # real-time capture; avoids missing turns on abrupt disconnect
+    _pending_user_text: str = ""     # last partial user transcription (may never get a final)
+    _pending_assistant_text: str = ""  # last partial assistant turn being streamed (may be cut mid-sentence)
 
     async def _handle_close() -> None:
         nonlocal _call_ended
@@ -1082,12 +1110,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     async def _consume_sniff(text_iter) -> None:
         """Consume one branch of a tee'd text_stream, muting the mic as soon as
-        a partial closing phrase is detected in the streaming chunks."""
-        nonlocal _early_close_muting
+        a partial closing phrase is detected in the streaming chunks.
+        Also updates _pending_assistant_text with accumulated chunks so that an
+        abrupt disconnect mid-sentence can still be captured in save_call_data."""
+        nonlocal _early_close_muting, _pending_assistant_text
         buf = ""
         try:
             async for chunk in text_iter:
                 buf += chunk
+                _pending_assistant_text = buf
                 if not _early_close_muting and not _closing_triggered:
                     buf_lower = buf.lower()
                     if any(m in buf_lower for m in (
@@ -1134,20 +1165,31 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("conversation_item_added")
     def _on_item_added(ev) -> None:
-        nonlocal _closing_buffer, _closing_triggered, _early_close_muting
+        nonlocal _closing_buffer, _closing_triggered, _early_close_muting, _live_transcript, _pending_assistant_text
         item = ev.item if hasattr(ev, "item") else ev
         role = getattr(item, "role", None)
         role_str = role.value if hasattr(role, "value") else str(role) if role else ""
-        if role_str != "assistant" or _closing_triggered:
-            return
         text = (
             getattr(item, "text_content", None)
             or getattr(item, "text", None)
             or ""
         )
+        # Capture user items committed to session history (fallback when
+        # user_input_transcribed doesn't fire, e.g. Gemini realtime without
+        # input_audio_transcription enabled)
+        if role_str == "user":
+            if text and not any(t["role"] == "user" and t["text"] == text for t in _live_transcript):
+                logger.info(f"[TRANSCRIPT] USER (committed): {text!r}")
+                _live_transcript.append({"role": "user", "text": text})
+            return
+        if role_str != "assistant" or _closing_triggered:
+            return
         _closing_buffer += " " + text
         if text:
             logger.info(f"[TRANSCRIPT] Turn {_turn_counter} | AGENT: {text!r}")
+            _live_transcript.append({"role": "assistant", "text": text})
+        # Sniffer partial is superseded by the officially committed item — clear it.
+        _pending_assistant_text = ""
         # Early mute: partial closing phrases are unique to the wrap-up line — mute
         # immediately so the user cannot interrupt before the full phrase is committed.
         if not _early_close_muting and not _closing_triggered:
@@ -1170,23 +1212,37 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("user_input_transcribed")
     def _on_user_spoke(ev) -> None:
-        nonlocal _turn_counter, _user_turn_time
+        nonlocal _turn_counter, _user_turn_time, _live_transcript, _pending_user_text
         # User spoke — reset inactivity timer
         if not _call_ended:
             _reset_inactivity()
-        # Only log final transcriptions
         is_final = getattr(ev, "is_final", True)
-        if not is_final:
-            return
         transcript_text = (
             getattr(ev, "transcript", None)
             or getattr(ev, "text", None)
             or ""
         ).strip()
-        _user_turn_time = time.time()
-        if transcript_text:
+        if not transcript_text:
+            return
+        if is_final:
+            _user_turn_time = time.time()
             _turn_counter += 1
             logger.info(f"[TRANSCRIPT] Turn {_turn_counter} | USER: {transcript_text!r}")
+            _pending_user_text = ""
+            # Replace the last entry if it was a partial for this same turn
+            if _live_transcript and _live_transcript[-1]["role"] == "user":
+                _live_transcript[-1]["text"] = transcript_text
+            else:
+                _live_transcript.append({"role": "user", "text": transcript_text})
+        else:
+            # Partial — keep the latest chunk in _pending_user_text; also put a
+            # placeholder in _live_transcript so save_call_data sees it even if
+            # the final never arrives (abrupt disconnect before Gemini finalises).
+            _pending_user_text = transcript_text
+            if _live_transcript and _live_transcript[-1]["role"] == "user":
+                _live_transcript[-1]["text"] = transcript_text
+            else:
+                _live_transcript.append({"role": "user", "text": transcript_text})
 
     _greeting_done = False
     _bot_has_spoken = False  # True once the agent first transitions to "speaking"
