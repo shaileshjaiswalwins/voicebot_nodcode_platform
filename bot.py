@@ -56,6 +56,21 @@ from google.genai import types
 
 load_dotenv(override=True)
 
+# ---------------------------------------------------------------------------
+# File logging — rotate daily, keep 30 days, write to LOG_DIR (default /var/log/voicebot)
+# ---------------------------------------------------------------------------
+_LOG_DIR = os.environ.get("BOT_LOG_DIR", "/var/log/voicebot")
+os.makedirs(_LOG_DIR, exist_ok=True)
+logger.add(
+    os.path.join(_LOG_DIR, "{time:YYYY-MM-DD}.log"),
+    rotation="00:00",       # new file each day at midnight
+    retention="30 days",    # delete files older than 30 days
+    compression="gz",       # compress rotated files to save space
+    level="INFO",
+    enqueue=True,           # async-safe — won't block the event loop
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<7} | {message}",
+)
+
 # Suppress the benign "failed to send binary stream message / engine is closed"
 # WARNING that the LiveKit framework emits when it tries to push a transcript
 # item to a participant who has already disconnected.  This happens at call
