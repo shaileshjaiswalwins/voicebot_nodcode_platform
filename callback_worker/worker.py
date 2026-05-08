@@ -33,6 +33,14 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
         ))
         return
 
+    if str(lead_id).startswith("fallback_"):
+        logger.warning(f"[WORKER] Skipping doc {doc_id} — fallback lead_id={lead_id!r}")
+        await loop.run_in_executor(None, lambda: collection.update_one(
+            {"_id": doc_id},
+            {"$set": {"tagged": True, "tagged_at": datetime.utcnow(), "skipped_reason": "fallback_lead_id"}},
+        ))
+        return
+
     schema = (doc.get("lead_record") or {}).get("qualification_schema", {}) or {}
     status = doc.get("status", "completed")
 
