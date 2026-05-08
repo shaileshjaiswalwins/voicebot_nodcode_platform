@@ -60,7 +60,7 @@ load_dotenv(override=True)
 # File logging — rotate daily, keep 30 days, write to LOG_DIR (default /var/log/voicebot)
 # ---------------------------------------------------------------------------
 _BOT_PORT = os.environ.get("BOT_PORT", "8081")
-_LOG_DIR = os.path.join(os.environ.get("BOT_LOG_DIR", "/var/log/dailylog/voicebot"), _BOT_PORT)
+_LOG_DIR = os.path.join(os.environ.get("BOT_LOG_DIR", "/var/log/daily_log/voicebot"), _BOT_PORT)
 os.makedirs(_LOG_DIR, exist_ok=True)
 logger.add(
     os.path.join(_LOG_DIR, "{time:YYYY-MM-DD}.log"),
