@@ -17,6 +17,7 @@ Run::
     python bot.py start
 """
 
+import array as _array
 import asyncio
 import io
 import json
@@ -293,9 +294,13 @@ _HARDCODED_BOT_CONFIG: dict = {
     "temperature": 0.7,
     "gemini_start_sensitivity": "START_SENSITIVITY_LOW",
     "gemini_end_sensitivity": "END_SENSITIVITY_LOW",
-    "gemini_silence_duration_ms": 1500,
-    "gemini_prefix_padding_ms": 100,
+    "gemini_silence_duration_ms": 1800,
+    "gemini_prefix_padding_ms": 300,
     "max_call_duration": 300,
+    "sarvam_min_rms": 350,
+    "sarvam_min_speech_ms": 500,
+    "sarvam_min_speech_ms_singleword": 1500,
+    "post_speech_hold_ms": 800,
     "filler_message": ["अच्छा,", "हाँ,", "जी,", "तो,", "ठीक है,"],
     "function_filler_message": ["एक moment जी,", "जी, देख रही हूँ,"],
 }
@@ -841,6 +846,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _vad_silence_ms     = int(_bot_config.get("gemini_silence_duration_ms") or 1500)
     _vad_prefix_ms      = int(_bot_config.get("gemini_prefix_padding_ms")   or 100)
     _max_call_duration  = 300
+    _sarvam_min_rms                  = int(_bot_config.get("sarvam_min_rms") or 350)
+    _sarvam_min_speech_ms            = int(_bot_config.get("sarvam_min_speech_ms") or 500)
+    _sarvam_min_speech_ms_singleword = int(_bot_config.get("sarvam_min_speech_ms_singleword") or 1500)
+    _post_speech_hold_ms             = int(_bot_config.get("post_speech_hold_ms") or 800)
     _functions: list[dict] = _bot_config.get("functions") or []
     _function_calling   = bool(_bot_config.get("function_calling", False)) and bool(_functions)
     _lang_cfg           = HINDI_LANG_CONFIG
@@ -938,6 +947,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             f"record_id={lead_id!r} | call_id={call_state.get('call_id')!r} | "
             f"lead_record_present={bool(call_state.get('lead_record'))}"
         )
+        # Flush any muted-window Sarvam transcript that never got combined with live speech.
+        if _muted_inject["text"]:
+            _live_transcript.append({"role": "user", "text": _muted_inject["text"]})
+            _muted_inject["text"] = ""
         # Flush any partial user turn that never received a final transcription
         if _pending_user_text and (
             not _live_transcript or _live_transcript[-1].get("text") != _pending_user_text
@@ -954,7 +967,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         # transcribe the raw audio buffer as a last resort.
         if (
             status == "disconnected"
-            and _user_audio["frames"]
+            and _user_audio["has_audio"]
             and (not _live_transcript or _live_transcript[-1].get("role") != "user")
         ):
             _sarvam_text = await _sarvam_stt_fallback()
@@ -1114,8 +1127,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if _call_ended:
             return
         _nudge_count = 0
-        if _inactivity_task and not _inactivity_task.done():
+        had_task = _inactivity_task and not _inactivity_task.done()
+        if had_task:
             _inactivity_task.cancel()
+        logger.info(f"[INACTIVITY] timer reset (prev_task_cancelled={had_task})")
         _inactivity_task = asyncio.create_task(_inactivity_timeout())
 
     def _cancel_inactivity() -> None:
@@ -1137,9 +1152,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _pending_user_text: str = ""     # last partial user transcription (may never get a final)
     _pending_assistant_text: str = ""  # last partial assistant turn being streamed (may be cut mid-sentence)
 
-    # Raw PCM audio from the caller, used for Sarvam STT fallback.
-    # Cleared whenever Gemini successfully transcribes a final user turn.
-    _user_audio: dict = {"frames": [], "nbytes": 0}
+    # WAV file path for Sarvam STT fallback audio.
+    # Each turn reset opens a new file segment so old audio is discarded.
+    _wav_path = f"/tmp/caller_{room_name.replace('/', '_')[-40:]}_0.wav"
+    _wav_paths = [_wav_path]   # mutable holder so inner coroutines share current path
+    _wav_reset_flag = False    # set True by _on_user_spoke to trigger segment rotation
+    _user_audio: dict = {"speech_ms": 0.0, "nbytes": 0, "has_audio": False}
+    # Audio captured from caller while mic is muted (bot speaking turn + post-hold).
+    # Transcribed mid-call via Sarvam and re-injected to Gemini if substantive.
+    _muted_capture: dict = {"frames": [], "speech_ms": 0.0}
+    # Holds the last muted-window transcript (Sarvam capture while mic was OFF).
+    # Never sent to Gemini — combined with the next live user FINAL for Mongo/analysis.
+    _muted_inject: dict = {"text": ""}
 
     async def _handle_close() -> None:
         nonlocal _call_ended
@@ -1169,39 +1193,86 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         "all details",
                     )):
                         _early_close_muting = True
-                        _set_mic(False)
+                        _set_mic(False, reason="stream-closing-phrase")
                         logger.info(f"[STREAM-DETECT] Closing phrase in stream — mic muted | buf={buf!r}")
         except Exception:
             pass
 
     async def _buffer_user_audio(track: rtc.RemoteAudioTrack) -> None:
-        """Stream caller audio into a rolling PCM buffer for Sarvam STT fallback."""
+        """Stream caller audio directly into a WAV file for Sarvam STT fallback."""
+        nonlocal _wav_reset_flag
         stream = rtc.AudioStream(track, sample_rate=16000, num_channels=1)
-        async for ev in stream:
-            if _call_ended:
-                break
-            chunk = bytes(ev.frame.data)
-            _user_audio["frames"].append(chunk)
-            _user_audio["nbytes"] += len(chunk)
-            while _user_audio["nbytes"] > _SARVAM_AUDIO_MAX_BYTES and _user_audio["frames"]:
-                old = _user_audio["frames"].pop(0)
-                _user_audio["nbytes"] -= len(old)
+        segment = 0
 
-    async def _sarvam_stt_fallback() -> str | None:
-        """Transcribe the buffered caller audio via Sarvam STT. Returns transcript or None."""
-        if not _user_audio["frames"] or not SARVAM_API_KEY:
-            return None
-        wav_buf = io.BytesIO()
-        with wave.open(wav_buf, "wb") as wf:
+        def _open_wav(path: str) -> wave.Wave_write:
+            wf = wave.open(path, "wb")
             wf.setnchannels(1)
             wf.setsampwidth(2)
             wf.setframerate(16000)
-            for chunk in _user_audio["frames"]:
-                wf.writeframes(chunk)
-        wav_buf.seek(0)
+            return wf
+
+        wf = _open_wav(_wav_paths[0])
         try:
+            async for ev in stream:
+                if _call_ended:
+                    break
+                if _wav_reset_flag:
+                    _wav_reset_flag = False
+                    prev_speech_ms = _user_audio["speech_ms"]
+                    wf.close()
+                    _user_audio["speech_ms"] = 0.0
+                    _user_audio["nbytes"] = 0
+                    _user_audio["has_audio"] = False
+                    segment += 1
+                    new_path = f"/tmp/caller_{room_name.replace('/', '_')[-40:]}_{segment}.wav"
+                    _wav_paths[0] = new_path
+                    wf = _open_wav(new_path)
+                    logger.info(
+                        f"[AUDIO-BUF] WAV rotated → seg {segment} "
+                        f"(prev speech_ms={prev_speech_ms:.0f} path={new_path})"
+                    )
+                chunk = bytes(ev.frame.data)
+                samples = _array.array('h', chunk)
+                n = len(samples)
+                rms = (sum(s * s for s in samples) / n) ** 0.5 if n else 0.0
+                if rms < _sarvam_min_rms:
+                    continue
+                frame_ms = len(chunk) / 2 / 16000 * 1000
+                # Accumulate caller frames whenever mic is OFF so speech during bot's
+                # turn or post-hold can be transcribed and re-injected to Gemini.
+                if not _mic_enabled:
+                    _muted_capture["frames"].append(chunk)
+                    _muted_capture["speech_ms"] += frame_ms
+                if _user_audio["nbytes"] >= _SARVAM_AUDIO_MAX_BYTES:
+                    continue
+                wf.writeframes(chunk)
+                _user_audio["nbytes"] += len(chunk)
+                _user_audio["speech_ms"] += frame_ms
+                _user_audio["has_audio"] = True
+        finally:
+            wf.close()
+
+    _SARVAM_FILLER_HALLUCINATIONS = {
+        "yes", "no", "ok", "okay", "ha", "han", "haan", "hmm", "hm",
+        "हाँ", "हां", "हा", "हम्म", "हम", "हूँ", "जी", "ओके", "ओक",
+    }
+
+    async def _sarvam_stt_fallback() -> str | None:
+        """Transcribe the WAV file written by _buffer_user_audio via Sarvam STT."""
+        if not _user_audio["has_audio"] or not SARVAM_API_KEY:
+            return None
+        speech_ms = _user_audio["speech_ms"]
+        if speech_ms < _sarvam_min_speech_ms:
+            logger.info(f"[SARVAM] skipped — speech_ms={speech_ms:.0f} < min={_sarvam_min_speech_ms}")
+            return None
+        wav_path = _wav_paths[0]
+        if not Path(wav_path).exists():
+            return None
+        try:
+            with open(wav_path, "rb") as f:
+                wav_data = f.read()
             form = aiohttp.FormData()
-            form.add_field("file", wav_buf.read(), filename="audio.wav", content_type="audio/wav")
+            form.add_field("file", wav_data, filename="audio.wav", content_type="audio/wav")
             form.add_field("language_code", "hi-IN")
             form.add_field("model", "saaras:v3")
             form.add_field("mode", "transcribe")
@@ -1215,7 +1286,27 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     result = await resp.json()
                     text = (result.get("transcript") or "").strip()
                     if text:
-                        logger.info(f"[SARVAM] Fallback STT: {text!r}")
+                        tokens = re.sub(r"[^\w\s]", "", text.lower()).split()
+                        # Drop single-word filler hallucinations from low-energy buffers.
+                        if (
+                            len(tokens) <= 1
+                            and (tokens[0] if tokens else "") in _SARVAM_FILLER_HALLUCINATIONS
+                            and speech_ms < _sarvam_min_speech_ms_singleword
+                        ):
+                            logger.info(
+                                f"[SARVAM] dropped single-word hallucination {text!r} "
+                                f"(speech_ms={speech_ms:.0f})"
+                            )
+                            return None
+                        # Drop transcripts that are entirely hello/check-in noise (e.g.
+                        # "हेलो हेलो हेलो" produced when user was just checking the line).
+                        if tokens and all(t in _SARVAM_FILLER_HALLUCINATIONS for t in tokens):
+                            logger.info(
+                                f"[SARVAM] dropped all-filler transcript {text!r} "
+                                f"(speech_ms={speech_ms:.0f})"
+                            )
+                            return None
+                        logger.info(f"[SARVAM] Fallback STT: {text!r} (speech_ms={speech_ms:.0f})")
                         return text
                 else:
                     body = await resp.text()
@@ -1223,6 +1314,64 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         except Exception as e:
             logger.warning(f"[SARVAM] STT error: {e}")
         return None
+
+    async def _transcribe_muted_period(frames: list, speech_ms: float) -> None:
+        """Transcribe audio captured during a muted window (bot speaking turn + post-hold)
+        via Sarvam. Substantive transcripts are re-injected into Gemini as a user turn so
+        the caller does not need to repeat themselves."""
+        if not SARVAM_API_KEY or not frames:
+            return
+        try:
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                for f in frames:
+                    wf.writeframes(f)
+            buf.seek(0)
+            wav_data = buf.read()
+            form = aiohttp.FormData()
+            form.add_field("file", wav_data, filename="audio.wav", content_type="audio/wav")
+            form.add_field("language_code", "hi-IN")
+            form.add_field("model", "saaras:v3")
+            form.add_field("mode", "transcribe")
+            async with _get_http_session().post(
+                SARVAM_STT_URL,
+                headers={"api-subscription-key": SARVAM_API_KEY},
+                data=form,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    text = (result.get("transcript") or "").strip()
+                    if not text:
+                        logger.info(
+                            f"[MUTED-CAPTURE] Sarvam returned empty transcript "
+                            f"(speech_ms={speech_ms:.0f})"
+                        )
+                        return
+                    tokens = re.sub(r"[^\w\s]", "", text.lower()).split()
+                    if tokens and all(t in _SARVAM_FILLER_HALLUCINATIONS for t in tokens):
+                        logger.info(
+                            f"[MUTED-CAPTURE] dropped all-filler {text!r} "
+                            f"(speech_ms={speech_ms:.0f})"
+                        )
+                        return
+                    logger.info(
+                        f"[MUTED-CAPTURE] captured user speech: {text!r} "
+                        f"(speech_ms={speech_ms:.0f}) — buffered, not sent to Gemini"
+                    )
+                    # Buffer only — never injected to Gemini.
+                    # _on_user_spoke combines this with the next live FINAL for Mongo.
+                    _muted_inject["text"] = text
+                else:
+                    body = await resp.text()
+                    logger.warning(
+                        f"[MUTED-CAPTURE] Sarvam STT failed: {resp.status} {body[:200]}"
+                    )
+        except Exception as e:
+            logger.warning(f"[MUTED-CAPTURE] error: {e}")
 
     # 7. Function tools
     @function_tool
@@ -1292,18 +1441,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 "all details",        # English equivalent
             )):
                 _early_close_muting = True
-                _set_mic(False)
+                _set_mic(False, reason="commit-closing-phrase")
                 logger.info("[CLOSE DETECT] Partial closing phrase detected in commit — mic muted")
         if _is_closing_phrase(_closing_buffer):
             _closing_triggered = True
             call_state["ended_naturally"] = True
             logger.info(f"[CLOSE DETECT] Closing phrase matched — scheduling end")
-            _set_mic(False)
+            _set_mic(False, reason="closing-phrase-matched")
             asyncio.create_task(_handle_close())
 
     @session.on("user_input_transcribed")
     def _on_user_spoke(ev) -> None:
-        nonlocal _turn_counter, _user_turn_time, _live_transcript, _pending_user_text
+        nonlocal _turn_counter, _user_turn_time, _live_transcript, _pending_user_text, _wav_reset_flag
         # User spoke — reset inactivity timer
         if not _call_ended:
             _reset_inactivity()
@@ -1315,14 +1464,33 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         ).strip()
         if not transcript_text:
             return
+        # Snapshot agent state at the moment user speech arrives (for interruption diagnosis).
+        _agent_state_now = ""
+        try:
+            _s = session.agent_state
+            _agent_state_now = _s.value if hasattr(_s, "value") else str(_s)
+        except Exception:
+            _agent_state_now = "?"
+        # Live speech arrived — discard any buffered muted-window text.
+        # (Muted text is only saved to Mongo when NO live speech follows.)
+        if _muted_inject["text"]:
+            logger.info(
+                f"[MUTED-CAPTURE] live speech arrived — discarding muted buffer "
+                f"{_muted_inject['text']!r}"
+            )
+            _muted_inject["text"] = ""
+        muted_prefix = ""  # no longer combining
         if is_final:
             _user_turn_time = time.time()
             _turn_counter += 1
-            logger.info(f"[TRANSCRIPT] Turn {_turn_counter} | USER: {transcript_text!r}")
+            logger.info(
+                f"[TRANSCRIPT] Turn {_turn_counter} | USER (FINAL): {transcript_text!r} | "
+                f"agent_state={_agent_state_now} mic={_mic_enabled} "
+                f"speech_ms={_user_audio['speech_ms']:.0f}"
+            )
             _pending_user_text = ""
-            # Gemini confirmed this turn — Sarvam fallback not needed for it
-            _user_audio["frames"].clear()
-            _user_audio["nbytes"] = 0
+            # Gemini confirmed this turn — rotate WAV segment so next turn starts fresh
+            _wav_reset_flag = True
             # Replace the last entry if it was a partial for this same turn
             if _live_transcript and _live_transcript[-1]["role"] == "user":
                 _live_transcript[-1]["text"] = transcript_text
@@ -1332,6 +1500,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # Partial — keep the latest chunk in _pending_user_text; also put a
             # placeholder in _live_transcript so save_call_data sees it even if
             # the final never arrives (abrupt disconnect before Gemini finalises).
+            logger.info(
+                f"[TRANSCRIPT] PARTIAL | USER: {transcript_text!r} | "
+                f"agent_state={_agent_state_now} mic={_mic_enabled}"
+            )
             _pending_user_text = transcript_text
             if _live_transcript and _live_transcript[-1]["role"] == "user":
                 _live_transcript[-1]["text"] = transcript_text
@@ -1341,57 +1513,136 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _greeting_done = False
     _bot_has_spoken = False  # True once the agent first transitions to "speaking"
     _greeting_retry_triggered = False
+    _mic_enabled: bool = False  # mirrors the last value passed to set_audio_enabled
+    _speaking_start_time: float | None = None  # wall-clock when current speaking turn started
 
-    def _set_mic(enabled: bool) -> None:
+    def _set_mic(enabled: bool, reason: str = "") -> None:
+        nonlocal _mic_enabled
+        _mic_enabled = enabled
+        state_tag = "ON " if enabled else "OFF"
+        reason_tag = f" [{reason}]" if reason else ""
+        logger.info(f"[MIC] mic → {state_tag}{reason_tag}")
         try:
             if hasattr(session, "input") and hasattr(session.input, "set_audio_enabled"):
                 session.input.set_audio_enabled(enabled)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[MIC] set_audio_enabled({enabled}) error: {e}")
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        nonlocal _echo_guard_task, _greeting_done, _bot_has_spoken, _user_turn_time
+        nonlocal _echo_guard_task, _greeting_done, _bot_has_spoken, _user_turn_time, _speaking_start_time
         new_state = getattr(ev, "new_state", None)
+        old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
+        old_str   = old_state.value if hasattr(old_state, "value") else str(old_state) if old_state else "?"
+        logger.info(
+            f"[STATE] {old_str} → {state_str} | "
+            f"mic={_mic_enabled} greeting_done={_greeting_done} "
+            f"call_ended={_call_ended} closing={_closing_triggered}"
+        )
 
         if state_str == "speaking":
             _bot_has_spoken = True
-            # Log end-to-end latency from user speech end to agent speech start
+            _speaking_start_time = time.time()
             if _user_turn_time is not None:
                 latency_ms = round((time.time() - _user_turn_time) * 1000)
                 logger.info(f"[LATENCY] Turn {_turn_counter} | E2E: {latency_ms} ms")
                 _user_turn_time = None
-            # Cancel running inactivity timer while bot is speaking
             _cancel_inactivity()
-            # Echo guard — mute mic at start of bot turn
+            # Cancel any in-flight hold task and any pending muted injection.
             if _echo_guard_task and not _echo_guard_task.done():
                 _echo_guard_task.cancel()
-
-            async def _echo_guard() -> None:
-                try:
-                    _set_mic(False)
-                    await asyncio.sleep(0.6)
-                    # Only re-enable after greeting is done, call hasn't ended,
-                    # and no (partial) closing phrase has been detected yet.
-                    if _greeting_done and not _call_ended and not _closing_triggered and not _early_close_muting:
-                        _set_mic(True)
-                except asyncio.CancelledError:
-                    if _greeting_done and not _call_ended and not _closing_triggered and not _early_close_muting:
-                        _set_mic(True)
-
-            _echo_guard_task = asyncio.create_task(_echo_guard())
+                logger.info("[SPEAKING-MUTE] cancelled previous hold — new speaking turn")
+            # If there's a buffered muted transcript that never got combined (no live
+            # speech arrived before the next bot turn), save it to _live_transcript now
+            # so it's visible in Mongo, then clear.
+            if _muted_inject["text"]:
+                logger.info(
+                    f"[MUTED-CAPTURE] flushing uncombined muted text to transcript: "
+                    f"{_muted_inject['text']!r}"
+                )
+                _live_transcript.append({"role": "user", "text": _muted_inject["text"]})
+                _muted_inject["text"] = ""
+            # Mute mic for the ENTIRE bot speaking turn (no timed unmute).
+            # The listening branch unmutes via post-speech-hold.
+            # Caller audio continues to flow into _buffer_user_audio (raw track is
+            # unaffected) and is written to _muted_capture while _mic_enabled=False.
+            _set_mic(False, reason="speaking-start")
 
         elif state_str in ("listening", "idle"):
             if _bot_has_spoken and not _greeting_done:
-                # Bot spoke and is now listening = greeting finished; unmute mic
+                # Greeting completed — unmute mic immediately and discard any
+                # audio captured during the greeting (bot intro only, not a real turn).
                 _greeting_done = True
+                _muted_capture["frames"].clear()
+                _muted_capture["speech_ms"] = 0.0
                 if not _call_ended:
-                    _set_mic(True)
+                    _set_mic(True, reason="greeting-complete")
                     logger.info("[MIC] Greeting complete — mic enabled")
-            # Bot finished speaking — start inactivity timer
+            elif _greeting_done and _bot_has_spoken and not _call_ended and not _closing_triggered:
+                # Post-speech hold: mic stays OFF for a brief window after each bot turn.
+                # Purpose: absorb TTS audio tail + prevent instant hello-check loops.
+                # Any caller speech during bot's turn + this hold was already written into
+                # _muted_capture (because _mic_enabled was False) — Sarvam transcribes it
+                # and re-injects substantive replies to Gemini after the window closes.
+                _speaking_start_time = None
+
+                if _echo_guard_task and not _echo_guard_task.done():
+                    _echo_guard_task.cancel()
+                    logger.info("[POST-SPEECH-HOLD] cancelled stale guard — starting new")
+
+                async def _post_speech_hold() -> None:
+                    logger.info(
+                        f"[POST-SPEECH-HOLD] started (hold={_post_speech_hold_ms} ms)"
+                    )
+                    hold_ran_to_completion = False
+                    try:
+                        # Mic is already OFF from the speaking branch — no need to re-mute.
+                        await asyncio.sleep(_post_speech_hold_ms / 1000)
+                        hold_ran_to_completion = True
+                        if not _call_ended and not _closing_triggered and not _early_close_muting:
+                            logger.info(
+                                f"[POST-SPEECH-HOLD] expired ({_post_speech_hold_ms} ms) — "
+                                "enabling mic"
+                            )
+                            _set_mic(True, reason="post-speech-hold-expired")
+                        else:
+                            logger.info(
+                                f"[POST-SPEECH-HOLD] expired — mic stays muted "
+                                f"(call_ended={_call_ended} closing={_closing_triggered} "
+                                f"early_mute={_early_close_muting})"
+                            )
+                    except asyncio.CancelledError:
+                        logger.info("[POST-SPEECH-HOLD] cancelled — new speaking turn started")
+                    finally:
+                        # Snapshot and clear the muted-window audio. Spawn Sarvam
+                        # transcription if the caller said anything substantive.
+                        captured_ms = _muted_capture["speech_ms"]
+                        captured_frames = _muted_capture["frames"][:]
+                        _muted_capture["frames"].clear()
+                        _muted_capture["speech_ms"] = 0.0
+                        if (
+                            captured_ms >= _sarvam_min_speech_ms
+                            and captured_frames
+                            and not _call_ended
+                        ):
+                            logger.info(
+                                f"[MUTED-CAPTURE] {captured_ms:.0f} ms of speech captured — "
+                                "spawning Sarvam transcription"
+                            )
+                            asyncio.create_task(
+                                _transcribe_muted_period(captured_frames, captured_ms)
+                            )
+
+                _echo_guard_task = asyncio.create_task(_post_speech_hold())
+            # Bot finished speaking — restart inactivity timer
             if not _call_ended and not _closing_triggered:
                 _reset_inactivity()
+        elif state_str == "thinking":
+            # Gemini Realtime never emits "thinking" — no-op, just log.
+            pass
+        else:
+            logger.info(f"[STATE] unhandled state {state_str!r} — no action taken")
 
     # 10. Subscribe to caller audio for Sarvam STT fallback buffering.
     @ctx.room.on("track_subscribed")
@@ -1459,7 +1710,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # the Gemini session during its initialization phase.
             # The mic is re-enabled by _on_agent_state when greeting finishes.
             if not _call_ended:
-                _set_mic(False)
+                _set_mic(False, reason="greeting-trigger")
                 logger.info("[MIC] Muted after greeting trigger — awaiting greeting completion")
 
             # Fallback: if Gemini silently fails to produce the greeting (e.g. "no active
@@ -1479,7 +1730,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 if not _greeting_done and not _call_ended:
                     _greeting_done = True
                     _bot_has_spoken = True
-                    _set_mic(True)
+                    _set_mic(True, reason="greeting-retry-timeout")
                     logger.warning("[MIC] Greeting retry also failed — force-enabling mic")
 
         asyncio.create_task(_trigger_greeting())
