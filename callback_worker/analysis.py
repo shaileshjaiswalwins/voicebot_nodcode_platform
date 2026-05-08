@@ -21,7 +21,7 @@ DISPOSITION_MAP: dict[str, str] = {
     "Not Interested":                   "The customer clearly stated they are not interested or do not need the product.",
     "Could Not Confirm":                "The customer was uncertain or did not confirm whether they still need the product — includes vague/non-committal responses, mid-conversation disconnections where no product confirmation was obtained, and cases where the call dropped before any meaningful product exchange.",
     "Alternate Number":                 "The customer provided a different or alternate contact number.",
-    "Already Spoken":                   "The customer has already discussed or interacted about the requirement with JD or the seller.",
+    "Already Spoken":                   "The customer has already discussed or interacted about the requirement with JD or the seller, OR the customer's requirement has already been fulfilled.",
     "Will do it Myself":                "The customer still has the requirement but will source/handle it themselves without JD's help — they explicitly declined seller connections (e.g. 'मैं खुद देख लूँगा', 'I'll manage it myself'). The need exists; only JD's assistance is rejected. Distinct from Not Interested.",
     "Call Rescheduled":                 "The customer asked to call at a specific date and time.",
     "Seller Intent":                    "The caller is a seller or vendor trying to offer their own products/services — they are NOT a buyer with a requirement. They may want to list on JustDial or pitch their business. This is the opposite of a buyer lead.",
@@ -240,7 +240,7 @@ RULE 11 — CALL RESCHEDULED:
   → "Call Rescheduled". STOP.
 
 RULE 12 — ALREADY SPOKEN:
-  Condition: Customer explicitly stated they have already spoken about this requirement with JD staff or the seller.
+  Condition: Customer explicitly stated they have already spoken about this requirement with JD staff or the seller, OR the customer's requirement has already been fulfilled (e.g. "already purchased", "kaam ho gaya", "le liya", "mil gaya", "sorted", "done already").
   → "Already Spoken". STOP.
 
 RULE 13 — ALTERNATE NUMBER:
@@ -272,7 +272,8 @@ RULE 16 — NOT INTERESTED:
     ✓ There is NO positive engagement, NO spec answers, NO product questions anywhere in the call
     ✓ The buyer's FINAL and OVERALL stance is negative — not just an early statement that was later reversed
     ✓ Cannot be explained by Seller Intent, Will do it Myself, Already Spoken, or Wrong Number
-  Signals: "नहीं चाहिए", "requirement नहीं है", "cancel कर दो", "already purchased", "kaam ho gaya".
+  Signals: "नहीं चाहिए", "requirement नहीं है", "cancel कर दो".
+  NOTE: "already purchased", "kaam ho gaya", "le liya", "sorted" etc. → use Already Spoken (Rule 12), NOT this rule.
   ⚠ DO NOT USE if: the buyer said "नहीं" once but then asked any question or provided any information → use Interested or Could Not Confirm.
   → "Not Interested". STOP.
 
