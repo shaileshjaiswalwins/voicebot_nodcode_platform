@@ -2,8 +2,10 @@
 set -e
 cd "$(dirname "$0")"
 
+export BOT_PORT="${BOT_PORT:-8081}"
+
 # Kill any stale worker on the LiveKit agents port
-fuser -k 8081/tcp 2>/dev/null || true
+fuser -k "${BOT_PORT}/tcp" 2>/dev/null || true
 
 UV=$(which uv 2>/dev/null || echo "$HOME/.local/bin/uv")
 
@@ -15,5 +17,5 @@ fi
 echo "[start.sh] Syncing dependencies..."
 "$UV" sync
 
-echo "[start.sh] Starting LiveKit native bot..."
+echo "[start.sh] Starting LiveKit native bot on port ${BOT_PORT}..."
 "$UV" run python bot.py start
