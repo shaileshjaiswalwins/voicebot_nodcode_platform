@@ -40,7 +40,7 @@ async def send_callback(
     return False
 
 
-def build_callback_payload(doc: dict, analysis: dict) -> dict:
+def build_callback_payload(doc: dict, analysis: dict, b2b_score: dict | None = None) -> dict:
     """Build the exact callback payload shape the original bot produced."""
     status = doc.get("status", "completed")
     outcome = analysis.get("call_outcome", status_to_outcome(status))
@@ -49,10 +49,14 @@ def build_callback_payload(doc: dict, analysis: dict) -> dict:
     if status == "disconnected" and outcome in ("Approved", "Enriched"):
         status = "completed"
 
+    _b2b = b2b_score or {}
     payload: dict = {
         "call_id": doc.get("call_id", ""),
         "lead_id": doc.get("lead_id"),
         "is_business": analysis.get("is_business", ""),
+        "deal_value": _b2b.get("deal_value", ""),
+        "lead_intent_score": _b2b.get("lead_intent_score", ""),
+        "urgency_flag": _b2b.get("urgency_flag", "no"),
         "ai_partner": "inh-suny-bot",
         "call_outcome": outcome,
         "call_outcome_desc": analysis.get("call_outcome_description", DISPOSITION_MAP.get(outcome, "")),

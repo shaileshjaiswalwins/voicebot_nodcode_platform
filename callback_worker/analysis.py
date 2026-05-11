@@ -365,3 +365,84 @@ STRICT OUTPUT RULES:
     except Exception as e:
         logger.error(f"[ANALYSIS] LLM analysis failed: {type(e).__name__}: {e}")
         return fallback_analysis(base_status)
+
+
+_FALLBACK_B2B_SCORE: dict = {"deal_value": "", "lead_intent_score": "", "urgency_flag": "no"}
+
+
+async def generate_b2b_score(
+    transcript: list[dict],
+    http_session: aiohttp.ClientSession,
+) -> dict:
+    """Run B2B lead-scoring rubric on the transcript. Returns deal_value, lead_intent_score, urgency_flag."""
+    if not transcript:
+        return _FALLBACK_B2B_SCORE.copy()
+
+    lines = "\n".join(f"{t['role'].upper()}: {t['text']}" for t in transcript)
+
+    prompt = f"""You are an expert B2B lead qualification analyst. Your task is to score a sales call transcript and return a structured JSON object. Score only what is explicitly stated — do not infer or assume missing information. If the user is talking about multiple products, consider only the main product in the conversation.
+
+SCORING RUBRIC (max 10 points)
+
+1. Requirement Intent (0–5 pts) — How certain is the prospect about purchasing?
+   → Explicit, confident intent ("we need", "we want to order")          5
+   → Positive but hedged ("probably", "thinking about it", "might")      3–4
+   → Vague or exploratory only ("just checking", "not sure yet")         1–2
+   → No intent, or explicitly not buying                                 0  → triggers final_score override (see rules)
+
+2. Requirement Clarity (0–3.5 pts) — How actionable is the stated requirement?
+   → Quantity + product type + specifications all clearly stated         3–3.5
+   → Quantity or specs stated, but not both                              1.5–2.5
+   → Neither quantity nor specs provided                                 0–1
+
+3. Engagement & Completion (0–1.5 pts) — Did the prospect actively participate?
+   → Answered all or most questions and stayed till the end              1.5
+   → Partial engagement, some questions skipped or deflected             0.5–1
+   → Dropped call or non-cooperative                                     0
+
+DERIVED FIELDS
+- urgency_flag: Set true if the prospect explicitly mentions urgency (e.g. "urgent", "ASAP", "by Friday", specific near deadline). Otherwise false.
+- extracted_quantity: The numeric quantity stated. If a range is given, return the average.
+- estimated_unit_price: Infer a reasonable B2B market price range per unit strictly in the Indian landscape, based on the product type and any constraints mentioned on the call. Return as an object with low and high values in INR.
+- estimated_deal_value: Computed as {{ "low": extracted_quantity * estimated_unit_price.low, "high": extracted_quantity * estimated_unit_price.high }}.
+- lead_category: Based on final_score — "High" (7–10), "Medium" (4–6.9), "Low" (0–3.9).
+
+HARD RULES
+1. If requirement_intent_score = 0, set final_score = 0 immediately and do not compute other scores.
+2. final_score = requirement_intent_score + clarity_score + engagement_score. No other formula.
+3. Score buying signals only — ignore tone, sentiment, and politeness.
+4. The reason field must follow this structure: [what signals intent] · [what clarity gaps exist, if any] · [engagement observation].
+5. A relevant short or single-word answer ("yes", "correct", "confirmed") given in direct response to a question counts as fully valid for that dimension. Do not penalize brevity — score the signal, not the elaboration.
+
+OUTPUT — strict JSON, no additional keys or commentary:
+{{
+  "deal_value": "<estimated deal value range as a string, e.g. '₹50,000 - ₹1,00,000', or '' if cannot be determined>",
+  "lead_intent_score": "<final_score as a string, e.g. '7.5'>",
+  "urgency_flag": "<'yes' if urgency detected, 'no' otherwise>"
+}}
+
+CONVERSATION TO ANALYZE:
+{lines}"""
+
+    try:
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"gemini-2.5-flash-lite:generateContent?key={GEMINI_API_KEY}"
+        )
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
+        }
+        async with http_session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            data = await resp.json()
+            if "candidates" not in data or not data["candidates"]:
+                raise ValueError(f"No candidates: {data.get('error') or data}")
+            raw = data["candidates"][0]["content"]["parts"][0]["text"]
+            result = json.loads(raw)
+            result.setdefault("deal_value", "")
+            result.setdefault("lead_intent_score", "")
+            result.setdefault("urgency_flag", "no")
+            return result
+    except Exception as e:
+        logger.error(f"[B2B SCORE] LLM scoring failed: {type(e).__name__}: {e}")
+        return _FALLBACK_B2B_SCORE.copy()

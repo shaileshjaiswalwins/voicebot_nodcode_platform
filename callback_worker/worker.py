@@ -8,7 +8,7 @@ import aiohttp
 from loguru import logger
 from pymongo import ASCENDING, MongoClient
 
-from .analysis import fallback_analysis, generate_call_analysis
+from .analysis import fallback_analysis, generate_b2b_score, generate_call_analysis
 from .callback import CALLBACK_API_URL, build_callback_payload, send_callback
 from .config import BATCH_LIMIT, MONGO_COLLECTION, MONGO_DB, MONGO_URI, POLL_INTERVAL_SEC
 
@@ -44,13 +44,18 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
     schema = (doc.get("lead_record") or {}).get("qualification_schema", {}) or {}
     status = doc.get("status", "completed")
 
+    transcript = doc.get("transcript") or []
     try:
-        analysis = await generate_call_analysis(doc.get("transcript") or [], status, schema, http_session)
+        analysis, b2b_score = await asyncio.gather(
+            generate_call_analysis(transcript, status, schema, http_session),
+            generate_b2b_score(transcript, http_session),
+        )
     except Exception as e:
         logger.warning(f"[WORKER] Analysis failed for doc {doc_id}: {e} — using fallback")
         analysis = fallback_analysis(status)
+        b2b_score = {"deal_value": "", "lead_intent_score": "", "urgency_flag": "no"}
 
-    payload = build_callback_payload(doc, analysis)
+    payload = build_callback_payload(doc, analysis, b2b_score)
     ok = await send_callback(payload, http_session, CALLBACK_API_URL)
 
     if ok:
