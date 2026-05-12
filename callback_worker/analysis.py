@@ -77,6 +77,64 @@ async def generate_call_analysis(
     if not transcript:
         return fallback_analysis(base_status)
 
+    # --- Deterministic pre-LLM guards (saves cost + prevents model misclassification) ---
+
+    user_turns = [t for t in transcript if t.get("role") == "user"]
+    non_empty_user_turns = [t for t in user_turns if (t.get("text") or "").strip()]
+
+    # No real user speech at all → Short Hangup (covers silent calls, inactivity timeouts,
+    # and cases where STT saved empty strings for every user turn)
+    if not non_empty_user_turns:
+        return {
+            "call_outcome": "Short Hangup",
+            "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
+            "call_summary": "No user response recorded — call ended with agent turns only.",
+            "is_business": "", "business_city": "", "business_name": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
+
+    _VOICEMAIL_SIGNALS_PRE = [
+        "leave a message", "leave your message", "please leave a message",
+        "after the beep", "after the tone", "at the beep",
+        "you have reached", "you've reached",
+        "unable to take your call", "cannot take your call",
+        "not available to take your call",
+        "record your message", "record a message",
+        "mailbox is full", "mailbox full",
+        "voice mail recording", "voicemail recording",
+        "you may hang up", "may hang up now",
+        "finished recording hang up", "when you have finished recording",
+    ]
+    _HOLD_MUSIC_SIGNALS_PRE = [
+        "put your call on hold",
+        "placed your call on hold",
+        "has put your call on hold",
+        "पुट योर कॉल ऑन होल्ड",           # transliterated English in Hindi script
+        "होल्ड पर राख्यो छे",              # Gujarati hold-music phrase
+        "hold par rakho chhe",
+    ]
+
+    for turn in transcript:
+        text_lower = (turn.get("text") or "").lower()
+        if any(sig in text_lower for sig in _VOICEMAIL_SIGNALS_PRE):
+            return {
+                "call_outcome": "Voicemail",
+                "call_outcome_description": DISPOSITION_MAP["Voicemail"],
+                "call_summary": "Call was answered by voicemail or automated IVR system.",
+                "is_business": "", "business_city": "", "business_name": "",
+                "qna": [], "product_change": {}, "rescheduled_to": "",
+            }
+        if any(sig in text_lower for sig in _HOLD_MUSIC_SIGNALS_PRE):
+            return {
+                "call_outcome": "Could Not Confirm",
+                "call_outcome_description": DISPOSITION_MAP["Could Not Confirm"],
+                "call_summary": "Caller placed the bot on hold; no product confirmation was obtained.",
+                "is_business": "", "business_city": "", "business_name": "",
+                "qna": [], "product_change": {}, "rescheduled_to": "",
+            }
+
+    # --- End pre-LLM guards ---
+
     questions = schema.get("question", []) if schema else []
     q_list = json.dumps(
         [{
@@ -131,7 +189,8 @@ Apply these first. Each is a complete, unambiguous signal that overrides everyth
 
 RULE 0 — SHORT HANGUP:
   Condition A (zero engagement): The buyer said NOTHING at all — there are zero buyer turns in the transcript, or the call ended immediately after the agent's greeting with no buyer response whatsoever.
-  Condition B (bare acknowledgment only): The buyer's ONLY responses were bare call-acknowledgments — e.g. "hello", "haan", "haan boliye", "ek second", "hold on", "ji", "kaun hai", "kya hai" — and the call ended before the agent even raised the product topic, OR after only the opening line with no product discussion at all.
+  Condition B (bare acknowledgment only): The buyer's ONLY responses were bare call-presence acknowledgments with no engagement with the product topic — e.g. "hello", "haan", "haan boliye", "ek second", "hold on", "ji", "kaun hai", "kya hai", "haan bolo", "ek minute", "ruko", "bhai", calling out a person's name ("आलोक भाई", "[name] bhai/ji") thinking it was a personal call, or asking about the agent's identity/gender ("लड़की है ना?", "kaun bol raha hai?", "kya aap insaan ho?", "which company?") — and the call ended before the agent even raised the product topic, OR the agent raised the product topic but the buyer's only response(s) remained in this bare-acknowledgment category with no reaction to the product itself.
+  GENERAL PRINCIPLE: Any response that is solely about the presence/identity of the caller or agent, and does NOT in any way engage with, react to, or even acknowledge having heard the product topic, qualifies as a bare acknowledgment.
   COMBINED TEST: Did the buyer engage with the product topic in any way — hear about it, respond to it, ask about it, or react to it? If YES → do NOT use Short Hangup. Move to the next rule.
   STRICT: A buyer saying "नहीं" in response to the product question is a product-topic response → do NOT use Short Hangup. Only bare call-presence acknowledgments before the product topic count.
   → "Short Hangup". STOP.
@@ -155,11 +214,15 @@ RULE 2 — VOICEMAIL:
       • "leave a message", "leave your message", "please leave a message"
       • "after the beep", "after the tone", "at the beep"
       • "when you are finished recording", "when you have finished recording", "finished recording hang up"
-      • "not available", "unable to take your call", "cannot take your call"
+      • "not available", "unable to take your call", "cannot take your call", "not available to take your call"
       • "you have reached", "you've reached", "you have reached the voicemail"
       • "record your message", "record a message"
       • "hang up or press", "press pound", "press hash"
       • "mailbox is full", "mailbox full"
+      • "voice mail recording", "voicemail recording"
+      • "you may hang up", "may hang up now"
+      • "cannot come to the phone", "is not available right now"
+      • "please try again later", "try your call again later"
     Hindi/Hinglish signals:
       • "sandesh chhod", "sandesh chhodein", "message chhod", "message chhodein"
       • "beep ke baad", "tone ke baad"
@@ -176,6 +239,12 @@ RULE 2 — VOICEMAIL:
 
   CRITICAL: Do NOT let voicemail message content trigger Abusive Lead or any other rule. The voicemail system may say things like "hang up", "your call cannot be taken", "please try later" — these are automated system phrases, NOT human responses. Always classify as Voicemail if signals are present.
   → "Voicemail". STOP.
+
+RULE 2A — CALL ON HOLD (caller placed bot on hold):
+  Condition: A user/buyer turn contains a carrier or PBX hold-music IVR announcement — the clearest signal is the SAME message repeated in multiple languages within a single turn (e.g. Gujarati + Hindi + English in one block), or any of these phrases: "put your call on hold", "placed your call on hold", "please stay on the line", "stay on the line", "hold par rakha hai", "hold par raho", "लाइन पर रहो", "लाइन पर बने रहें", "होल्ड पर राख्यो छे".
+  DISTINGUISH FROM VOICEMAIL: Voicemail = no live person ever answered. Hold = a live person answered but physically placed the call on hold. Do not confuse these.
+  NOTE: A buyer saying "hold on" or "ek second" themselves is Rule 0 (Short Hangup), NOT this rule. Rule 2A applies only when the carrier/PBX system's automated hold-music message appears as a transcript turn.
+  → "Could Not Confirm". STOP.
 
 RULE 3 — WRONG NUMBER:
   Condition: Person who answered confirmed the number does not belong to the intended customer.
@@ -206,7 +275,7 @@ Before applying Rules 7–9, determine: Did the customer confirm the product?
   • Saying "हाँ" / "जी हाँ" / "हां" / "yes" / "ji" / "bilkul" in response to "do you need X?" or "आपको X की requirement है ना?"
   • Naming a specific product variant or material (e.g. "gate वाला", "stainless चाहिए")
   • Providing ANY specific product specification, grade, or quantity value
-  • Asking the agent a question about the product (pricing, delivery, timeline etc.) — implicit confirmation
+  • Asking the agent a question SPECIFICALLY about the product (pricing, delivery, timeline, specs, availability) — implicit confirmation. Generic questions like "can you help me?", "which company?" or questions about the agent's identity do NOT count.
   PROGRESSION: If buyer said "नहीं" initially but then provided a spec or asked about the product → product IS confirmed. The later positive action overrides the initial "नहीं."
 If ANY of the above happened anywhere in the call → product IS confirmed. Go to Rules 7–9.
 If NONE of the above happened → skip Rules 7–9, go to Rule 10.
@@ -230,8 +299,14 @@ RULE 9 — INTERESTED (product confirmed, zero specs):
   → "Interested". STOP.
 
 RULE 10 — INTERESTED (positive engagement, no confirmation):
-  Condition: Customer did NOT give an explicit product confirmation but showed CLEAR positive interest — engaged meaningfully with the product topic, asked follow-up questions, or showed enthusiasm — without a final clear rejection.
-  STRICT: There must be a clearly positive, engaged response. Vague or non-committal → use Could Not Confirm (Tier 3). Reflex "नहीं" followed by genuine questions about the product → use Interested.
+  Condition: Customer did NOT give an explicit product confirmation but showed CLEAR positive interest that is SPECIFICALLY ABOUT THE PRODUCT BEING QUALIFIED — e.g. asked about pricing, delivery timeline, product variants/specs, availability, quantity, or made a product-related comparison — without a final clear rejection.
+  STRICT: There must be a clearly positive, product-focused response. The following do NOT qualify:
+    ✗ Generic questions about the call or caller: "can you help me?", "what is this?", "which company are you from?", "kaun bol raha hai?" — about the call, not the product.
+    ✗ Questions about the agent's identity or humanity: "lड़की है ना?", "are you a robot?", "who are you?"
+    ✗ The buyer's expressed need is the OPPOSITE of buying the product (e.g. they want to sell/dispose of the item, not purchase it) — use Not Interested.
+    ✗ Vague callbacks: "baad mein call karo", "call me later", "abhi busy hoon" without any product engagement — use Could Not Confirm.
+    ✗ Vague or non-committal responses without product content — use Could Not Confirm (Tier 3).
+  Reflex "नहीं" followed by genuine product-specific questions → use Interested.
   → "Interested". STOP.
 
 RULE 11 — CALL RESCHEDULED:
@@ -260,7 +335,7 @@ If ANY Tier 2 rule was even partially applicable, re-examine before falling here
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
 RULE 15 — COULD NOT CONFIRM:
-  Condition: Any of the following — (a) customer gave genuinely vague or non-committal responses about whether they STILL need the product (e.g. "शायद", "पता नहीं", "I'll think about it", "not sure yet"); (b) the call disconnected mid-conversation before any product confirmation was obtained and no other rule matched; (c) the call dropped after the product topic was raised but before the customer gave any usable response.
+  Condition: Any of the following — (a) customer gave genuinely vague or non-committal responses about whether they STILL need the product (e.g. "शायद", "पता नहीं", "I'll think about it", "not sure yet"); (b) vague callback requests with no product engagement ("baad mein call karo", "call me later", "abhi busy hoon", "thodi der baad call karna") — the buyer gave no product signal, just asked to be called later without a specific time; (c) the call disconnected mid-conversation before any product confirmation was obtained and no other rule matched; (d) the call dropped after the product topic was raised but before the customer gave any usable response; (e) the buyer's response was off-topic (about something completely unrelated to the product) with no product engagement detected.
   No spec answers, no clear confirmation, no clear rejection required to use this outcome.
   STRICT: Do NOT use this if the customer said "हाँ/yes" or provided any spec detail → that is Interested (Tier 2). Do NOT use this if the customer was clearly positively interested → use Interested (Rule 10). Do NOT use this if the customer clearly rejected the product → use Not Interested (Rule 16). Do NOT use this if the customer never heard the product topic → use Short Hangup (Rule 0).
   → "Could Not Confirm". STOP.
