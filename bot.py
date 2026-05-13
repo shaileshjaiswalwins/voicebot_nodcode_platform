@@ -593,25 +593,33 @@ def _build_question_phrase_rules(questions: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def build_questions_text(schema: dict) -> str:
+def build_questions_text(schema: dict, is_business=None) -> str:
     questions = schema.get("question", [])
-    if not questions:
-        return "No specific questions — gather general requirements naturally."
     lines = []
-    for i, q in enumerate(questions, 1):
-        text = q.get("text", "").strip().rstrip(":")
-        q_type = q.get("type", "")
-        if q_type == "radio":
-            opts = [o.get("text", "") for o in (q.get("option") or []) if o.get("text")]
-            lines.append(f"{i}. {text}")
-            if opts:
-                lines.append(f"   Options: {', '.join(opts)}")
-        elif q_type == "quantity":
-            units = q.get("quantity_unit") or []
-            lines.append(f"{i}. {text}")
-            lines.append(f"   Ask for amount and unit ({', '.join(units) if units else 'any unit'})")
-        else:
-            lines.append(f"{i}. {text}")
+    if not questions:
+        lines.append("No specific questions — gather general requirements naturally.")
+    else:
+        for i, q in enumerate(questions, 1):
+            text = q.get("text", "").strip().rstrip(":")
+            q_type = q.get("type", "")
+            if q_type == "radio":
+                opts = [o.get("text", "") for o in (q.get("option") or []) if o.get("text")]
+                lines.append(f"{i}. {text}")
+                if opts:
+                    lines.append(f"   Options: {', '.join(opts)}")
+            elif q_type == "quantity":
+                units = q.get("quantity_unit") or []
+                lines.append(f"{i}. {text}")
+                lines.append(f"   Ask for amount and unit ({', '.join(units) if units else 'any unit'})")
+            else:
+                lines.append(f"{i}. {text}")
+
+    if is_business == "":
+        n = len(questions)
+        lines.append(f"{n + 1}. Is this product needed for business or personal use?  (yes/no)")
+        lines.append(f"   → If YES: ask \"{n + 2}. What is your business name?\" then \"{n + 3}. What is your city?\"")
+        lines.append(f"   → If NO or unclear: skip to closing")
+
     return "\n".join(lines)
 
 
@@ -684,13 +692,14 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     keyword = search.get("searched_keyword", "")
     product_name = keyword or product.get("product_name", "")
     questions = schema.get("question", [])
+    is_business = buyer.get("is_business", "")
 
     mandatory_opening = (
         f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
         f"आपको {product_name} की requirement है ना?"
     )
 
-    questions_block = "\n".join(f"{i}. {q.get('text')}" for i, q in enumerate(questions, 1))
+    questions_block = build_questions_text(schema, is_business=is_business if is_business == "" else None)
     mapping_block = "\n" + _build_question_phrase_rules(questions) + "\n"
 
     closing_instruction = (
@@ -699,6 +708,35 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
         or cfg.get("closing_instruction")
         or "After all questions are answered, close the call warmly."
     )
+
+    business_prompt_section = ""
+    if is_business == "":
+        business_prompt_section = f"""
+━━━ BUSINESS USE — CONVERSATIONAL HANDLING ━━━
+
+After ALL qualification questions are answered, ask naturally:
+  "एक बात और — क्या यह {product_name} business के लिए चाहिए आपको?"
+
+IF the buyer says YES (हाँ / हां / ji / bilkul / yes / business ke liye):
+  - Warmly acknowledge: "अच्छा, business के लिए — ज़रूर!"
+  - Ask business name: "आपके business का नाम क्या है?"
+  - After they answer, ask city: "और आपका business किस city में है?"
+  - Then close the call.
+
+IF the buyer says NO (नहीं / personal / ghar ke liye / khud ke liye):
+  - Accept naturally and move straight to closing. Do NOT ask business name or city.
+
+IF the buyer is unclear or doesn't respond properly:
+  - Re-ask once: "जी, मतलब क्या यह किसी business या shop के लिए है?"
+  - If still unclear: accept as unknown and proceed to closing.
+
+TONE RULES for this section:
+  - Keep it light and quick — these are 2 extra questions, not an interrogation.
+  - Do NOT announce "ab main business ke baare mein poochhungi" — just ask naturally after the last qualification question.
+  - If the buyer proactively mentions business/shop earlier in the call, skip this question and directly ask business name and city at that point.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
 
     lead_section = f"""
 ━━━ CALL CONTEXT ━━━
@@ -732,7 +770,7 @@ NEVER move to the next question or close the call if the current question has no
 - ONLY close the call after every question has received at least some response (even "not sure").
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"""
+{business_prompt_section}"""
     return base + lead_section + mapping_block
 
 

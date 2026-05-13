@@ -390,6 +390,39 @@ EXTRACTION RULES (all mandatory):
 Each qna entry: {{"id": <qid>, "quest": <question text>, "answ": <normalized English answer>, "opt_id": <matching option id or null>}}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2B — EXTRACT BUSINESS DETAILS
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+Read the full transcript and extract these three fields:
+
+is_business:
+  - Set "True"  if the buyer confirmed the product is for business/commercial/shop/company use
+    Signals: "business ke liye", "shop ke liye", "company ke liye", "haan business hai", "dukaan ke liye", "व्यापार", "business purpose"
+  - Set "False" if the buyer said it is for personal/home use
+    Signals: "ghar ke liye", "personal use", "khud ke liye", "apne liye", "घर के लिए"
+  - Set ""      if business/personal use was never asked or the buyer's answer was unclear
+
+business_name:
+  - Extract the exact name the buyer stated for their business/shop/company
+  - Look anywhere in the transcript — the buyer may have mentioned it proactively even before being asked
+  - Accept Hindi, English, or mixed-language names as spoken (do NOT translate or normalize)
+  - If buyer was asked but said they don't know / refused / unclear → set ""
+  - If the topic was never discussed → set ""
+
+business_city:
+  - Extract the city the buyer stated specifically for their business location
+  - Note: the buyer's personal city may already be known — extract only a city the buyer explicitly mentions
+    in the context of their business ("hamare business ka city X hai", "shop X mein hai", etc.)
+  - If buyer gave a city answer to the business city question → use that value
+  - If buyer was not asked or gave no city for business → set ""
+
+STRICT RULES:
+  - Do NOT infer or guess. Only extract values explicitly stated by the buyer.
+  - Do NOT use the buyer's personal city (from lead data) as business_city unless the buyer explicitly says their business is in that city during the call.
+  - business_name and business_city are ONLY populated when is_business is "True".
+  - If is_business is "False" or "" → set both business_name and business_city to "".
+
+━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 3 — RETURN JSON
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -398,7 +431,9 @@ Return a SINGLE JSON object with EXACTLY these keys — no extra keys, no markdo
   "call_outcome": "<one exact string from the valid outcome list>",
   "call_outcome_description": "<the corresponding description from the list>",
   "call_summary": "<1-2 sentence English summary of what happened on the call>",
-  "is_business": "<'True' if purchasing for business | 'False' if personal | '' if unknown>",
+  "is_business": "<'True' | 'False' | '' — per Step 2B>",
+  "business_name": "<exact business name from transcript, or ''>",
+  "business_city": "<business city from transcript, or ''>",
   "qna": [ ...entries per Step 2... ],
   "product_change": {{"product_name": "<new product name>"}},  // or {{}} if no product switch
   "rescheduled_to": "<ISO datetime YYYY-MM-DDTHH:MM:SS in IST if rescheduled, else ''>"

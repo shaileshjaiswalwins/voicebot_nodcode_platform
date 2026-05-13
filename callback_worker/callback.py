@@ -54,6 +54,8 @@ def build_callback_payload(doc: dict, analysis: dict, b2b_score: dict | None = N
         "call_id": doc.get("call_id", ""),
         "lead_id": doc.get("lead_id"),
         "is_business": analysis.get("is_business", ""),
+        "business_name": analysis.get("business_name", ""),
+        "business_city": analysis.get("business_city", ""),
         "deal_value": _b2b.get("deal_value", ""),
         "lead_intent_score": _b2b.get("lead_intent_score", ""),
         "urgency_flag": _b2b.get("urgency_flag", "no"),
