@@ -60,8 +60,16 @@ load_dotenv(override=True)
 # File logging — rotate daily, keep 30 days, write to LOG_DIR (default /var/log/voicebot)
 # ---------------------------------------------------------------------------
 _BOT_PORT = os.environ.get("BOT_PORT", "8081")
-_LOG_DIR = os.path.join(os.environ.get("BOT_LOG_DIR", "/home/yogeshv_10011835/voicebot_nodcode_platform/logs/8081"), _BOT_PORT)
+_LOG_DIR = os.path.join(os.environ.get("BOT_LOG_DIR", "/home/yogeshv_10011835/voicebot_nodcode_platform/logs/"), _BOT_PORT)
 os.makedirs(_LOG_DIR, exist_ok=True)
+
+
+def _log_format(record: dict) -> str:
+    caller = record["extra"].get("caller", "")
+    caller_col = f"{caller:<15} | " if caller else (" " * 17)
+    return "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<7} | " + caller_col + "{message}\n"
+
+
 logger.add(
     os.path.join(_LOG_DIR, "{time:YYYY-MM-DD}.log"),
     rotation="00:00",       # new file each day at midnight
@@ -69,7 +77,7 @@ logger.add(
     compression="gz",       # compress rotated files to save space
     level="INFO",
     enqueue=True,           # async-safe — won't block the event loop
-    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<7} | {message}",
+    format=_log_format,
 )
 
 # Suppress the benign "failed to send binary stream message / engine is closed"
@@ -874,6 +882,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _lead_id_meta = _room_meta_raw.get("lead_id", "")
     _room_mobile_m = re.search(r'__(\d{10,12})_', room_name)
     _room_mobile = normalize_mobile(_room_mobile_m.group(1)) if _room_mobile_m else ""
+    _log = logger.bind(caller=_room_mobile or room_name[-15:])
+
+    _SEP = "═" * 68
+    _log.info(_SEP)
+    _log.info(
+        f"[CALL START] room={room_name} | lead_id={_lead_id_meta!r} | mobile={_room_mobile!r}"
+    )
+    _log.info(_SEP)
+
     _early_lead_task: asyncio.Task | None = None
     if _lead_id_meta or _room_mobile:
         _early_lead_task = asyncio.ensure_future(
@@ -966,7 +983,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 await asyncio.sleep(2)
                 await _delete_room_safe(attempt + 1)
         except Exception as e:
-            logger.error(f"[CLOSE] delete_room failed (attempt {attempt}): {e}")
+            _log.error(f"[CLOSE] delete_room failed (attempt {attempt}): {e}")
         finally:
             await lkapi.aclose()
 
@@ -981,7 +998,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _RemoveParticipantRequest(room=room_name, identity=_caller_identity)
             )
         except Exception as e:
-            logger.warning(f"[CLOSE] remove_participant failed: {e}")
+            _log.warning(f"[CLOSE] remove_participant failed: {e}")
         finally:
             await lkapi.aclose()
 
@@ -996,7 +1013,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _t.cancel()
 
         lead_id = call_state.get("record_id")
-        logger.info(
+        _log.info(
             f"[SAVE_CALL] save_call_data called | status={status!r} | "
             f"record_id={lead_id!r} | call_id={call_state.get('call_id')!r} | "
             f"lead_record_present={bool(call_state.get('lead_record'))}"
@@ -1056,9 +1073,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         try:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, lambda: _get_mongo_collection().insert_one(_mongo_doc))
-            logger.info(f"[MONGO] Transcript saved | lead_id={lead_id!r} | call_id={call_state.get('call_id')!r}")
+            _log.info(f"[MONGO] Transcript saved | lead_id={lead_id!r} | call_id={call_state.get('call_id')!r}")
         except Exception as e:
-            logger.error(f"[MONGO] insert failed: {e}")
+            _log.error(f"[MONGO] insert failed: {e}")
 
         _lead = call_state.get("lead_record") or {}
         _search_ctx = _lead.get("search_context") or {}
@@ -1113,6 +1130,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         }
         await save_call_log_to_backend(call_log_payload)
 
+        _log.info(_SEP)
+        _log.info(
+            f"[CALL END] room={room_name} | status={status!r} | "
+            f"duration={_duration}s | lead_id={lead_id!r}"
+        )
+        _log.info(_SEP)
+
     _save_done_event = asyncio.Event()
 
     async def _save_and_close(status: str) -> None:
@@ -1157,7 +1181,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if _nudge_count >= 2:
             _nudge_count = 0
             _inactivity_task = None
-            logger.info("[INACTIVITY] 30 s of silence — ending call directly")
+            _log.info("[INACTIVITY] 30 s of silence — ending call directly")
             call_state["ended_naturally"] = True
             end_phrase = INACTIVITY_END_PHRASE
             try:
@@ -1169,7 +1193,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             asyncio.ensure_future(_save_and_close("completed"))
         else:
             nudge = INACTIVITY_PHRASE
-            logger.info(f"[INACTIVITY] 15 s nudge — saying: {nudge!r}")
+            _log.info(f"[INACTIVITY] 15 s nudge — saying: {nudge!r}")
             try:
                 await session.say(nudge, allow_interruptions=True)
             except Exception:
@@ -1184,7 +1208,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         had_task = _inactivity_task and not _inactivity_task.done()
         if had_task:
             _inactivity_task.cancel()
-        logger.info(f"[INACTIVITY] timer reset (prev_task_cancelled={had_task})")
+        _log.info(f"[INACTIVITY] timer reset (prev_task_cancelled={had_task})")
         _inactivity_task = asyncio.create_task(_inactivity_timeout())
 
     def _cancel_inactivity() -> None:
@@ -1248,7 +1272,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     )):
                         _early_close_muting = True
                         _set_mic(False, reason="stream-closing-phrase")
-                        logger.info(f"[STREAM-DETECT] Closing phrase in stream — mic muted | buf={buf!r}")
+                        _log.info(f"[STREAM-DETECT] Closing phrase in stream — mic muted | buf={buf!r}")
         except Exception:
             pass
 
@@ -1281,7 +1305,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     new_path = f"/tmp/caller_{room_name.replace('/', '_')[-40:]}_{segment}.wav"
                     _wav_paths[0] = new_path
                     wf = _open_wav(new_path)
-                    logger.info(
+                    _log.info(
                         f"[AUDIO-BUF] WAV rotated → seg {segment} "
                         f"(prev speech_ms={prev_speech_ms:.0f} path={new_path})"
                     )
@@ -1317,7 +1341,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             return None
         speech_ms = _user_audio["speech_ms"]
         if speech_ms < _sarvam_min_speech_ms:
-            logger.info(f"[SARVAM] skipped — speech_ms={speech_ms:.0f} < min={_sarvam_min_speech_ms}")
+            _log.info(f"[SARVAM] skipped — speech_ms={speech_ms:.0f} < min={_sarvam_min_speech_ms}")
             return None
         wav_path = _wav_paths[0]
         if not Path(wav_path).exists():
@@ -1347,7 +1371,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             and (tokens[0] if tokens else "") in _SARVAM_FILLER_HALLUCINATIONS
                             and speech_ms < _sarvam_min_speech_ms_singleword
                         ):
-                            logger.info(
+                            _log.info(
                                 f"[SARVAM] dropped single-word hallucination {text!r} "
                                 f"(speech_ms={speech_ms:.0f})"
                             )
@@ -1355,18 +1379,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         # Drop transcripts that are entirely hello/check-in noise (e.g.
                         # "हेलो हेलो हेलो" produced when user was just checking the line).
                         if tokens and all(t in _SARVAM_FILLER_HALLUCINATIONS for t in tokens):
-                            logger.info(
+                            _log.info(
                                 f"[SARVAM] dropped all-filler transcript {text!r} "
                                 f"(speech_ms={speech_ms:.0f})"
                             )
                             return None
-                        logger.info(f"[SARVAM] Fallback STT: {text!r} (speech_ms={speech_ms:.0f})")
+                        _log.info(f"[SARVAM] Fallback STT: {text!r} (speech_ms={speech_ms:.0f})")
                         return text
                 else:
                     body = await resp.text()
-                    logger.warning(f"[SARVAM] STT failed: {resp.status} {body[:200]}")
+                    _log.warning(f"[SARVAM] STT failed: {resp.status} {body[:200]}")
         except Exception as e:
-            logger.warning(f"[SARVAM] STT error: {e}")
+            _log.warning(f"[SARVAM] STT error: {e}")
         return None
 
     async def _transcribe_muted_period(frames: list, speech_ms: float) -> None:
@@ -1400,19 +1424,19 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     result = await resp.json()
                     text = (result.get("transcript") or "").strip()
                     if not text:
-                        logger.info(
+                        _log.info(
                             f"[MUTED-CAPTURE] Sarvam returned empty transcript "
                             f"(speech_ms={speech_ms:.0f})"
                         )
                         return
                     tokens = re.sub(r"[^\w\s]", "", text.lower()).split()
                     if tokens and all(t in _SARVAM_FILLER_HALLUCINATIONS for t in tokens):
-                        logger.info(
+                        _log.info(
                             f"[MUTED-CAPTURE] dropped all-filler {text!r} "
                             f"(speech_ms={speech_ms:.0f})"
                         )
                         return
-                    logger.info(
+                    _log.info(
                         f"[MUTED-CAPTURE] captured user speech: {text!r} "
                         f"(speech_ms={speech_ms:.0f}) — buffered, not sent to Gemini"
                     )
@@ -1421,18 +1445,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     _muted_inject["text"] = text
                 else:
                     body = await resp.text()
-                    logger.warning(
+                    _log.warning(
                         f"[MUTED-CAPTURE] Sarvam STT failed: {resp.status} {body[:200]}"
                     )
         except Exception as e:
-            logger.warning(f"[MUTED-CAPTURE] error: {e}")
+            _log.warning(f"[MUTED-CAPTURE] error: {e}")
 
     # 7. Function tools
     @function_tool
     async def FetchCategorySchema(tool_ctx: RunContext, srchterm: str) -> dict:
         """Call when the buyer changes their product requirement mid-call.
         Pass the new product as a simple English search term (e.g. 'washing-machine', 'cctv')."""
-        logger.info(f"[FetchCategorySchema] called with srchterm={srchterm!r}")
+        _log.info(f"[FetchCategorySchema] called with srchterm={srchterm!r}")
         result = await _execute_function_call(
             "FetchCategorySchema", {"srchterm": srchterm},
             functions=_functions, call_state=call_state,
@@ -1442,7 +1466,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     @function_tool
     async def FetchLead(tool_ctx: RunContext, lead_id: str = "", mobile: str = "") -> dict:
         """Fetch customer lead details from Justdial MIS API. Pass lead_id or mobile."""
-        logger.info(f"[FetchLead] called | lead_id={lead_id!r} | mobile={mobile!r}")
+        _log.info(f"[FetchLead] called | lead_id={lead_id!r} | mobile={mobile!r}")
         result = await _execute_function_call(
             "FetchLead", {"lead_id": lead_id, "mobile": mobile},
             functions=_functions, call_state=call_state,
@@ -1473,14 +1497,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         # input_audio_transcription enabled)
         if role_str == "user":
             if text and not any(t["role"] == "user" and t["text"] == text for t in _live_transcript):
-                logger.info(f"[TRANSCRIPT] USER (committed): {text!r}")
+                _log.info(f"[TRANSCRIPT] USER (committed): {text!r}")
                 _live_transcript.append({"role": "user", "text": text})
             return
         if role_str != "assistant" or _closing_triggered:
             return
         _closing_buffer += " " + text
         if text:
-            logger.info(f"[TRANSCRIPT] Turn {_turn_counter} | AGENT: {text!r}")
+            _log.info(f"[TRANSCRIPT] Turn {_turn_counter} | AGENT: {text!r}")
             _live_transcript.append({"role": "assistant", "text": text})
         # Sniffer partial is superseded by the officially committed item — clear it.
         _pending_assistant_text = ""
@@ -1496,11 +1520,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             )):
                 _early_close_muting = True
                 _set_mic(False, reason="commit-closing-phrase")
-                logger.info("[CLOSE DETECT] Partial closing phrase detected in commit — mic muted")
+                _log.info("[CLOSE DETECT] Partial closing phrase detected in commit — mic muted")
         if _is_closing_phrase(_closing_buffer):
             _closing_triggered = True
             call_state["ended_naturally"] = True
-            logger.info(f"[CLOSE DETECT] Closing phrase matched — scheduling end")
+            _log.info(f"[CLOSE DETECT] Closing phrase matched — scheduling end")
             _set_mic(False, reason="closing-phrase-matched")
             asyncio.create_task(_handle_close())
 
@@ -1528,7 +1552,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         # Live speech arrived — discard any buffered muted-window text.
         # (Muted text is only saved to Mongo when NO live speech follows.)
         if _muted_inject["text"]:
-            logger.info(
+            _log.info(
                 f"[MUTED-CAPTURE] live speech arrived — discarding muted buffer "
                 f"{_muted_inject['text']!r}"
             )
@@ -1537,7 +1561,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if is_final:
             _user_turn_time = time.time()
             _turn_counter += 1
-            logger.info(
+            _log.info(
                 f"[TRANSCRIPT] Turn {_turn_counter} | USER (FINAL): {transcript_text!r} | "
                 f"agent_state={_agent_state_now} mic={_mic_enabled} "
                 f"speech_ms={_user_audio['speech_ms']:.0f}"
@@ -1554,7 +1578,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # Partial — keep the latest chunk in _pending_user_text; also put a
             # placeholder in _live_transcript so save_call_data sees it even if
             # the final never arrives (abrupt disconnect before Gemini finalises).
-            logger.info(
+            _log.info(
                 f"[TRANSCRIPT] PARTIAL | USER: {transcript_text!r} | "
                 f"agent_state={_agent_state_now} mic={_mic_enabled}"
             )
@@ -1575,12 +1599,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _mic_enabled = enabled
         state_tag = "ON " if enabled else "OFF"
         reason_tag = f" [{reason}]" if reason else ""
-        logger.info(f"[MIC] mic → {state_tag}{reason_tag}")
+        _log.info(f"[MIC] mic → {state_tag}{reason_tag}")
         try:
             if hasattr(session, "input") and hasattr(session.input, "set_audio_enabled"):
                 session.input.set_audio_enabled(enabled)
         except Exception as e:
-            logger.warning(f"[MIC] set_audio_enabled({enabled}) error: {e}")
+            _log.warning(f"[MIC] set_audio_enabled({enabled}) error: {e}")
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
@@ -1589,7 +1613,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
         old_str   = old_state.value if hasattr(old_state, "value") else str(old_state) if old_state else "?"
-        logger.info(
+        _log.info(
             f"[STATE] {old_str} → {state_str} | "
             f"mic={_mic_enabled} greeting_done={_greeting_done} "
             f"call_ended={_call_ended} closing={_closing_triggered}"
@@ -1600,18 +1624,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _speaking_start_time = time.time()
             if _user_turn_time is not None:
                 latency_ms = round((time.time() - _user_turn_time) * 1000)
-                logger.info(f"[LATENCY] Turn {_turn_counter} | E2E: {latency_ms} ms")
+                _log.info(f"[LATENCY] Turn {_turn_counter} | E2E: {latency_ms} ms")
                 _user_turn_time = None
             _cancel_inactivity()
             # Cancel any in-flight hold task and any pending muted injection.
             if _echo_guard_task and not _echo_guard_task.done():
                 _echo_guard_task.cancel()
-                logger.info("[SPEAKING-MUTE] cancelled previous hold — new speaking turn")
+                _log.info("[SPEAKING-MUTE] cancelled previous hold — new speaking turn")
             # If there's a buffered muted transcript that never got combined (no live
             # speech arrived before the next bot turn), save it to _live_transcript now
             # so it's visible in Mongo, then clear.
             if _muted_inject["text"]:
-                logger.info(
+                _log.info(
                     f"[MUTED-CAPTURE] flushing uncombined muted text to transcript: "
                     f"{_muted_inject['text']!r}"
                 )
@@ -1632,7 +1656,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _muted_capture["speech_ms"] = 0.0
                 if not _call_ended:
                     _set_mic(True, reason="greeting-complete")
-                    logger.info("[MIC] Greeting complete — mic enabled")
+                    _log.info("[MIC] Greeting complete — mic enabled")
             elif _greeting_done and _bot_has_spoken and not _call_ended and not _closing_triggered:
                 # Post-speech hold: mic stays OFF for a brief window after each bot turn.
                 # Purpose: absorb TTS audio tail + prevent instant hello-check loops.
@@ -1643,10 +1667,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
                 if _echo_guard_task and not _echo_guard_task.done():
                     _echo_guard_task.cancel()
-                    logger.info("[POST-SPEECH-HOLD] cancelled stale guard — starting new")
+                    _log.info("[POST-SPEECH-HOLD] cancelled stale guard — starting new")
 
                 async def _post_speech_hold() -> None:
-                    logger.info(
+                    _log.info(
                         f"[POST-SPEECH-HOLD] started (hold={_post_speech_hold_ms} ms)"
                     )
                     hold_ran_to_completion = False
@@ -1655,19 +1679,19 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         await asyncio.sleep(_post_speech_hold_ms / 1000)
                         hold_ran_to_completion = True
                         if not _call_ended and not _closing_triggered and not _early_close_muting:
-                            logger.info(
+                            _log.info(
                                 f"[POST-SPEECH-HOLD] expired ({_post_speech_hold_ms} ms) — "
                                 "enabling mic"
                             )
                             _set_mic(True, reason="post-speech-hold-expired")
                         else:
-                            logger.info(
+                            _log.info(
                                 f"[POST-SPEECH-HOLD] expired — mic stays muted "
                                 f"(call_ended={_call_ended} closing={_closing_triggered} "
                                 f"early_mute={_early_close_muting})"
                             )
                     except asyncio.CancelledError:
-                        logger.info("[POST-SPEECH-HOLD] cancelled — new speaking turn started")
+                        _log.info("[POST-SPEECH-HOLD] cancelled — new speaking turn started")
                     finally:
                         # Snapshot and clear the muted-window audio. Spawn Sarvam
                         # transcription if the caller said anything substantive.
@@ -1680,7 +1704,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             and captured_frames
                             and not _call_ended
                         ):
-                            logger.info(
+                            _log.info(
                                 f"[MUTED-CAPTURE] {captured_ms:.0f} ms of speech captured — "
                                 "spawning Sarvam transcription"
                             )
@@ -1696,7 +1720,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # Gemini Realtime never emits "thinking" — no-op, just log.
             pass
         else:
-            logger.info(f"[STATE] unhandled state {state_str!r} — no action taken")
+            _log.info(f"[STATE] unhandled state {state_str!r} — no action taken")
 
     # 10. Subscribe to caller audio for Sarvam STT fallback buffering.
     @ctx.room.on("track_subscribed")
@@ -1750,7 +1774,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     break
                 await asyncio.sleep(0.1)
             else:
-                logger.warning("[GREETING] Gemini did not connect within 5 s; skipping trigger")
+                _log.warning("[GREETING] Gemini did not connect within 5 s; skipping trigger")
                 return
             await asyncio.sleep(0.2)  # let initial chat-history replay finish
             _rt._send_client_event(
@@ -1765,7 +1789,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # The mic is re-enabled by _on_agent_state when greeting finishes.
             if not _call_ended:
                 _set_mic(False, reason="greeting-trigger")
-                logger.info("[MIC] Muted after greeting trigger — awaiting greeting completion")
+                _log.info("[MIC] Muted after greeting trigger — awaiting greeting completion")
 
             # Fallback: if Gemini silently fails to produce the greeting (e.g. "no active
             # generation" race), _on_agent_state never fires → mic stays muted forever.
@@ -1773,7 +1797,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             await asyncio.sleep(8)
             if not _greeting_done and not _call_ended:
                 _greeting_retry_triggered = True
-                logger.warning("[GREETING] Gemini did not complete greeting within 8 s — retrying trigger")
+                _log.warning("[GREETING] Gemini did not complete greeting within 8 s — retrying trigger")
                 _rt._send_client_event(
                     types.LiveClientContent(
                         turns=[types.Content(parts=[types.Part(text=".")], role="user")],
@@ -1785,7 +1809,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     _greeting_done = True
                     _bot_has_spoken = True
                     _set_mic(True, reason="greeting-retry-timeout")
-                    logger.warning("[MIC] Greeting retry also failed — force-enabling mic")
+                    _log.warning("[MIC] Greeting retry also failed — force-enabling mic")
 
         asyncio.create_task(_trigger_greeting())
 
@@ -1803,7 +1827,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             m = re.search(r'__(\d{10,12})_', room_name)
             if m:
                 sip_info["caller_number"] = m.group(1)
-        logger.info(
+        _log.info(
             f"[SIP] caller={sip_info['caller_number']!r} | dialed={sip_info['dialed_number']!r}"
         )
 
@@ -1860,7 +1884,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         call_state["record_id"] = record["_id"]
         call_state["call_id"] = record["call_id"]
         call_state["lead_record"] = record
-        logger.info(f"[CALL SETUP] Using fallback lead for mobile={caller_mobile!r}")
+        _log.info(f"[CALL SETUP] Using fallback lead for mobile={caller_mobile!r}")
 
     # 16. 5-minute hard call timeout
     _DEFAULT_TIMEOUT_MSG = (
@@ -1871,7 +1895,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         await asyncio.sleep(_max_call_duration)
         if call_state.get("ended_naturally") or call_state.get("save_done"):
             return
-        logger.info(f"[TIMEOUT] {_max_call_duration}s limit reached — ending call")
+        _log.info(f"[TIMEOUT] {_max_call_duration}s limit reached — ending call")
         _pc = (_bot_config.get("prompt_config") or {}).get("timeout_message", "").strip()
         timeout_msg = _pc or _DEFAULT_TIMEOUT_MSG
         call_state["ended_naturally"] = True
@@ -1925,7 +1949,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     try:
         await asyncio.wait_for(_save_done_event.wait(), timeout=_max_call_duration + 120)
     except asyncio.TimeoutError:
-        logger.warning("[SAVE_CALL] Timed out waiting for save to complete — process will exit")
+        _log.warning("[SAVE_CALL] Timed out waiting for save to complete — process will exit")
 
 
 # ---------------------------------------------------------------------------
