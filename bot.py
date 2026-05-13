@@ -24,6 +24,7 @@ import json
 import logging as _logging
 import os
 import re
+import sys
 import time
 import unicodedata
 import wave
@@ -79,6 +80,69 @@ logger.add(
     level="INFO",
     enqueue=True,           # async-safe — won't block the event loop
     format=_log_format,
+)
+
+# ---------------------------------------------------------------------------
+# Console sink — colored + filtered to important events only
+# ---------------------------------------------------------------------------
+
+# Messages that start with any of these are suppressed from the console.
+_CONSOLE_SKIP = (
+    "[TRANSCRIPT] PARTIAL",
+    "[AUDIO-BUF]",
+    "[INACTIVITY] timer reset",
+    "[POST-SPEECH-HOLD]",
+    "[SPEAKING-MUTE]",
+    "[GEMINI] Silero confirmed",
+    "[SARVAM] skipped",
+    "[MUTED-CAPTURE] Silero",
+    "[MUTED-CAPTURE] live speech",
+    "[MUTED-CAPTURE] flushing",
+    "[STREAM-DETECT]",
+    "[CLOSE DETECT] Partial",
+    "[STATE] unhandled",
+)
+
+
+def _console_filter(record: dict) -> bool:
+    return not any(record["message"].startswith(p) for p in _CONSOLE_SKIP)
+
+
+def _console_format(record: dict) -> str:
+    msg = record["message"]
+    caller = record["extra"].get("caller", "")
+    caller_col = f"{caller:<15} | " if caller else (" " * 17)
+    lvl = record["level"].name
+
+    if "USER (FINAL)" in msg or "USER (committed)" in msg:
+        c, e = "<green><bold>", "</bold></green>"
+    elif "| AGENT:" in msg:
+        c, e = "<cyan><bold>", "</bold></cyan>"
+    elif "═" in msg or "[CALL START]" in msg or "[CALL END]" in msg:
+        c, e = "<yellow><bold>", "</bold></yellow>"
+    elif lvl in ("ERROR", "CRITICAL"):
+        c, e = "<red><bold>", "</bold></red>"
+    elif lvl == "WARNING":
+        c, e = "<yellow>", "</yellow>"
+    elif "[STATE]" in msg or "[MIC]" in msg:
+        c, e = "<magenta>", "</magenta>"
+    elif "[LATENCY]" in msg:
+        c, e = "<white>", "</white>"
+    else:
+        c, e = "", ""
+
+    return (
+        f"{{time:HH:mm:ss.SSS}} | {c}{{level:<7}}{e} | "
+        f"{caller_col}{c}{{message}}{e}\n"
+    )
+
+
+logger.add(
+    sys.stderr,
+    level="INFO",
+    format=_console_format,
+    filter=_console_filter,
+    colorize=True,
 )
 
 # Suppress the benign "failed to send binary stream message / engine is closed"
