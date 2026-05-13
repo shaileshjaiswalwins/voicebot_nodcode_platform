@@ -357,7 +357,7 @@ _HARDCODED_BOT_CONFIG: dict = {
     "sarvam_min_speech_ms": 500,
     "sarvam_min_speech_ms_singleword": 1500,
     "sarvam_silero_threshold": 0.5,
-    "sarvam_silero_min_speech_ms": 200,
+    "sarvam_silero_min_speech_ms": 150,
     "post_speech_hold_ms": 800,
     "filler_message": ["अच्छा,", "हाँ,", "जी,", "तो,", "ठीक है,"],
     "function_filler_message": ["एक moment जी,", "जी, देख रही हूँ,"],
