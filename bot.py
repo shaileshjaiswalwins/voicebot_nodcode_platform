@@ -25,6 +25,7 @@ import logging as _logging
 import os
 import re
 import time
+import unicodedata
 import wave
 from datetime import date as _date
 from datetime import datetime, timedelta, timezone
@@ -121,6 +122,7 @@ def _get_http_session() -> aiohttp.ClientSession:
     return _http_session
 
 
+import numpy as _np
 from pymongo import MongoClient as _MongoClient
 
 _mongo_client: _MongoClient | None = None
@@ -131,6 +133,36 @@ def _get_mongo_collection():
     if _mongo_client is None:
         _mongo_client = _MongoClient(MONGO_URI)
     return _mongo_client[MONGO_DB][MONGO_COLLECTION]
+
+
+# ---------------------------------------------------------------------------
+# Silero VAD — loaded once for WAV scoring on the Sarvam fallback path only.
+# Uses livekit-plugins-silero (already a dep via livekit-agents[silero]).
+# ---------------------------------------------------------------------------
+_silero_session = None
+try:
+    from livekit.plugins.silero import onnx_model as _silero_onnx
+    _silero_session = _silero_onnx.new_inference_session(force_cpu=True)
+    logger.info("[SILERO] ONNX model loaded successfully")
+except Exception as _e:
+    logger.warning(f"[SILERO] Could not load Silero VAD model — Sarvam fallback will skip VAD gate: {_e}")
+
+
+def _silero_voiced_ms(pcm_bytes: bytes, threshold: float = 0.5) -> float:
+    """Return total voiced duration in ms for 16-kHz 16-bit mono PCM bytes.
+    Returns 0 immediately if the Silero session failed to load."""
+    if _silero_session is None or not pcm_bytes:
+        return 0.0
+    model = _silero_onnx.OnnxModel(onnx_session=_silero_session, sample_rate=16000)
+    samples = _np.frombuffer(pcm_bytes, dtype=_np.int16).astype(_np.float32) / 32768.0
+    window = model.window_size_samples  # 512 samples = 32 ms at 16 kHz
+    frame_ms = window / 16000 * 1000
+    voiced_ms = 0.0
+    for i in range(0, len(samples) - window + 1, window):
+        chunk = samples[i : i + window].reshape(1, -1)
+        if model(chunk) >= threshold:
+            voiced_ms += frame_ms
+    return voiced_ms
 
 
 # ---------------------------------------------------------------------------
@@ -321,9 +353,11 @@ _HARDCODED_BOT_CONFIG: dict = {
     "gemini_silence_duration_ms": 1800,
     "gemini_prefix_padding_ms": 300,
     "max_call_duration": 300,
-    "sarvam_min_rms": 350,
+    "sarvam_min_rms": 600,
     "sarvam_min_speech_ms": 500,
     "sarvam_min_speech_ms_singleword": 1500,
+    "sarvam_silero_threshold": 0.5,
+    "sarvam_silero_min_speech_ms": 400,
     "post_speech_hold_ms": 800,
     "filler_message": ["अच्छा,", "हाँ,", "जी,", "तो,", "ठीक है,"],
     "function_filler_message": ["एक moment जी,", "जी, देख रही हूँ,"],
@@ -917,9 +951,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _vad_silence_ms     = int(_bot_config.get("gemini_silence_duration_ms") or 1500)
     _vad_prefix_ms      = int(_bot_config.get("gemini_prefix_padding_ms")   or 100)
     _max_call_duration  = 300
-    _sarvam_min_rms                  = int(_bot_config.get("sarvam_min_rms") or 350)
+    _sarvam_min_rms                  = int(_bot_config.get("sarvam_min_rms") or 600)
     _sarvam_min_speech_ms            = int(_bot_config.get("sarvam_min_speech_ms") or 500)
     _sarvam_min_speech_ms_singleword = int(_bot_config.get("sarvam_min_speech_ms_singleword") or 1500)
+    _sarvam_silero_threshold         = float(_bot_config.get("sarvam_silero_threshold") or 0.5)
+    _sarvam_silero_min_speech_ms     = int(_bot_config.get("sarvam_silero_min_speech_ms") or 400)
     _post_speech_hold_ms             = int(_bot_config.get("post_speech_hold_ms") or 800)
     _functions: list[dict] = _bot_config.get("functions") or []
     _function_calling   = bool(_bot_config.get("function_calling", False)) and bool(_functions)
@@ -1027,15 +1063,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             not _live_transcript or _live_transcript[-1].get("text") != _pending_user_text
         ):
             _live_transcript.append({"role": "user", "text": _pending_user_text})
-        # Flush any partial assistant turn that was cut mid-sentence (sniffer buffer)
-        if _pending_assistant_text and (
-            not _live_transcript
-            or _live_transcript[-1].get("role") != "assistant"
-            or _live_transcript[-1].get("text") != _pending_assistant_text
-        ):
-            _live_transcript.append({"role": "assistant", "text": _pending_assistant_text})
         # Sarvam STT fallback: if user speech is still absent after the Gemini drain,
         # transcribe the raw audio buffer as a last resort.
+        # IMPORTANT: check BEFORE flushing the pending assistant turn — otherwise the
+        # agent's half-formed response (appended below) makes last.role == "assistant"
+        # and Sarvam fires even though Gemini already captured a user partial.
         if (
             status == "disconnected"
             and _user_audio["has_audio"]
@@ -1044,6 +1076,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _sarvam_text = await _sarvam_stt_fallback()
             if _sarvam_text:
                 _live_transcript.append({"role": "user", "text": _sarvam_text})
+        # Flush any partial assistant turn that was cut mid-sentence (sniffer buffer)
+        if _pending_assistant_text and (
+            not _live_transcript
+            or _live_transcript[-1].get("role") != "assistant"
+            or _live_transcript[-1].get("text") != _pending_assistant_text
+        ):
+            _live_transcript.append({"role": "assistant", "text": _pending_assistant_text})
         transcript = _live_transcript if _live_transcript else build_transcript_from_session(session)
 
         _start = call_state.get("call_start_time")
@@ -1235,7 +1274,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _wav_path = f"/tmp/caller_{room_name.replace('/', '_')[-40:]}_0.wav"
     _wav_paths = [_wav_path]   # mutable holder so inner coroutines share current path
     _wav_reset_flag = False    # set True by _on_user_spoke to trigger segment rotation
+    _buffer_frozen = False     # set True on disconnect to stop writing post-hangup noise
     _user_audio: dict = {"speech_ms": 0.0, "nbytes": 0, "has_audio": False}
+    # Raw PCM for the current mic-ON window — scored by Silero on Gemini FINAL to
+    # reject background/noise captures before they enter the transcript.
+    _current_window_pcm: bytearray = bytearray()
+    # Texts rejected by Silero in _on_user_spoke; checked in _on_item_added so the
+    # committed-item fallback path doesn't re-insert what Silero dropped.
+    _silero_rejected_turns: set = set()
     # Audio captured from caller while mic is muted (bot speaking turn + post-hold).
     # Transcribed mid-call via Sarvam and re-injected to Gemini if substantive.
     _muted_capture: dict = {"frames": [], "speech_ms": 0.0}
@@ -1278,7 +1324,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     async def _buffer_user_audio(track: rtc.RemoteAudioTrack) -> None:
         """Stream caller audio directly into a WAV file for Sarvam STT fallback."""
-        nonlocal _wav_reset_flag
+        nonlocal _wav_reset_flag, _buffer_frozen, _current_window_pcm
         stream = rtc.AudioStream(track, sample_rate=16000, num_channels=1)
         segment = 0
 
@@ -1292,7 +1338,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         wf = _open_wav(_wav_paths[0])
         try:
             async for ev in stream:
-                if _call_ended:
+                if _call_ended or _buffer_frozen:
                     break
                 if _wav_reset_flag:
                     _wav_reset_flag = False
@@ -1301,6 +1347,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     _user_audio["speech_ms"] = 0.0
                     _user_audio["nbytes"] = 0
                     _user_audio["has_audio"] = False
+                    _current_window_pcm = bytearray()
                     segment += 1
                     new_path = f"/tmp/caller_{room_name.replace('/', '_')[-40:]}_{segment}.wav"
                     _wav_paths[0] = new_path
@@ -1321,22 +1368,50 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 if not _mic_enabled:
                     _muted_capture["frames"].append(chunk)
                     _muted_capture["speech_ms"] += frame_ms
+                # Only write to the fallback WAV during user-response windows (mic ON).
+                # Agent-speaking windows can bleed the bot's own TTS into the caller track
+                # via SIP echo; writing those frames would make Sarvam transcribe the agent.
+                if not _mic_enabled:
+                    continue
                 if _user_audio["nbytes"] >= _SARVAM_AUDIO_MAX_BYTES:
                     continue
                 wf.writeframes(chunk)
+                _current_window_pcm += chunk
                 _user_audio["nbytes"] += len(chunk)
                 _user_audio["speech_ms"] += frame_ms
                 _user_audio["has_audio"] = True
         finally:
             wf.close()
 
+    # Only tokens that Sarvam hallucinates from pure noise even after Silero VAD passes.
+    # Legitimate one-word user responses (हाँ, yes, ok, …) are intentionally excluded —
+    # Silero already gates real speech; anything it passes with a single substantive word
+    # should not be dropped here.
     _SARVAM_FILLER_HALLUCINATIONS = {
-        "yes", "no", "ok", "okay", "ha", "han", "haan", "hmm", "hm",
-        "हाँ", "हां", "हा", "हम्म", "हम", "हूँ", "जी", "ओके", "ओक",
+        unicodedata.normalize("NFC", w) for w in {
+            # Single-character / single-vowel glitches from line noise
+            "a", "e", "o", "i",
+            # Filler sounds that carry no intent
+            "hmm", "hm", "हम्म",
+        }
     }
 
+    def _normalize_stt_tokens(text: str) -> list[str]:
+        """NFC-normalize, lowercase, strip punctuation, then split into tokens.
+        Uses Unicode category checks (not \\w) so Devanagari combining marks
+        (chandrabindu, maatra, virama) are preserved — otherwise "हाँ" becomes "ह"."""
+        text = unicodedata.normalize("NFC", text).lower()
+        # Keep letters (L), digits (N), combining marks (M); strip P/S/C.
+        cleaned = "".join(
+            c for c in text
+            if unicodedata.category(c)[0] in ("L", "N", "M") or c.isspace()
+        )
+        return [t for t in cleaned.split() if t]
+
     async def _sarvam_stt_fallback() -> str | None:
-        """Transcribe the WAV file written by _buffer_user_audio via Sarvam STT."""
+        """Transcribe the WAV file written by _buffer_user_audio via Sarvam STT.
+        Silero VAD gates the call — Sarvam is only invoked when genuine human voice
+        is detected in the WAV, preventing noise / TV / echo from being transcribed."""
         if not _user_audio["has_audio"] or not SARVAM_API_KEY:
             return None
         speech_ms = _user_audio["speech_ms"]
@@ -1349,6 +1424,23 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         try:
             with open(wav_path, "rb") as f:
                 wav_data = f.read()
+            # Silero VAD gate — read PCM frames from WAV and score for human voice.
+            try:
+                with wave.open(io.BytesIO(wav_data), "rb") as wf:
+                    pcm_bytes = wf.readframes(wf.getnframes())
+            except Exception:
+                pcm_bytes = b""
+            if pcm_bytes:
+                voiced_ms = await asyncio.get_event_loop().run_in_executor(
+                    None, _silero_voiced_ms, pcm_bytes, _sarvam_silero_threshold
+                )
+                if voiced_ms < _sarvam_silero_min_speech_ms:
+                    _log.info(
+                        f"[SARVAM] Silero — no speech detected "
+                        f"(voiced_ms={voiced_ms:.0f} < min={_sarvam_silero_min_speech_ms}), skipping"
+                    )
+                    return None
+                _log.info(f"[SARVAM] Silero — speech confirmed (voiced_ms={voiced_ms:.0f})")
             form = aiohttp.FormData()
             form.add_field("file", wav_data, filename="audio.wav", content_type="audio/wav")
             form.add_field("language_code", "hi-IN")
@@ -1364,20 +1456,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     result = await resp.json()
                     text = (result.get("transcript") or "").strip()
                     if text:
-                        tokens = re.sub(r"[^\w\s]", "", text.lower()).split()
-                        # Drop single-word filler hallucinations from low-energy buffers.
-                        if (
-                            len(tokens) <= 1
-                            and (tokens[0] if tokens else "") in _SARVAM_FILLER_HALLUCINATIONS
-                            and speech_ms < _sarvam_min_speech_ms_singleword
-                        ):
-                            _log.info(
-                                f"[SARVAM] dropped single-word hallucination {text!r} "
-                                f"(speech_ms={speech_ms:.0f})"
-                            )
-                            return None
-                        # Drop transcripts that are entirely hello/check-in noise (e.g.
-                        # "हेलो हेलो हेलो" produced when user was just checking the line).
+                        tokens = _normalize_stt_tokens(text)
                         if tokens and all(t in _SARVAM_FILLER_HALLUCINATIONS for t in tokens):
                             _log.info(
                                 f"[SARVAM] dropped all-filler transcript {text!r} "
@@ -1395,8 +1474,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     async def _transcribe_muted_period(frames: list, speech_ms: float) -> None:
         """Transcribe audio captured during a muted window (bot speaking turn + post-hold)
-        via Sarvam. Substantive transcripts are re-injected into Gemini as a user turn so
-        the caller does not need to repeat themselves."""
+        via Sarvam. Silero VAD gates the call so TV / background audio is rejected before
+        the Sarvam API is hit."""
         if not SARVAM_API_KEY or not frames:
             return
         try:
@@ -1409,6 +1488,23 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     wf.writeframes(f)
             buf.seek(0)
             wav_data = buf.read()
+            # Silero VAD gate — extract PCM and score for human voice.
+            try:
+                with wave.open(io.BytesIO(wav_data), "rb") as wf:
+                    pcm_bytes = wf.readframes(wf.getnframes())
+            except Exception:
+                pcm_bytes = b""
+            if pcm_bytes:
+                voiced_ms = await asyncio.get_event_loop().run_in_executor(
+                    None, _silero_voiced_ms, pcm_bytes, _sarvam_silero_threshold
+                )
+                if voiced_ms < _sarvam_silero_min_speech_ms:
+                    _log.info(
+                        f"[MUTED-CAPTURE] Silero — no speech detected "
+                        f"(voiced_ms={voiced_ms:.0f} < min={_sarvam_silero_min_speech_ms}), skipping"
+                    )
+                    return
+                _log.info(f"[MUTED-CAPTURE] Silero — speech confirmed (voiced_ms={voiced_ms:.0f})")
             form = aiohttp.FormData()
             form.add_field("file", wav_data, filename="audio.wav", content_type="audio/wav")
             form.add_field("language_code", "hi-IN")
@@ -1429,7 +1525,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             f"(speech_ms={speech_ms:.0f})"
                         )
                         return
-                    tokens = re.sub(r"[^\w\s]", "", text.lower()).split()
+                    tokens = _normalize_stt_tokens(text)
                     if tokens and all(t in _SARVAM_FILLER_HALLUCINATIONS for t in tokens):
                         _log.info(
                             f"[MUTED-CAPTURE] dropped all-filler {text!r} "
@@ -1496,6 +1592,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         # user_input_transcribed doesn't fire, e.g. Gemini realtime without
         # input_audio_transcription enabled)
         if role_str == "user":
+            if text and text in _silero_rejected_turns:
+                _log.info(f"[TRANSCRIPT] USER (committed): skipped — Silero-rejected {text!r}")
+                _silero_rejected_turns.discard(text)
+                return
             if text and not any(t["role"] == "user" and t["text"] == text for t in _live_transcript):
                 _log.info(f"[TRANSCRIPT] USER (committed): {text!r}")
                 _live_transcript.append({"role": "user", "text": text})
@@ -1561,14 +1661,37 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if is_final:
             _user_turn_time = time.time()
             _turn_counter += 1
+            speech_ms_now = _user_audio["speech_ms"]
             _log.info(
                 f"[TRANSCRIPT] Turn {_turn_counter} | USER (FINAL): {transcript_text!r} | "
                 f"agent_state={_agent_state_now} mic={_mic_enabled} "
-                f"speech_ms={_user_audio['speech_ms']:.0f}"
+                f"speech_ms={speech_ms_now:.0f}"
             )
             _pending_user_text = ""
             # Gemini confirmed this turn — rotate WAV segment so next turn starts fresh
             _wav_reset_flag = True
+            # Silero sanity-check: Gemini occasionally fires on background audio (TV,
+            # nearby conversation). If Silero finds < min voiced ms in the window PCM,
+            # discard the transcript rather than letting background noise reach Mongo.
+            if _silero_session is not None and _current_window_pcm:
+                _voiced = _silero_voiced_ms(
+                    bytes(_current_window_pcm), _sarvam_silero_threshold
+                )
+                if _voiced < _sarvam_silero_min_speech_ms:
+                    _log.info(
+                        f"[GEMINI] Silero rejected FINAL {transcript_text!r} — "
+                        f"voiced_ms={_voiced:.0f} < min={_sarvam_silero_min_speech_ms} "
+                        f"(speech_ms={speech_ms_now:.0f})"
+                    )
+                    # Remove any partial placeholder that was already added for this turn
+                    if _live_transcript and _live_transcript[-1]["role"] == "user":
+                        _live_transcript.pop()
+                    # Block _on_item_added from re-inserting this text
+                    _silero_rejected_turns.add(transcript_text)
+                    return
+                _log.info(
+                    f"[GEMINI] Silero confirmed FINAL (voiced_ms={_voiced:.0f})"
+                )
             # Replace the last entry if it was a partial for this same turn
             if _live_transcript and _live_transcript[-1]["role"] == "user":
                 _live_transcript[-1]["text"] = transcript_text
@@ -1684,6 +1807,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                                 "enabling mic"
                             )
                             _set_mic(True, reason="post-speech-hold-expired")
+                            # Rotate WAV so the fallback only sees audio from THIS response
+                            # window, not contaminated audio from earlier turns.
+                            _wav_reset_flag = True
                         else:
                             _log.info(
                                 f"[POST-SPEECH-HOLD] expired — mic stays muted "
@@ -1916,10 +2042,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # 18. Participant disconnect handler
     @ctx.room.on("participant_disconnected")
     def _on_disconnect(p: rtc.RemoteParticipant) -> None:
-        nonlocal _call_ended
+        nonlocal _call_ended, _buffer_frozen
         _cancel_inactivity()
         if call_state["ended_naturally"]:
             return
+        _buffer_frozen = True  # stop buffering immediately so post-hangup noise stays out of WAV
         _call_ended = True
         # Force Gemini to finalise any in-flight user turn immediately.
         # Without this, Gemini waits for silence_duration_ms of silence to
