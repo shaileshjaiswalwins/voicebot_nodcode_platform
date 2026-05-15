@@ -73,6 +73,7 @@ async def generate_call_analysis(
     base_status: str,
     schema: dict,
     http_session: aiohttp.ClientSession,
+    model: str = "gemini-2.5-flash-lite",
 ) -> dict:
     if not transcript:
         return fallback_analysis(base_status)
@@ -448,7 +449,7 @@ STRICT OUTPUT RULES:
     try:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.5-flash-lite:generateContent?key={GEMINI_API_KEY}"
+            f"{model}:generateContent?key={GEMINI_API_KEY}"
         )
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
@@ -483,6 +484,7 @@ _FALLBACK_B2B_SCORE: dict = {"deal_value": "", "lead_intent_score": "", "urgency
 async def generate_b2b_score(
     transcript: list[dict],
     http_session: aiohttp.ClientSession,
+    model: str = "gemini-2.5-flash-lite",
 ) -> dict:
     """Run B2B lead-scoring rubric on the transcript. Returns deal_value, lead_intent_score, urgency_flag."""
     if not transcript:
@@ -514,7 +516,7 @@ DERIVED FIELDS
 - urgency_flag: Set true if the prospect explicitly mentions urgency (e.g. "urgent", "ASAP", "by Friday", specific near deadline). Otherwise false.
 - extracted_quantity: The numeric quantity stated. If a range is given, return the average.
 - estimated_unit_price: Infer a reasonable B2B market price range per unit strictly in the Indian landscape, based on the product type and any constraints mentioned on the call. Return as an object with low and high values in INR.
-- estimated_deal_value: Computed as {{ "low": extracted_quantity * estimated_unit_price.low, "high": extracted_quantity * estimated_unit_price.high }}.
+- estimated_deal_value: Computed as extracted_quantity * ((estimated_unit_price.low + estimated_unit_price.high) / 2). Use the average of the unit price range, not a low–high spread.
 - lead_category: Based on final_score — "High" (7–10), "Medium" (4–6.9), "Low" (0–3.9).
 
 HARD RULES
@@ -526,7 +528,7 @@ HARD RULES
 
 OUTPUT — strict JSON, no additional keys or commentary:
 {{
-  "deal_value": "<estimated deal value range as a string, e.g. '₹50,000 - ₹1,00,000', or '' if cannot be determined>",
+  "deal_value": "<estimated deal value as a single number string, e.g. '₹75,000', or '' if cannot be determined>",
   "lead_intent_score": "<final_score as a string, e.g. '7.5'>",
   "urgency_flag": "<'yes' if urgency detected, 'no' otherwise>"
 }}
@@ -537,7 +539,7 @@ CONVERSATION TO ANALYZE:
     try:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.5-flash-lite:generateContent?key={GEMINI_API_KEY}"
+            f"{model}:generateContent?key={GEMINI_API_KEY}"
         )
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
