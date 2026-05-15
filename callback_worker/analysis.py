@@ -16,8 +16,8 @@ DISPOSITION_MAP: dict[str, str] = {
     "Voicemail":                        "The call went to the recipient's voicemail instead of connecting directly.",
     "Wrong Number":                     "The number dialed does not belong to the intended customer.",
     "Approved":                         "The customer confirmed the product and answered ALL specification questions.",
-    "Enriched":                         "The customer confirmed the product and answered at least TWO (but not all) specification questions with valid specific values.",
-    "Interested":                       "The customer confirmed they need the product but answered ZERO or only ONE specification question with valid specific values, OR showed clear positive interest (engaged meaningfully, asked follow-up questions, showed enthusiasm) without answering two or more spec questions. Covers both explicit product confirmation with zero/one valid spec and positive-but-unconfirmed engagement.",
+    "Enriched":                         "The customer confirmed the product and answered at least one (but not all) specification questions with valid specific values.",
+    "Interested":                       "The customer confirmed they need the product but answered ZERO specification questions with valid specific values, OR showed clear positive interest (engaged meaningfully, asked follow-up questions, showed enthusiasm) without answering any spec questions. Covers both explicit product confirmation with zero specs and positive-but-unconfirmed engagement.",
     "Not Interested":                   "The customer clearly stated they are not interested or do not need the product.",
     "Could Not Confirm":                "The customer was uncertain or did not confirm whether they still need the product — includes vague/non-committal responses, mid-conversation disconnections where no product confirmation was obtained, and cases where the call dropped before any meaningful product exchange.",
     "Alternate Number":                 "The customer provided a different or alternate contact number.",
@@ -82,6 +82,14 @@ async def generate_call_analysis(
 
     user_turns = [t for t in transcript if t.get("role") == "user"]
     non_empty_user_turns = [t for t in user_turns if (t.get("text") or "").strip()]
+
+    # Tokens that count as product confirmation when they appear as the buyer's
+    # ONLY or FIRST substantive response to the opening product question.
+    _CONFIRMATION_TOKENS = {
+        "हाँ", "हां", "ha", "han", "haan", "yes", "ji", "jee",
+        "bilkul", "zaroor", "theek", "ठीक", "okay", "ok",
+        "good", "गुड", "sure", "right", "correct", "हा",
+    }
 
     # No real user speech captured. Check how far the agent progressed before deciding.
     # The bot never advances to the next question without a valid answer — so agent turn
@@ -200,6 +208,21 @@ async def generate_call_analysis(
         if _ends_on_agent_no_response else ""
     )
 
+    # Detect product confirmation in the first user turn so the LLM doesn't
+    # misclassify it as Could Not Confirm.
+    def _tokens(text: str) -> set[str]:
+        return {re.sub(r"[^\w]", "", w.lower()) for w in text.split() if w.strip()}
+
+    _first_user_text = (non_empty_user_turns[0].get("text") or "") if non_empty_user_turns else ""
+    _first_user_tokens = _tokens(_first_user_text)
+    _first_turn_is_confirmation = bool(_first_user_tokens & _CONFIRMATION_TOKENS)
+    _product_confirmed_note = (
+        f"\n⚠ PRODUCT CONFIRMED: The buyer's first response ({_first_user_text!r}) is a "
+        "clear product confirmation. Do NOT classify as Could Not Confirm or Short Hangup. "
+        "Classify as Interested (zero valid specs), Enriched (1+ valid specs), or Approved."
+        if _first_turn_is_confirmation else ""
+    )
+
     _user_sparse = not non_empty_user_turns or len(non_empty_user_turns) <= 1
     _user_sparse_note = ""
     if not non_empty_user_turns:
@@ -243,7 +266,7 @@ QnA EXTRACTION when buyer turns are absent:
     disposition_options = "\n".join(f'  "{k}": {v}' for k, v in DISPOSITION_MAP.items())
     current_dt_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
 
-    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Your ONLY job is to read the transcript and return accurate, structured JSON. Every rule below is mandatory — do not skip or approximate.{cut_note}{_user_sparse_note}{_trailing_agent_note}
+    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Your ONLY job is to read the transcript and return accurate, structured JSON. Every rule below is mandatory — do not skip or approximate.{cut_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}
 
 Current date and time (IST, GMT+5:30): {current_dt_str}
 
@@ -361,7 +384,7 @@ A call with even one positive signal belongs in this tier.
 ━━ PRODUCT CONFIRMATION GATE ━━
 Before applying Rules 7–9, determine: Did the customer confirm the product?
 "Product confirmed" = the customer clearly indicated they still need the product via ANY of:
-  • Saying "हाँ" / "जी हाँ" / "हां" / "yes" / "ji" / "bilkul" in response to "do you need X?" or "आपको X की requirement है ना?"
+  • Saying "हाँ" / "जी हाँ" / "हां" / "yes" / "ji" / "bilkul" / "theek hai" / "ठीक है" / "good" / "गुड" / "okay" / "ok" / "sure" in response to "do you need X?" or "आपको X की requirement है ना?"
   • Naming a specific product variant or material (e.g. "gate वाला", "stainless चाहिए")
   • Providing ANY specific product specification, grade, or quantity value
   • Asking the agent a question SPECIFICALLY about the product (pricing, delivery, timeline, specs, availability) — implicit confirmation. Generic questions like "can you help me?", "which company?" or questions about the agent's identity do NOT count.
@@ -380,12 +403,12 @@ RULE 7 — APPROVED:
   → "Approved". STOP.
 
 RULE 8 — ENRICHED:
-  Condition: Product confirmed AND buyer answered at least TWO but NOT ALL specification questions with valid specific values.
+  Condition: Product confirmed AND buyer answered at least ONE but NOT ALL specification questions with valid specific values.
   NOTE: "I don't know", "not sure", bare "हाँ/yes/ok" answers do NOT count as valid spec values — only concrete choices, numbers, or named options count.
   → "Enriched". STOP.
 
-RULE 9 — INTERESTED (product confirmed, zero or one valid spec):
-  Condition: Product confirmed AND buyer answered ZERO OR ONLY ONE specification question with valid specific values (remaining answers were "I don't know", vague, or missing).
+RULE 9 — INTERESTED (product confirmed, zero valid specs):
+  Condition: Product confirmed AND buyer answered ZERO specification questions with valid specific values (all answers were "I don't know", vague, or missing).
   → "Interested". STOP.
 
 RULE 10 — INTERESTED (positive engagement, no confirmation):
@@ -451,6 +474,12 @@ RULE 18 — OTHER CASES (absolute last resort):
   Condition: Truly none of the above rules apply after careful evaluation of all tiers.
   → "Other Cases".
 
+CONSISTENCY CHECK (mandatory before finalising call_outcome):
+After completing qna extraction (Step 2), verify your outcome is consistent:
+  • If qna contains ≥1 entry with a valid specific value (not "Not Sure", not null opt_id-only) AND product is confirmed → outcome MUST be Enriched or Approved, NOT Interested.
+  • If qna contains 0 valid specific values AND product is confirmed → outcome MUST be Interested, NOT Enriched.
+  • If you classified Enriched/Approved but qna is empty or all "Not Sure" → re-examine the transcript; you missed an answer or over-classified.
+
 Valid outcome values (use EXACT strings only):
 {disposition_options}
 
@@ -463,7 +492,8 @@ PRE-STEP (mandatory): Read the transcript sequentially. Each time the AGENT asks
 EXTRACTION RULES (all mandatory):
 1. POSITION RULE: Attribute each buyer response to the qualification question the AGENT asked immediately before that buyer turn. Nth question asked = Nth buyer answer. Never reassign based on answer format or data type.
 2. INCLUDE: any relevant buyer response — number, option, free-text, "others/other". Do NOT skip answers because the agent did not re-confirm them.
-3. AGENT-CONFIRMATION RULE: If the buyer's response is garbled/unclear (STT noise) OR missing entirely (no buyer turn between two agent turns), and the AGENT's next turn explicitly restates or confirms a value (e.g. "Industrial नोट कर लिया", "okay, X", "ठीक है — [value]", "aapne [value] bataya"), treat that agent-confirmed value as the buyer's answer for the preceding question. Include the question.
+3. AGENT-CONFIRMATION RULE: If the buyer's response is garbled/unclear (STT noise), verbose/embedded in a long sentence, OR missing entirely (no buyer turn between two agent turns), and the AGENT's next turn explicitly restates or confirms a value (e.g. "Industrial नोट कर लिया", "okay, X", "ठीक है — [value]", "aapne [value] bataya", "1 person ke liye", "achha, [value]"), treat that agent-confirmed value as the buyer's answer for the preceding question. Include the question.
+   VERBOSE BUYER RESPONSE: If the buyer gives a long explanatory sentence (e.g. "just one person lift is what I am looking for actually"), extract the spec value embedded in it — do NOT skip it because it is phrased as a sentence. The agent's echo/confirmation in the very next turn (e.g. "अच्छा, 1 person के लिए") is the strongest signal — always use that confirmed value.
    STT NUMBER RENDERING: The agent may say Hindi numbers in romanised or anglicised form due to TTS rendering — treat these as the corresponding digit: "das"/"dash" = 10 (दस), "bees" = 20 (बीस), "teen"/"tin" = 3 (तीन), "paanch"/"punch" = 5 (पाँच), "sau"/"so" = 100 (सौ). E.g. "dash units note kar liya" means the agent confirmed 10 units.
    ANTI-HALLUCINATION EXCEPTION: If the buyer's turn is missing AND the agent simply moved to the next question without stating any confirmed value, do NOT invent an answer. Use AGENT BEHAVIOUR INFERENCE to infer the question was answered, but set answ "Not Sure" and opt_id null unless a value was explicitly confirmed. A vague filler ("हम्म", "umm", "achha") followed by an agent assumption is also not a confirmed answer.
    TRANSCRIPT-ENDING QUESTION: If the transcript ends immediately after the agent asked a question — meaning there is NO user turn and NO subsequent agent turn after that question — the question is completely unanswered. Do NOT add it to qna under any circumstances. Do NOT pick an answer from the option list. Omit it entirely.
