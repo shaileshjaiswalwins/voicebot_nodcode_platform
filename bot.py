@@ -333,6 +333,24 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Quantity question:\n"
         "Accept digits or clear Hindi number words only.\n"
         "STT often mis-transcribes Hindi numbers (\"सौ\" → \"To\", \"चार\" → \"For\") — if a non-number English word appears on a quantity question, treat as unclear and re-ask.\n\n"
+
+        "━━━ HIGH-QUANTITY → BUSINESS GATE (HARD RULE) ━━━\n\n"
+        "If the buyer answers a QUANTITY question with a number ≥ 100 of ANY unit\n"
+        "(100+ pieces / 100+ kg / 100+ boxes / 100+ bori / 100+ nag / 100+ litre / 100+ ton — anything ≥ 100), treat as BUSINESS automatically. Do NOT ask \"business या personal?\" ever for this caller.\n\n"
+        "Action when triggered:\n"
+        "  1. Skip the \"business या personal?\" question entirely.\n"
+        "  2. Briefly acknowledge: \"अच्छा जी, इतनी quantity — समझ गई.\"\n"
+        "  3. If the schema requires business_name / city → ask them directly:\n"
+        "       \"आपके business का नाम क्या है?\" → answer → \"और कौन से city में?\"\n"
+        "     Otherwise skip straight to closing.\n"
+        "  4. Then closing line. The personal-use gate is permanently skipped for this call.\n\n"
+        "If quantity is BELOW 100 (e.g. \"5 piece\", \"50 kg\", \"10 boxes\"):\n"
+        "  → run the normal \"business या personal?\" gate.\n\n"
+        "Phrases that ALSO trigger the gate (regardless of number):\n"
+        "  \"wholesale\", \"bulk\", \"shop ke liye\", \"dukaan\", \"factory\", \"site\", \"project\", \"warehouse\", \"godown\", \"B2B\", \"resale\".\n\n"
+        "Never echo the quantity back to \"confirm business\" — the number itself is the trigger.\n"
+        "Do not say \"100 piece — toh business ke liye?\". Just acknowledge briefly and move on.\n\n"
+
         "Product change mid-call:\n"
         "\"Aapko [original] chahiye ya [new product]?\" — wait for answer.\n\n"
         "Off-topic / irrelevant:\n"
@@ -1325,6 +1343,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _closing_triggered = False
     _early_close_muting = False  # True once partial closing phrases appear — keeps mic muted
     _echo_guard_task: asyncio.Task | None = None
+    _speaking_unmute_task: asyncio.Task | None = None  # 2 s delayed unmute for mid-turn interruptions
 
     # Turn-wise transcript + end-to-end latency tracking
     _turn_counter = 0
@@ -1807,7 +1826,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        nonlocal _echo_guard_task, _greeting_done, _bot_has_spoken, _user_turn_time, _speaking_start_time
+        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _user_turn_time, _speaking_start_time
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
@@ -1840,11 +1859,22 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 )
                 _live_transcript.append({"role": "user", "text": _muted_inject["text"]})
                 _muted_inject["text"] = ""
-            # Mute mic for the ENTIRE bot speaking turn (no timed unmute).
-            # The listening branch unmutes via post-speech-hold.
+            # Mute mic at the start of every bot speaking turn.
+            # For mid-call turns: unmute after 2 s so the user can interrupt.
+            # Greeting (first turn) and closing (last turn) stay muted for the full turn.
             # Caller audio continues to flow into _buffer_user_audio (raw track is
             # unaffected) and is written to _muted_capture while _mic_enabled=False.
             _set_mic(False, reason="speaking-start")
+            # Cancel any previous 2 s timer that didn't fire yet (new turn arrived faster).
+            if _speaking_unmute_task and not _speaking_unmute_task.done():
+                _speaking_unmute_task.cancel()
+                _speaking_unmute_task = None
+            if _greeting_done and not _closing_triggered and not _early_close_muting:
+                async def _delayed_unmute() -> None:
+                    await asyncio.sleep(2.0)
+                    if not _call_ended and not _closing_triggered and not _early_close_muting:
+                        _set_mic(True, reason="2s-speaking-unmute")
+                _speaking_unmute_task = asyncio.create_task(_delayed_unmute())
 
         elif state_str in ("listening", "idle"):
             if _bot_has_spoken and not _greeting_done:
@@ -1857,12 +1887,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     _set_mic(True, reason="greeting-complete")
                     _log.info("[MIC] Greeting complete — mic enabled")
             elif _greeting_done and _bot_has_spoken and not _call_ended and not _closing_triggered:
-                # Post-speech hold: mic stays OFF for a brief window after each bot turn.
-                # Purpose: absorb TTS audio tail + prevent instant hello-check loops.
-                # Any caller speech during bot's turn + this hold was already written into
-                # _muted_capture (because _mic_enabled was False) — Sarvam transcribes it
-                # and re-injects substantive replies to Gemini after the window closes.
+                # Post-speech hold: brief window after each bot turn to absorb TTS tail.
+                # If the 2 s unmute already fired, mic is ON here — re-mute for the hold
+                # so the WAV rotation and muted-capture flush still happen cleanly.
                 _speaking_start_time = None
+                # Bot finished speaking — cancel 2 s unmute timer if it hasn't fired yet.
+                if _speaking_unmute_task and not _speaking_unmute_task.done():
+                    _speaking_unmute_task.cancel()
+                    _speaking_unmute_task = None
+                _set_mic(False, reason="post-speech-hold-start")
 
                 if _echo_guard_task and not _echo_guard_task.done():
                     _echo_guard_task.cancel()
