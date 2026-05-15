@@ -208,18 +208,28 @@ async def generate_call_analysis(
         if _ends_on_agent_no_response else ""
     )
 
-    # Detect product confirmation in the first user turn so the LLM doesn't
-    # misclassify it as Could Not Confirm.
+    # Agent-progression check: the bot is strictly programmed — it NEVER advances to
+    # asking spec questions without first receiving product confirmation. So if the
+    # agent has ≥2 turns with text, the product was confirmed regardless of what the
+    # STT captured. This is more reliable than text-token matching (no Unicode issues).
+    _agent_progressed = len(_agent_turns_with_text) >= 2
+
+    # Text-token fallback for edge cases where agent count alone is ambiguous.
     def _tokens(text: str) -> set[str]:
-        return {re.sub(r"[^\w]", "", w.lower()) for w in text.split() if w.strip()}
+        import unicodedata as _ud
+        t = _ud.normalize("NFC", text)
+        return {re.sub(r"[^\w]", "", w.lower()) for w in t.split() if w.strip()}
 
     _first_user_text = (non_empty_user_turns[0].get("text") or "") if non_empty_user_turns else ""
-    _first_user_tokens = _tokens(_first_user_text)
-    _first_turn_is_confirmation = bool(_first_user_tokens & _CONFIRMATION_TOKENS)
+    _first_turn_is_confirmation = (
+        _agent_progressed
+        or bool(_tokens(_first_user_text) & _CONFIRMATION_TOKENS)
+    )
     _product_confirmed_note = (
-        f"\n⚠ PRODUCT CONFIRMED: The buyer's first response ({_first_user_text!r}) is a "
-        "clear product confirmation. Do NOT classify as Could Not Confirm or Short Hangup. "
-        "Classify as Interested (zero valid specs), Enriched (1+ valid specs), or Approved."
+        f"\n⚠ PRODUCT CONFIRMED: The agent asked specification questions (progressed past "
+        f"the greeting), which means the buyer confirmed the product. Do NOT classify as "
+        f"Could Not Confirm or Short Hangup. "
+        f"Classify as Interested (zero valid specs), Enriched (1+ valid specs), or Approved."
         if _first_turn_is_confirmation else ""
     )
 
