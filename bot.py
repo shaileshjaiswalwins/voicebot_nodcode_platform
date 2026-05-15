@@ -1742,17 +1742,29 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     bytes(_current_window_pcm), _sarvam_silero_threshold
                 )
                 if _voiced < _sarvam_silero_min_speech_ms:
-                    _log.info(
-                        f"[GEMINI] Silero rejected FINAL {transcript_text!r} — "
-                        f"voiced_ms={_voiced:.0f} < min={_sarvam_silero_min_speech_ms} "
-                        f"(speech_ms={speech_ms_now:.0f})"
-                    )
-                    # Remove any partial placeholder that was already added for this turn
-                    if _live_transcript and _live_transcript[-1]["role"] == "user":
-                        _live_transcript.pop()
-                    # Block _on_item_added from re-inserting this text
-                    _silero_rejected_turns.add(transcript_text)
-                    return
+                    # Short monosyllabic words (e.g. "हां", "ना", "ओके") have very brief
+                    # voiced frames and often fall below the Silero threshold. If the
+                    # RMS-based speech_ms is substantial, trust the STT over Silero —
+                    # background noise rarely produces a coherent STT result AND long
+                    # RMS-active audio simultaneously.
+                    if speech_ms_now >= _sarvam_min_speech_ms:
+                        _log.info(
+                            f"[GEMINI] Silero weak but speech_ms sufficient — accepting "
+                            f"{transcript_text!r} (voiced_ms={_voiced:.0f} < "
+                            f"min={_sarvam_silero_min_speech_ms}, speech_ms={speech_ms_now:.0f})"
+                        )
+                    else:
+                        _log.info(
+                            f"[GEMINI] Silero rejected FINAL {transcript_text!r} — "
+                            f"voiced_ms={_voiced:.0f} < min={_sarvam_silero_min_speech_ms} "
+                            f"(speech_ms={speech_ms_now:.0f})"
+                        )
+                        # Remove any partial placeholder that was already added for this turn
+                        if _live_transcript and _live_transcript[-1]["role"] == "user":
+                            _live_transcript.pop()
+                        # Block _on_item_added from re-inserting this text
+                        _silero_rejected_turns.add(transcript_text)
+                        return
                 _log.info(
                     f"[GEMINI] Silero confirmed FINAL (voiced_ms={_voiced:.0f})"
                 )
