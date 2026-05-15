@@ -436,17 +436,17 @@ _HARDCODED_BOT_CONFIG: dict = {
     },
     "language": "hindi",
     "temperature": 0.7,
-    "gemini_start_sensitivity": "START_SENSITIVITY_HIGH",
+    "gemini_start_sensitivity": "START_SENSITIVITY_LOW",
     "gemini_end_sensitivity": "END_SENSITIVITY_HIGH",
-    "gemini_silence_duration_ms": 700,
-    "gemini_prefix_padding_ms": 300,
+    "gemini_silence_duration_ms": 300,
+    "gemini_prefix_padding_ms": 200,
     "max_call_duration": 300,
     "sarvam_min_rms": 600,
     "sarvam_min_speech_ms": 500,
-    "sarvam_min_speech_ms_singleword": 1500,
+    "sarvam_min_speech_ms_singleword": 800,
     "sarvam_silero_threshold": 0.5,
-    "sarvam_silero_min_speech_ms": 150,
-    "post_speech_hold_ms": 800,
+    "sarvam_silero_min_speech_ms": 120,
+    "post_speech_hold_ms": 300,
     "filler_message": ["अच्छा,", "हाँ,", "जी,", "तो,", "ठीक है,"],
     "function_filler_message": ["एक moment जी,", "जी, देख रही हूँ,"],
 }
@@ -1015,7 +1015,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     _early_lead_task: asyncio.Task | None = None
     if _lead_id_meta or _room_mobile:
-        _early_lead_task = asyncio.ensure_future(
+        _early_lead_task = asyncio.create_task(
             fetch_lead(lead_id=_lead_id_meta, mobile=_room_mobile, mis_api_base=MIS_API_BASE)
         )
 
@@ -1101,7 +1101,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 lkapi.room.delete_room(DeleteRoomRequest(room=room_name)),
                 timeout=60.0,
             )
-            pass
         except asyncio.TimeoutError:
             if attempt < 3:
                 await asyncio.sleep(2)
@@ -1196,10 +1195,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "greeting_retry": _greeting_retry_triggered,
             "tagged": False,
             "tagged_at": None,
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
         }
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, lambda: _get_mongo_collection().insert_one(_mongo_doc))
             _log.info(f"[MONGO] Transcript saved | lead_id={lead_id!r} | call_id={call_state.get('call_id')!r}")
         except Exception as e:
@@ -1212,8 +1211,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             or _search_ctx.get("searched_keyword", "")
             or _lead.get("catname", "")
         )
-        _end_ts = datetime.utcnow().isoformat()
-        _start_ts = datetime.utcfromtimestamp(_start).isoformat() if _start else None
+        _end_ts = datetime.now(timezone.utc).isoformat()
+        _start_ts = datetime.fromtimestamp(_start, tz=timezone.utc).isoformat() if _start else None
         _transcripts = [
             {
                 "id": idx + 1, "call_id": 0,
@@ -1258,6 +1257,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         }
         await save_call_log_to_backend(call_log_payload)
 
+        for _p in _wav_paths:
+            try:
+                if Path(_p).exists():
+                    os.unlink(_p)
+            except OSError:
+                pass
         _log.info(_SEP)
         _log.info(
             f"[CALL END] room={room_name} | status={status!r} | "
@@ -1287,7 +1292,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # 4.0 s gives 1.75 s margin for slow Gemini responses.
             await asyncio.sleep(4.0)
         await save_call_data(status)
-        asyncio.ensure_future(_delete_room_safe())
+        asyncio.create_task(_delete_room_safe())
         try:
             await session.aclose()
         except Exception:
@@ -1312,20 +1317,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _log.info("[INACTIVITY] 30 s of silence — ending call directly")
             call_state["ended_naturally"] = True
             end_phrase = INACTIVITY_END_PHRASE
-            try:
-                await session.say(end_phrase, allow_interruptions=False)
-            except Exception:
-                pass
+            await _speak_via_gemini(end_phrase, reason="inactivity-end")
             await asyncio.sleep(2)
             await _kick_caller_safe()
-            asyncio.ensure_future(_save_and_close("completed"))
+            asyncio.create_task(_save_and_close("completed"))
         else:
             nudge = INACTIVITY_PHRASE
             _log.info(f"[INACTIVITY] 15 s nudge — saying: {nudge!r}")
-            try:
-                await session.say(nudge, allow_interruptions=True)
-            except Exception:
-                pass
+            await _speak_via_gemini(nudge, reason="inactivity-nudge")
             _inactivity_task = asyncio.create_task(_inactivity_timeout())
 
     def _reset_inactivity() -> None:
@@ -1352,9 +1351,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _echo_guard_task: asyncio.Task | None = None
     _speaking_unmute_task: asyncio.Task | None = None  # 2 s delayed unmute for mid-turn interruptions
 
-    # Turn-wise transcript + end-to-end latency tracking
+    # Turn-wise transcript + latency tracking
     _turn_counter = 0
-    _user_turn_time: float | None = None  # timestamp when user transcript arrived
+    _partial_first_time: float | None = None  # wall-clock when first partial for current turn arrived
     _live_transcript: list = []  # real-time capture; avoids missing turns on abrupt disconnect
     _pending_user_text: str = ""     # last partial user transcription (may never get a final)
     _pending_assistant_text: str = ""  # last partial assistant turn being streamed (may be cut mid-sentence)
@@ -1389,7 +1388,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _cancel_inactivity()
         await asyncio.sleep(2)
         await _kick_caller_safe()
-        asyncio.ensure_future(_save_and_close("completed"))
+        asyncio.create_task(_save_and_close("completed"))
 
     async def _consume_sniff(text_iter) -> None:
         """Consume one branch of a tee'd text_stream, muting the mic as soon as
@@ -1437,7 +1436,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 if _wav_reset_flag:
                     _wav_reset_flag = False
                     prev_speech_ms = _user_audio["speech_ms"]
+                    old_path = _wav_paths[0]
                     wf.close()
+                    try:
+                        os.unlink(old_path)
+                    except OSError:
+                        pass
                     _user_audio["speech_ms"] = 0.0
                     _user_audio["nbytes"] = 0
                     _user_audio["has_audio"] = False
@@ -1476,6 +1480,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _user_audio["has_audio"] = True
         finally:
             wf.close()
+            try:
+                os.unlink(_wav_paths[0])
+            except OSError:
+                pass
 
     # Phrases that indicate the captured audio is a bystander talking to someone
     # else in the room, not addressing the bot. When any of these substrings appear
@@ -1539,7 +1547,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             except Exception:
                 pcm_bytes = b""
             if pcm_bytes:
-                voiced_ms = await asyncio.get_event_loop().run_in_executor(
+                voiced_ms = await asyncio.get_running_loop().run_in_executor(
                     None, _silero_voiced_ms, pcm_bytes, _sarvam_silero_threshold
                 )
                 if voiced_ms < _sarvam_silero_min_speech_ms:
@@ -1724,7 +1732,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("user_input_transcribed")
     def _on_user_spoke(ev) -> None:
-        nonlocal _turn_counter, _user_turn_time, _live_transcript, _pending_user_text, _wav_reset_flag
+        nonlocal _turn_counter, _partial_first_time, _live_transcript, _pending_user_text, _wav_reset_flag
         # User spoke — reset inactivity timer
         if not _call_ended:
             _reset_inactivity()
@@ -1736,6 +1744,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         ).strip()
         if not transcript_text:
             return
+        if not is_final and _partial_first_time is None:
+            _partial_first_time = time.time()
         # Snapshot agent state at the moment user speech arrives (for interruption diagnosis).
         _agent_state_now = ""
         try:
@@ -1753,7 +1763,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _muted_inject["text"] = ""
         muted_prefix = ""  # no longer combining
         if is_final:
-            _user_turn_time = time.time()
             _turn_counter += 1
             speech_ms_now = _user_audio["speech_ms"]
             _log.info(
@@ -1761,6 +1770,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 f"agent_state={_agent_state_now} mic={_mic_enabled} "
                 f"speech_ms={speech_ms_now:.0f}"
             )
+            if _partial_first_time is not None and _speaking_start_time is not None:
+                _gemini_ms = round((_speaking_start_time - _partial_first_time) * 1000)
+                _log.info(
+                    f"[LATENCY] Turn {_turn_counter} | gemini: {_gemini_ms}ms "
+                    f"| user_speech: {speech_ms_now:.0f}ms"
+                )
+            _partial_first_time = None
             _pending_user_text = ""
             # Gemini confirmed this turn — rotate WAV segment so next turn starts fresh
             _wav_reset_flag = True
@@ -1830,6 +1846,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _greeting_retry_triggered = False
     _mic_enabled: bool = False  # mirrors the last value passed to set_audio_enabled
     _speaking_start_time: float | None = None  # wall-clock when current speaking turn started
+    _barge_in_fired: bool = False  # True once the 2s unmute task fires for this bot turn
 
     def _set_mic(enabled: bool, reason: str = "") -> None:
         nonlocal _mic_enabled
@@ -1845,7 +1862,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _user_turn_time, _speaking_start_time
+        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _speaking_start_time, _barge_in_fired
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
@@ -1858,11 +1875,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
         if state_str == "speaking":
             _bot_has_spoken = True
+            _barge_in_fired = False  # reset at start of each bot turn
             _speaking_start_time = time.time()
-            if _user_turn_time is not None:
-                latency_ms = round((time.time() - _user_turn_time) * 1000)
-                _log.info(f"[LATENCY] Turn {_turn_counter} | E2E: {latency_ms} ms")
-                _user_turn_time = None
             _cancel_inactivity()
             # Cancel any in-flight hold task and any pending muted injection.
             if _echo_guard_task and not _echo_guard_task.done():
@@ -1890,18 +1904,32 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _speaking_unmute_task = None
             if _greeting_done and not _closing_triggered and not _early_close_muting:
                 async def _delayed_unmute() -> None:
-                    await asyncio.sleep(2.0)
+                    nonlocal _barge_in_fired
+                    await asyncio.sleep(4.0)
                     if not _call_ended and not _closing_triggered and not _early_close_muting:
-                        _set_mic(True, reason="2s-speaking-unmute")
+                        _barge_in_fired = True
+                        _set_mic(True, reason="4s-speaking-unmute")
                 _speaking_unmute_task = asyncio.create_task(_delayed_unmute())
 
         elif state_str in ("listening", "idle"):
             if _bot_has_spoken and not _greeting_done:
-                # Greeting completed — unmute mic immediately and discard any
-                # audio captured during the greeting (bot intro only, not a real turn).
                 _greeting_done = True
+                # Transcribe any audio captured during the greeting window via Sarvam
+                # so it lands in _muted_transcript_log (and hence Mongo).
+                # Covers voicemail prompts, IVR menus, ambient speech that played
+                # while the mic was muted for the bot's opening line.
+                _greeting_captured_frames = _muted_capture["frames"][:]
+                _greeting_captured_ms = _muted_capture["speech_ms"]
                 _muted_capture["frames"].clear()
                 _muted_capture["speech_ms"] = 0.0
+                if _greeting_captured_frames:
+                    _log.info(
+                        f"[MUTED-CAPTURE] greeting window: {_greeting_captured_ms:.0f}ms "
+                        "— spawning Sarvam transcription"
+                    )
+                    asyncio.create_task(
+                        _transcribe_muted_period(_greeting_captured_frames, _greeting_captured_ms)
+                    )
                 if not _call_ended:
                     _set_mic(True, reason="greeting-complete")
                     _log.info("[MIC] Greeting complete — mic enabled")
@@ -1914,7 +1942,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 if _speaking_unmute_task and not _speaking_unmute_task.done():
                     _speaking_unmute_task.cancel()
                     _speaking_unmute_task = None
-                _set_mic(False, reason="post-speech-hold-start")
+                if not _barge_in_fired:
+                    _set_mic(False, reason="post-speech-hold-start")
+                else:
+                    _log.info("[POST-SPEECH-HOLD] barge-in already fired — mic stays ON during hold")
 
                 if _echo_guard_task and not _echo_guard_task.done():
                     _echo_guard_task.cancel()
@@ -1930,13 +1961,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         await asyncio.sleep(_post_speech_hold_ms / 1000)
                         hold_ran_to_completion = True
                         if not _call_ended and not _closing_triggered and not _early_close_muting:
-                            _log.info(
-                                f"[POST-SPEECH-HOLD] expired ({_post_speech_hold_ms} ms) — "
-                                "enabling mic"
-                            )
-                            _set_mic(True, reason="post-speech-hold-expired")
-                            # Rotate WAV so the fallback only sees audio from THIS response
-                            # window, not contaminated audio from earlier turns.
+                            if not _barge_in_fired:
+                                _log.info(
+                                    f"[POST-SPEECH-HOLD] expired ({_post_speech_hold_ms} ms) — "
+                                    "enabling mic"
+                                )
+                                _set_mic(True, reason="post-speech-hold-expired")
+                            else:
+                                _log.info(
+                                    f"[POST-SPEECH-HOLD] expired ({_post_speech_hold_ms} ms) — "
+                                    "mic already ON (barge-in was active)"
+                                )
                             _wav_reset_flag = True
                         else:
                             _log.info(
@@ -1979,7 +2014,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     @ctx.room.on("track_subscribed")
     def _on_track_subscribed(track, pub, participant) -> None:
         if isinstance(track, rtc.RemoteAudioTrack):
-            asyncio.ensure_future(_buffer_user_audio(track))
+            asyncio.create_task(_buffer_user_audio(track))
 
     # Start session — disable close_on_disconnect so the process stays alive
     # long enough for save_call_data (Mongo insert + call-log POST) to finish.
@@ -2017,6 +2052,28 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
             _rt.off("generation_created", _orig_gen_handler)
             _rt.on("generation_created", _gen_created_with_sniff)
+
+        async def _speak_via_gemini(phrase: str, *, reason: str) -> None:
+            """Force Gemini to speak `phrase` verbatim. Mirrors _trigger_greeting's send pattern."""
+            if _rt is None or getattr(_rt, "_active_session", None) is None:
+                _log.warning(f"[FORCE-SPEAK] {reason}: no active rt session, skipping")
+                return
+            directive = (
+                "[SYSTEM DIRECTIVE — do not echo this bracketed text]\n"
+                "Speak the following line exactly, in the script and language already given, "
+                "and say nothing else. Do not add commentary, do not translate, do not paraphrase:\n"
+                f"{phrase}"
+            )
+            try:
+                _rt._send_client_event(
+                    types.LiveClientContent(
+                        turns=[types.Content(parts=[types.Part(text=directive)], role="user")],
+                        turn_complete=True,
+                    )
+                )
+                _log.info(f"[FORCE-SPEAK] {reason}: sent directive")
+            except Exception as e:
+                _log.warning(f"[FORCE-SPEAK] {reason} failed: {e}")
 
         async def _trigger_greeting() -> None:
             nonlocal _greeting_done, _bot_has_spoken, _greeting_retry_triggered
@@ -2153,13 +2210,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         timeout_msg = _pc or _DEFAULT_TIMEOUT_MSG
         call_state["ended_naturally"] = True
         _cancel_inactivity()
-        try:
-            await session.say(timeout_msg, allow_interruptions=False)
-        except Exception:
-            pass
+        await _speak_via_gemini(timeout_msg, reason="timeout")
         await asyncio.sleep(2)
         await _kick_caller_safe()
-        asyncio.ensure_future(_save_and_close("completed"))
+        asyncio.create_task(_save_and_close("completed"))
 
     call_state["_timeout_task"] = asyncio.create_task(_call_timeout())
 
@@ -2195,7 +2249,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 )
             except Exception:
                 pass
-        asyncio.ensure_future(_save_and_close("disconnected"))
+        asyncio.create_task(_save_and_close("disconnected"))
 
     # Keep entrypoint alive until save_call_data + callback finish.
     # Prevents the event loop from shutting down before the HTTP POST
