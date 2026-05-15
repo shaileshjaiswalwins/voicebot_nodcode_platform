@@ -16,8 +16,8 @@ DISPOSITION_MAP: dict[str, str] = {
     "Voicemail":                        "The call went to the recipient's voicemail instead of connecting directly.",
     "Wrong Number":                     "The number dialed does not belong to the intended customer.",
     "Approved":                         "The customer confirmed the product and answered ALL specification questions.",
-    "Enriched":                         "The customer confirmed the product and answered at least one (but not all) specification questions.",
-    "Interested":                       "The customer confirmed they need the product but answered ZERO specification questions, OR showed clear positive interest (engaged meaningfully, asked follow-up questions, showed enthusiasm) without answering any spec questions. Covers both explicit product confirmation with zero specs and positive-but-unconfirmed engagement.",
+    "Enriched":                         "The customer confirmed the product and answered at least TWO (but not all) specification questions with valid specific values.",
+    "Interested":                       "The customer confirmed they need the product but answered ZERO or only ONE specification question with valid specific values, OR showed clear positive interest (engaged meaningfully, asked follow-up questions, showed enthusiasm) without answering two or more spec questions. Covers both explicit product confirmation with zero/one valid spec and positive-but-unconfirmed engagement.",
     "Not Interested":                   "The customer clearly stated they are not interested or do not need the product.",
     "Could Not Confirm":                "The customer was uncertain or did not confirm whether they still need the product — includes vague/non-committal responses, mid-conversation disconnections where no product confirmation was obtained, and cases where the call dropped before any meaningful product exchange.",
     "Alternate Number":                 "The customer provided a different or alternate contact number.",
@@ -83,16 +83,25 @@ async def generate_call_analysis(
     user_turns = [t for t in transcript if t.get("role") == "user"]
     non_empty_user_turns = [t for t in user_turns if (t.get("text") or "").strip()]
 
-    # No real user speech at all → Short Hangup (covers silent calls, inactivity timeouts,
-    # and cases where STT saved empty strings for every user turn)
+    # No real user speech captured. Check how far the agent progressed before deciding.
+    # The bot never advances to the next question without a valid answer — so agent turn
+    # count tells us whether the buyer actually spoke (STT just failed to capture it).
+    _agent_turns_with_text = [
+        t for t in transcript
+        if t.get("role") == "assistant" and (t.get("text") or "").strip()
+    ]
     if not non_empty_user_turns:
-        return {
-            "call_outcome": "Short Hangup",
-            "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
-            "call_summary": "No user response recorded — call ended with agent turns only.",
-            "is_business": "", "business_city": "", "business_name": "",
-            "qna": [], "product_change": {}, "rescheduled_to": "",
-        }
+        if len(_agent_turns_with_text) <= 1:
+            # Only greeting was spoken — true Short Hangup, no engagement at all.
+            return {
+                "call_outcome": "Short Hangup",
+                "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
+                "call_summary": "No user response recorded — call ended after agent greeting only.",
+                "is_business": "", "business_city": "", "business_name": "",
+                "qna": [], "product_change": {}, "rescheduled_to": "",
+            }
+        # Agent asked multiple turns — STT likely failed but buyer did speak.
+        # Fall through to LLM with agent-behaviour inference context.
 
     _VOICEMAIL_SIGNALS_PRE = [
         "leave a message", "leave your message", "please leave a message",
@@ -105,6 +114,10 @@ async def generate_call_analysis(
         "voice mail recording", "voicemail recording",
         "you may hang up", "may hang up now",
         "finished recording hang up", "when you have finished recording",
+        # Carrier IVR hold-music announcements that repeat in multiple languages
+        # are indistinguishable from voicemail for classification purposes.
+        "please stay on the line",
+        "stay on the line",
     ]
     _HOLD_MUSIC_SIGNALS_PRE = [
         "put your call on hold",
@@ -153,10 +166,84 @@ async def generate_call_analysis(
         "Determine the outcome based on what was actually collected."
         if base_status == "disconnected" else ""
     )
+
+    # Detect whether the transcript ends with an agent turn that has NO user response
+    # after it at all — meaning the agent's last question is completely unanswered.
+    # Distinguish this from a re-ask: if the user DID respond to a prior ask of the
+    # same question (even with "बस", "I don't know", etc.), that response is the answer
+    # and the re-ask just means the agent wanted clarification. Only fire the warning
+    # when there is truly zero user turn anywhere after the last agent question.
+    _non_empty_turns = [t for t in transcript if (t.get("text") or "").strip()]
+    _last_agent_idx = max(
+        (i for i, t in enumerate(_non_empty_turns) if t.get("role") == "assistant"),
+        default=-1,
+    )
+    # Any user turn that appears AFTER the last agent question in non-empty-turn order
+    _has_user_after_last_agent = any(
+        t.get("role") == "user"
+        for t in _non_empty_turns[_last_agent_idx + 1:]
+    ) if _last_agent_idx >= 0 else False
+    _ends_on_agent_no_response = _last_agent_idx >= 0 and not _has_user_after_last_agent
+    _trailing_agent_note = (
+        "\n⚠ TRANSCRIPT ENDS ON AGENT QUESTION: The last turn in the transcript is from "
+        "the agent — there is no user turn after this final agent question. Apply the "
+        "following two-case rule:\n"
+        "  CASE A — TRULY UNANSWERED: There is NO user turn anywhere between the agent's "
+        "FIRST ask of this question and the end of the transcript (i.e. the user never "
+        "responded to this question at all). → Do NOT include it in qna. Do NOT pick an "
+        "answer from the option list. Any qna entry for this question is a hallucination.\n"
+        "  CASE B — RE-ASK AFTER UNCLEAR RESPONSE: There IS a user turn between the "
+        "agent's first ask and the agent's re-ask (e.g. user said 'बस', 'I don't know', "
+        "a garbled word) — the agent re-asked because the answer was unclear, not because "
+        "the user never responded. → That earlier user response IS the answer. Keep it in "
+        "qna as 'Not Sure' with opt_id null. Do NOT remove this entry."
+        if _ends_on_agent_no_response else ""
+    )
+
+    _user_sparse = not non_empty_user_turns or len(non_empty_user_turns) <= 1
+    _user_sparse_note = ""
+    if not non_empty_user_turns:
+        _user_sparse_note = (
+            "\n⚠ SPARSE TRANSCRIPT: Zero buyer turns were captured. STT likely failed — the buyer DID speak but audio was not transcribed. "
+            "Do NOT default to Short Hangup. Use AGENT BEHAVIOUR INFERENCE (see below) to reconstruct what happened."
+        )
+    elif len(non_empty_user_turns) <= 1:
+        _user_sparse_note = (
+            "\nNote: Very few buyer turns were captured — STT may have missed responses. "
+            "Combine available buyer turns with AGENT BEHAVIOUR INFERENCE to reach the correct outcome."
+        )
+
+    _agent_inference_section = ""
+    if _user_sparse:
+        _agent_inference_section = """
+━━━━━━━━━━━━━━━━━━━━━━━━
+AGENT BEHAVIOUR INFERENCE (apply when buyer transcript is missing or sparse)
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+CORE PRINCIPLE: The bot is strictly programmed — it never advances to Question N without a valid answer to Question N-1. Agent progression is therefore a reliable proxy for buyer answers when STT did not capture speech.
+
+READING THE AGENT'S QUESTION SEQUENCE:
+• Agent said ONLY the opening greeting and stopped → buyer did not respond at all → "Short Hangup"
+• Agent asked Q1 (first qualification question after the opening) → buyer confirmed the product → minimum "Interested"
+• Agent asked Q2 or beyond (progressed past Q1) → buyer confirmed the product AND answered at least Q1 → minimum "Enriched"
+• Agent said the closing line ("सारी details मिल गईं" / "relevant sellers आपसे contact करेंगे" / "relevant sellers will contact you soon") → ALL questions were answered → "Approved"
+• Agent asked business name or city → buyer confirmed product AND answered ALL spec questions (business questions always follow specs)
+
+SPECIAL AGENT PHRASES TO DETECT:
+• "कोई response नहीं आया, इसलिए मैं call समाप्त कर रही हूँ" → inactivity timeout, buyer was truly silent → "Short Hangup"
+• "मुझे सिर्फ 5 मिनट तक बात करने की permission है" / "I only have permission to talk for 5 minutes" → 5-minute hard timeout → use agent question count to determine outcome per the progression rules above
+• Agent explicitly confirmed a value mid-turn ("ठीक है — [value] note kar liya", "[value] समझ गया", "okay [value]", "aapne [value] bataya") → treat [value] as the buyer's answer for the preceding question, even if no buyer turn is visible
+
+QnA EXTRACTION when buyer turns are absent:
+• Extract any values the agent explicitly confirmed in their turns
+• For questions the agent progressed past but where you found no confirmed value → set answ "Not Sure", opt_id null
+• Never invent values — only use what the agent explicitly stated
+"""
+
     disposition_options = "\n".join(f'  "{k}": {v}' for k, v in DISPOSITION_MAP.items())
     current_dt_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
 
-    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Your ONLY job is to read the transcript and return accurate, structured JSON. Every rule below is mandatory — do not skip or approximate.{cut_note}
+    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Your ONLY job is to read the transcript and return accurate, structured JSON. Every rule below is mandatory — do not skip or approximate.{cut_note}{_user_sparse_note}{_trailing_agent_note}
 
 Current date and time (IST, GMT+5:30): {current_dt_str}
 
@@ -169,7 +256,7 @@ TRANSCRIPT
 QUALIFICATION QUESTIONS
 ━━━━━━━━━━━━━━━━━━━━━━━━
 {q_list}
-
+{_agent_inference_section}
 ━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 1 — CLASSIFY THE CALL OUTCOME
 ━━━━━━━━━━━━━━━━━━━━━━━━
@@ -224,6 +311,7 @@ RULE 2 — VOICEMAIL:
       • "you may hang up", "may hang up now"
       • "cannot come to the phone", "is not available right now"
       • "please try again later", "try your call again later"
+      • "please stay on the line", "stay on the line" (carrier IVR hold announcement repeated across turns)
     Hindi/Hinglish signals:
       • "sandesh chhod", "sandesh chhodein", "message chhod", "message chhodein"
       • "beep ke baad", "tone ke baad"
@@ -242,7 +330,7 @@ RULE 2 — VOICEMAIL:
   → "Voicemail". STOP.
 
 RULE 2A — CALL ON HOLD (caller placed bot on hold):
-  Condition: A user/buyer turn contains a carrier or PBX hold-music IVR announcement — the clearest signal is the SAME message repeated in multiple languages within a single turn (e.g. Gujarati + Hindi + English in one block), or any of these phrases: "put your call on hold", "placed your call on hold", "please stay on the line", "stay on the line", "hold par rakha hai", "hold par raho", "लाइन पर रहो", "लाइन पर बने रहें", "होल्ड पर राख्यो छे".
+  Condition: A user/buyer turn contains a carrier or PBX hold-music IVR announcement — the clearest signal is the SAME message repeated in multiple languages within a single turn (e.g. Gujarati + Hindi + English in one block), or any of these phrases: "put your call on hold", "placed your call on hold", "hold par rakha hai", "hold par raho", "लाइन पर रहो", "लाइन पर बने रहें", "होल्ड पर राख्यो छे".
   DISTINGUISH FROM VOICEMAIL: Voicemail = no live person ever answered. Hold = a live person answered but physically placed the call on hold. Do not confuse these.
   NOTE: A buyer saying "hold on" or "ek second" themselves is Rule 0 (Short Hangup), NOT this rule. Rule 2A applies only when the carrier/PBX system's automated hold-music message appears as a transcript turn.
   → "Could Not Confirm". STOP.
@@ -292,11 +380,12 @@ RULE 7 — APPROVED:
   → "Approved". STOP.
 
 RULE 8 — ENRICHED:
-  Condition: Product confirmed AND buyer answered at least ONE but NOT ALL specification questions with valid specific values.
+  Condition: Product confirmed AND buyer answered at least TWO but NOT ALL specification questions with valid specific values.
+  NOTE: "I don't know", "not sure", bare "हाँ/yes/ok" answers do NOT count as valid spec values — only concrete choices, numbers, or named options count.
   → "Enriched". STOP.
 
-RULE 9 — INTERESTED (product confirmed, zero specs):
-  Condition: Product confirmed AND buyer answered ZERO specification questions with valid specific values.
+RULE 9 — INTERESTED (product confirmed, zero or one valid spec):
+  Condition: Product confirmed AND buyer answered ZERO OR ONLY ONE specification question with valid specific values (remaining answers were "I don't know", vague, or missing).
   → "Interested". STOP.
 
 RULE 10 — INTERESTED (positive engagement, no confirmation):
@@ -374,8 +463,10 @@ PRE-STEP (mandatory): Read the transcript sequentially. Each time the AGENT asks
 EXTRACTION RULES (all mandatory):
 1. POSITION RULE: Attribute each buyer response to the qualification question the AGENT asked immediately before that buyer turn. Nth question asked = Nth buyer answer. Never reassign based on answer format or data type.
 2. INCLUDE: any relevant buyer response — number, option, free-text, "others/other". Do NOT skip answers because the agent did not re-confirm them.
-3. AGENT-CONFIRMATION RULE: If the buyer's response is garbled/unclear (STT noise) but the AGENT's very next turn explicitly restates a confirmed value (e.g. "Industrial नोट कर लिया", "okay, X"), treat that agent-confirmed value as the buyer's answer. Include the question.
-   ANTI-HALLUCINATION EXCEPTION: This rule ONLY applies when the buyer gave a real (even if garbled) response. If the buyer said a vague filler sound ("हम्म", "umm", "uh", "achha") and the agent then ASSUMED a value and moved on (without the buyer actually confirming), do NOT credit the agent's assumption as the buyer's answer. A vague filler followed by an agent assumption is NOT a confirmed spec answer. Require that the buyer spoke a real value (however garbled) or explicitly echoed/confirmed the agent's restatement.
+3. AGENT-CONFIRMATION RULE: If the buyer's response is garbled/unclear (STT noise) OR missing entirely (no buyer turn between two agent turns), and the AGENT's next turn explicitly restates or confirms a value (e.g. "Industrial नोट कर लिया", "okay, X", "ठीक है — [value]", "aapne [value] bataya"), treat that agent-confirmed value as the buyer's answer for the preceding question. Include the question.
+   STT NUMBER RENDERING: The agent may say Hindi numbers in romanised or anglicised form due to TTS rendering — treat these as the corresponding digit: "das"/"dash" = 10 (दस), "bees" = 20 (बीस), "teen"/"tin" = 3 (तीन), "paanch"/"punch" = 5 (पाँच), "sau"/"so" = 100 (सौ). E.g. "dash units note kar liya" means the agent confirmed 10 units.
+   ANTI-HALLUCINATION EXCEPTION: If the buyer's turn is missing AND the agent simply moved to the next question without stating any confirmed value, do NOT invent an answer. Use AGENT BEHAVIOUR INFERENCE to infer the question was answered, but set answ "Not Sure" and opt_id null unless a value was explicitly confirmed. A vague filler ("हम्म", "umm", "achha") followed by an agent assumption is also not a confirmed answer.
+   TRANSCRIPT-ENDING QUESTION: If the transcript ends immediately after the agent asked a question — meaning there is NO user turn and NO subsequent agent turn after that question — the question is completely unanswered. Do NOT add it to qna under any circumstances. Do NOT pick an answer from the option list. Omit it entirely.
 4. NO CROSS-TYPE REASSIGNMENT:
    — A grade/specification answer (e.g. "140 GSM", "40 GSM") stays with the spec/grade question — NOT reassigned to a quantity question even though it has a number.
    — A quantity answer (e.g. "50 pieces") is a quantity answer ONLY if the agent was asking about quantity at that moment.
