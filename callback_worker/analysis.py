@@ -183,6 +183,8 @@ TWO CRITICAL META-RULES (apply throughout):
 
   RETRACTION RULE: If the buyer initially seems to confirm the product but then CLEARLY and EXPLICITLY retracts (e.g. "मशीन नहीं लेना है", "actually I don't need it") — the retraction takes precedence over the earlier engagement. The buyer's final clear stance wins.
 
+  LOCK-IN RULE: Once product confirmation AND at least one valid spec answer are established earlier in the call, subsequent off-topic turns — such as the buyer asking about the agent's location, identity, or completely unrelated topics — do NOT undo the classification. Off-topic responses are NOT retractions. Only a CLEAR and EXPLICIT retraction (per RETRACTION RULE above) can downgrade a Tier 2 classification.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━
 TIER 1 — DEFINITIVE CALL-ENDERS
 Apply these first. Each is a complete, unambiguous signal that overrides everything else. STOP at the first match.
@@ -286,6 +288,10 @@ If NONE of the above happened → skip Rules 7–9, go to Rule 10.
   ✗ NOT valid: "हाँ" / "हां" / "yes" / "जी" / "ok" in response to a spec question — bare acknowledgements, NOT spec values.
   ✗ NOT valid: vague filler sounds ("हम्म", "umm") — even if the agent assumed a value afterwards, the assumption does NOT count as a buyer answer.
   ✗ NOT valid: "standard", "whatever is normal", "you decide", "don't know" — no usable data.
+  ⚠ ASR CORRUPTION: Hindi phone transcripts frequently contain phonetic corruptions where words are misrecognized by speech-to-text. Interpret spec answers by INTENT and CONTEXT, not by literal spelling. Examples: "वेदर वोकेशन" = "weather protection", "वाइट" = "White", "टॉक टू वाटर प्रूफ" = "totally waterproof", "पीपीआर पीपीआर" = "PPR". If the garbled text is phonetically or contextually close to a valid option for that question, count it as a valid answer.
+
+━━ BOT COMPLETION SIGNAL ━━
+If the agent's FINAL turn contains the standard call-close phrase (e.g. "सारी details मिल गईं", "जल्द ही relevant sellers आपसे contact करेंगे", "आपका समय देने के लिए शुक्रिया") — the bot successfully completed the full qualification flow and was satisfied with the answers collected. This is a STRONG signal for "Approved". Default to "Approved" in this case unless a Tier 1 rule (Rules 0–6) applies or the buyer explicitly retracted (RETRACTION RULE). Do NOT downgrade to Enriched just because one answer appeared vague or ASR-corrupted — the bot's successful completion overrides doubt about individual answers.
 
 RULE 7 — APPROVED:
   Condition: Product confirmed AND buyer answered ALL {len(questions)} specification questions with valid specific values.
