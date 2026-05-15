@@ -436,9 +436,9 @@ _HARDCODED_BOT_CONFIG: dict = {
     },
     "language": "hindi",
     "temperature": 0.7,
-    "gemini_start_sensitivity": "START_SENSITIVITY_LOW",
-    "gemini_end_sensitivity": "END_SENSITIVITY_LOW",
-    "gemini_silence_duration_ms": 1000,
+    "gemini_start_sensitivity": "START_SENSITIVITY_HIGH",
+    "gemini_end_sensitivity": "END_SENSITIVITY_HIGH",
+    "gemini_silence_duration_ms": 700,
     "gemini_prefix_padding_ms": 300,
     "max_call_duration": 300,
     "sarvam_min_rms": 600,
@@ -1582,8 +1582,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     async def _transcribe_muted_period(frames: list, speech_ms: float) -> None:
         """Transcribe audio captured during a muted window (bot speaking turn + post-hold)
-        via Sarvam. Silero VAD gates the call so TV / background audio is rejected before
-        the Sarvam API is hit."""
+        via Sarvam. No Silero gate here — we want everything the user said, even brief."""
         if not frames:
             return
         if not SARVAM_API_KEY:
@@ -1599,23 +1598,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     wf.writeframes(f)
             buf.seek(0)
             wav_data = buf.read()
-            # Silero VAD gate — extract PCM and score for human voice.
-            try:
-                with wave.open(io.BytesIO(wav_data), "rb") as wf:
-                    pcm_bytes = wf.readframes(wf.getnframes())
-            except Exception:
-                pcm_bytes = b""
-            if pcm_bytes:
-                voiced_ms = await asyncio.get_event_loop().run_in_executor(
-                    None, _silero_voiced_ms, pcm_bytes, _sarvam_silero_threshold
-                )
-                if voiced_ms < _sarvam_silero_min_speech_ms:
-                    _log.info(
-                        f"[MUTED-CAPTURE] Silero — no speech detected "
-                        f"(voiced_ms={voiced_ms:.0f} < min={_sarvam_silero_min_speech_ms}), skipping"
-                    )
-                    return
-                _log.info(f"[MUTED-CAPTURE] Silero — speech confirmed (voiced_ms={voiced_ms:.0f})")
             form = aiohttp.FormData()
             form.add_field("file", wav_data, filename="audio.wav", content_type="audio/wav")
             form.add_field("language_code", "hi-IN")
@@ -1972,8 +1954,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         _muted_capture["frames"].clear()
                         _muted_capture["speech_ms"] = 0.0
                         if (
-                            captured_ms >= _sarvam_min_speech_ms
-                            and captured_frames
+                            captured_frames
                             and not _call_ended
                         ):
                             _log.info(
