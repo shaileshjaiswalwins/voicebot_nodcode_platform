@@ -80,6 +80,7 @@ logger.add(
     level="INFO",
     enqueue=True,           # async-safe — won't block the event loop
     format=_log_format,
+    filter=lambda rec: not rec["extra"].get("caller"),  # call logs go via grouped CALL BLOCK only
 )
 
 # ---------------------------------------------------------------------------
@@ -302,8 +303,18 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Step 2 — Questions\n"
         "Strictly in order. One per turn. No skipping, no combining.\n"
         "If buyer proactively covers multiple questions — great, pick up from where they left off.\n\n"
-        "Step 3 — Closing\n"
-        "Only after EVERY question has an answer (even \"Not Sure\"):\n"
+        "Step 3 — Confirm before closing\n"
+        "Once EVERY question has an answer (even \"Not Sure\"), do ONE confirmation turn.\n"
+        "Read back the collected answers as a compact summary and ask if it's correct:\n"
+        "  Example: \"तो confirm करते हैं — [Q1 answer], [Q2 answer], [Q3 answer] — सही समझा ना?\"\n"
+        "Keep it to one natural sentence. List only the answers, not the question labels.\n\n"
+        "After the confirmation:\n"
+        "  • User confirms (हाँ / yes / bilkul / sahi hai / theek hai) → go to Step 4.\n"
+        "  • User corrects one thing → \"Okay, तो [corrected value] — और बाकी सब ठीक है?\" → update and go to Step 4.\n"
+        "  • User corrects multiple things → update all, confirm the corrected values once more, then go to Step 4.\n"
+        "Do this confirmation ONCE only — never loop more than one correction round.\n\n"
+        "Step 4 — Closing\n"
+        "Only after confirmation is done:\n"
         "\"ठीक है जी, सारी details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए शुक्रिया.\" then stop — do not add anything after.\n\n"
 
         "━━━ ANSWER VALIDATION — STRICT ━━━\n\n"
@@ -341,6 +352,11 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Not interested: \"Theek hai jee, koi baat nahi. Future mein zaroorat ho toh Justdial pe call kar sakte hain. Dhanyavaad.\" → stop\n"
         "Rude or hang-up: same warm close immediately\n"
         "Reschedule: \"Theek hai jee, [time] pe baat karte hain.\" → stop\n\n"
+        "Mid-conversation hello / connection check:\n"
+        "If the user says \"hello\", \"हेलो\", \"हाय\", \"are you there\", \"hello hello\", or similar AFTER the call has already started:\n"
+        "→ DO NOT re-introduce yourself. DO NOT say \"हाँ जी, आपको मेरी आवाज़ आ रही है?\"\n"
+        "→ Simply say \"हाँ जी\" and immediately re-ask the current unanswered question.\n"
+        "→ Example: \"हाँ जी — तो [current question]?\"\n\n"
 
         "━━━ PRE-RESPONSE CHECKLIST ━━━\n\n"
         "□ VALIDATION GATE: Did the user's last turn satisfy (a)–(d) for the current question?\n"
@@ -349,7 +365,8 @@ _HARDCODED_BOT_CONFIG: dict = {
         "□ Am I asking exactly one question?\n"
         "□ About to name a brand / give a price / give an opinion? → STOP. Deflect + re-ask.\n"
         "□ Did I just deflect? → Did I include the re-ask? (If not, add it.)\n"
-        "□ Is every question answered before I close? (If not, do NOT close.)\n"
+        "□ Is every question answered? (If not, do NOT close and do NOT confirm.)\n"
+        "□ Have I done the confirmation turn and the user confirmed (or corrected)? (If not, do confirmation first.)\n"
         "□ Is my language natural, warm, and varied from last turn?"
     ),
     "initial_message": "हेलो, मैं Simran बोल रही हूँ Justdial से — आपको {product} की requirement है ना?",
@@ -422,6 +439,7 @@ _HARDCODED_BOT_CONFIG: dict = {
     "sarvam_min_speech_ms_singleword": 1500,
     "sarvam_silero_threshold": 0.5,
     "sarvam_silero_min_speech_ms": 150,
+    "gemini_silero_min_speech_ms": 50,
     "post_speech_hold_ms": 800,
     "filler_message": ["अच्छा,", "हाँ,", "जी,", "तो,", "ठीक है,"],
     "function_filler_message": ["एक moment जी,", "जी, देख रही हूँ,"],
@@ -980,7 +998,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _lead_id_meta = _room_meta_raw.get("lead_id", "")
     _room_mobile_m = re.search(r'__(\d{10,12})_', room_name)
     _room_mobile = normalize_mobile(_room_mobile_m.group(1)) if _room_mobile_m else ""
-    _log = logger.bind(caller=_room_mobile or room_name[-15:])
+    _caller_key = _room_mobile or room_name[-15:]
+    _log = logger.bind(caller=_caller_key)
+
+    # Buffer this call's logs in memory; flushed as a grouped block to the daily file at call end
+    _call_log_buffer: list[str] = []
+    _call_sink_id = logger.add(
+        _call_log_buffer.append,
+        level="INFO",
+        format=_log_format,
+        enqueue=False,
+        filter=lambda rec, _k=_caller_key: rec["extra"].get("caller") == _k,
+    )
 
     _SEP = "═" * 68
     _log.info(_SEP)
@@ -1020,7 +1049,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _sarvam_min_speech_ms_singleword = int(_bot_config.get("sarvam_min_speech_ms_singleword") or 1500)
     _sarvam_silero_threshold         = float(_bot_config.get("sarvam_silero_threshold") or 0.5)
     _sarvam_silero_min_speech_ms     = int(_bot_config.get("sarvam_silero_min_speech_ms") or 400)
+    _gemini_silero_min_speech_ms     = int(_bot_config.get("gemini_silero_min_speech_ms") or 50)
     _post_speech_hold_ms             = int(_bot_config.get("post_speech_hold_ms") or 800)
+    _early_mute_recovery_grace_ms    = int(_bot_config.get("early_mute_recovery_grace_ms") or 2500)
     _functions: list[dict] = _bot_config.get("functions") or []
     _function_calling   = bool(_bot_config.get("function_calling", False)) and bool(_functions)
     _lang_cfg           = HINDI_LANG_CONFIG
@@ -1239,6 +1270,23 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             f"duration={_duration}s | lead_id={lead_id!r}"
         )
         _log.info(_SEP)
+        logger.remove(_call_sink_id)
+
+        # Append the full buffered call as a grouped block to the daily log file
+        _daily_log = os.path.join(_LOG_DIR, f"{datetime.utcnow().strftime('%Y-%m-%d')}.log")
+        _block_sep = "═" * 68
+        _block_header = (
+            f"\n{_block_sep}\n"
+            f"[CALL BLOCK] lead_id={lead_id!r} | mobile={_room_mobile!r} | room={room_name}\n"
+            f"{_block_sep}\n"
+        )
+        try:
+            with open(_daily_log, "a", encoding="utf-8") as _f:
+                _f.write(_block_header)
+                _f.writelines(_call_log_buffer)
+                _f.write(f"{_block_sep}\n\n")
+        except Exception as _be:
+            _log.warning(f"[CALL BLOCK] Could not write grouped block: {_be}")
 
     _save_done_event = asyncio.Event()
 
@@ -1376,9 +1424,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     buf_lower = buf.lower()
                     if any(m in buf_lower for m in (
                         "details मिल गईं",
-                        "relevant sellers",
+                        "relevant sellers आपसे contact",
                         "sellers will contact",
-                        "all details",
+                        "relevant sellers will contact",
                     )):
                         _early_close_muting = True
                         _set_mic(False, reason="stream-closing-phrase")
@@ -1471,6 +1519,28 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if unicodedata.category(c)[0] in ("L", "N", "M") or c.isspace()
         )
         return [t for t in cleaned.split() if t]
+
+    _GREETING_TOKENS = {
+        unicodedata.normalize("NFC", w) for w in {
+            "hello", "हेलो", "हैलो", "हलो",
+            "hi", "hey", "हाय",
+            "namaste", "namaskar", "नमस्ते", "नमस्कार",
+        }
+    }
+
+    def _muted_is_substantive(text: str) -> bool:
+        """Return True only if the muted-capture text carries real intent beyond
+        greetings and filler — safe to inject to Gemini as a user turn."""
+        if not text:
+            return False
+        tokens = _normalize_stt_tokens(text)
+        if not tokens:
+            return False
+        if all(t in _SARVAM_FILLER_HALLUCINATIONS for t in tokens):
+            return False
+        if all(t in _GREETING_TOKENS or t in _SARVAM_FILLER_HALLUCINATIONS for t in tokens):
+            return False
+        return True
 
     async def _sarvam_stt_fallback() -> str | None:
         """Transcribe the WAV file written by _buffer_user_audio via Sarvam STT.
@@ -1677,10 +1747,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if not _early_close_muting and not _closing_triggered:
             _buf_lower = _closing_buffer.lower()
             if any(m in _buf_lower for m in (
-                "details मिल गईं",   # start of Hindi closing line — appears before interruption can truncate
-                "relevant sellers",
+                "details मिल गईं",
+                "relevant sellers आपसे contact",
                 "sellers will contact",
-                "all details",        # English equivalent
+                "relevant sellers will contact",
             )):
                 _early_close_muting = True
                 _set_mic(False, reason="commit-closing-phrase")
@@ -1741,10 +1811,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _voiced = _silero_voiced_ms(
                     bytes(_current_window_pcm), _sarvam_silero_threshold
                 )
-                if _voiced < _sarvam_silero_min_speech_ms:
+                if _voiced < _gemini_silero_min_speech_ms:
                     _log.info(
                         f"[GEMINI] Silero rejected FINAL {transcript_text!r} — "
-                        f"voiced_ms={_voiced:.0f} < min={_sarvam_silero_min_speech_ms} "
+                        f"voiced_ms={_voiced:.0f} < min={_gemini_silero_min_speech_ms} "
                         f"(speech_ms={speech_ms_now:.0f})"
                     )
                     # Remove any partial placeholder that was already added for this turn
@@ -1857,6 +1927,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     _log.info("[POST-SPEECH-HOLD] cancelled stale guard — starting new")
 
                 async def _post_speech_hold() -> None:
+                    nonlocal _early_close_muting
                     _log.info(
                         f"[POST-SPEECH-HOLD] started (hold={_post_speech_hold_ms} ms)"
                     )
@@ -1874,6 +1945,63 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             # Rotate WAV so the fallback only sees audio from THIS response
                             # window, not contaminated audio from earlier turns.
                             _wav_reset_flag = True
+                        elif _early_close_muting and not _closing_triggered and not _call_ended:
+                            # False-positive early-mute recovery: a partial closing phrase matched
+                            # during streaming but the full closing line never committed, meaning
+                            # the agent was speaking mid-conversation.  Re-enable the mic and give
+                            # any muted-capture audio a chance to reach Gemini.
+                            _early_close_muting = False
+                            _log.info(
+                                "[EARLY-MUTE-RECOVERY] Closing didn't commit after partial match — "
+                                "clearing early_mute, re-enabling mic"
+                            )
+                            _set_mic(True, reason="early-mute-recovery")
+                            _wav_reset_flag = True
+                            _reset_inactivity()
+
+                            async def _grace_period_inject() -> None:
+                                """Wait for live speech to arrive. If none does and the muted
+                                capture is substantive, inject it to Gemini as a user turn."""
+                                await asyncio.sleep(_early_mute_recovery_grace_ms / 1000)
+                                if _call_ended or _closing_triggered:
+                                    return
+                                text = _muted_inject.get("text", "")
+                                if not text:
+                                    return  # live speech already arrived and discarded it
+                                if not _muted_is_substantive(text):
+                                    _log.info(
+                                        f"[EARLY-MUTE-INJECT] dropping non-substantive "
+                                        f"muted text {text!r}"
+                                    )
+                                    _muted_inject["text"] = ""
+                                    return
+                                _rt_now = (
+                                    getattr(session._activity, "_rt_session", None)
+                                    if session._activity else None
+                                )
+                                if _rt_now is None:
+                                    _log.warning("[EARLY-MUTE-INJECT] no realtime session — cannot inject")
+                                    return
+                                try:
+                                    _rt_now._send_client_event(
+                                        types.LiveClientContent(
+                                            turns=[types.Content(
+                                                parts=[types.Part(text=text)],
+                                                role="user",
+                                            )],
+                                            turn_complete=True,
+                                        )
+                                    )
+                                    _log.info(
+                                        f"[EARLY-MUTE-INJECT] injected muted user turn → "
+                                        f"Gemini: {text!r}"
+                                    )
+                                    _live_transcript.append({"role": "user", "text": text})
+                                    _muted_inject["text"] = ""
+                                except Exception as _inj_e:
+                                    _log.warning(f"[EARLY-MUTE-INJECT] send_client_event failed: {_inj_e}")
+
+                            asyncio.create_task(_grace_period_inject())
                         else:
                             _log.info(
                                 f"[POST-SPEECH-HOLD] expired — mic stays muted "
