@@ -593,6 +593,76 @@ STRICT OUTPUT RULES:
             pc = result.get("product_change") or {}
             if isinstance(pc, dict) and "new_product" in pc and "product_name" not in pc:
                 result["product_change"] = {"product_name": pc.get("new_product", "")}
+
+            # ── DETERMINISTIC POST-PROCESSING ──────────────────────────────
+            # These rules run after the LLM and fix systematic errors the
+            # model makes regardless of prompt instructions.
+
+            qna = result.get("qna") or []
+
+            # 1. opt_id must be null whenever the answer is "Not Sure" or empty.
+            for entry in qna:
+                if (entry.get("answ") or "").strip().lower() in ("not sure", ""):
+                    entry["opt_id"] = None
+
+            # 2. Remove hallucinated qna entries for unanswered questions.
+            #    If zero user turns are available for spec answers (all user turns
+            #    were product-confirmation only), no spec answer can exist.
+            _spec_turns_available = max(
+                0,
+                len(non_empty_user_turns) - (1 if _first_turn_is_confirmation else 0),
+            )
+            if _spec_turns_available == 0 and qna:
+                logger.info("[POST-PROC] 0 spec-answerable user turns — clearing hallucinated qna")
+                qna = []
+                result["qna"] = qna
+
+            # 3. Count valid (non-Not-Sure, non-empty) spec answers.
+            _valid_count = sum(
+                1 for q in qna
+                if (q.get("answ") or "").strip().lower() not in ("not sure", "")
+            )
+
+            # 4. Hard outcomes that must never be overridden by downstream logic.
+            _HARD_OUTCOMES = {
+                "Short Hangup", "Voicemail", "Wrong Number", "Seller Intent",
+                "Abusive Lead", "DNC Client : Don't Call Further",
+                "Language Issue", "Technical Issue - Call Connected",
+            }
+
+            if outcome not in _HARD_OUTCOMES:
+                # 5. Product confirmed → outcome must NOT be Could Not Confirm.
+                if _first_turn_is_confirmation and outcome == "Could Not Confirm":
+                    corrected = "Enriched" if _valid_count >= 1 else "Interested"
+                    logger.info(
+                        f"[POST-PROC] Product confirmed but LLM said Could Not Confirm "
+                        f"→ {corrected} (valid_answers={_valid_count})"
+                    )
+                    outcome = corrected
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+
+                # 6. Valid spec answers exist → outcome must NOT be Could Not Confirm.
+                elif outcome == "Could Not Confirm" and _valid_count >= 1:
+                    logger.info(
+                        f"[POST-PROC] Could Not Confirm with {_valid_count} valid spec "
+                        f"answers → Enriched"
+                    )
+                    outcome = "Enriched"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+
+                # 7. Enriched/Approved but zero valid answers → Interested.
+                elif outcome in ("Enriched", "Approved") and _valid_count == 0:
+                    logger.info(
+                        f"[POST-PROC] {outcome} with 0 valid answers → Interested"
+                    )
+                    outcome = "Interested"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+
+            # ── END POST-PROCESSING ────────────────────────────────────────
+
             return result
     except Exception as e:
         logger.error(f"[ANALYSIS] LLM analysis failed: {type(e).__name__}: {e}")
