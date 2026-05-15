@@ -51,7 +51,7 @@ def build_callback_payload(doc: dict, analysis: dict, b2b_score: dict | None = N
 
     _b2b = b2b_score or {}
     payload: dict = {
-        "call_id": doc.get("call_id", ""),
+        "call_id": str(doc.get("_id", "")),
         "lead_id": doc.get("lead_id"),
         "is_business": analysis.get("is_business", ""),
         "business_name": analysis.get("business_name", ""),
