@@ -1187,6 +1187,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "ended_naturally": call_state.get("ended_naturally"),
             "product_change": call_state.get("product_change"),
             "transcript": transcript,
+            "muted_transcript": _muted_transcript_log,
             "lead_record": call_state.get("lead_record"),
             "sip_info": sip_info,
             "call_start_time": _start,
@@ -1377,6 +1378,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # Holds the last muted-window transcript (Sarvam capture while mic was OFF).
     # Never sent to Gemini — combined with the next live user FINAL for Mongo/analysis.
     _muted_inject: dict = {"text": ""}
+    # Cumulative log of every muted-window Sarvam transcript across the call.
+    # Saved to Mongo as a separate field so the analysis LLM can see what the user
+    # said during bot speaking turns even when those turns were discarded from _live_transcript.
+    _muted_transcript_log: list = []
 
     async def _handle_close() -> None:
         nonlocal _call_ended
@@ -1579,7 +1584,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         """Transcribe audio captured during a muted window (bot speaking turn + post-hold)
         via Sarvam. Silero VAD gates the call so TV / background audio is rejected before
         the Sarvam API is hit."""
-        if not SARVAM_API_KEY or not frames:
+        if not frames:
+            return
+        if not SARVAM_API_KEY:
+            _log.warning("[MUTED-CAPTURE] SARVAM_API_KEY not set — skipping transcription")
             return
         try:
             buf = io.BytesIO()
@@ -1642,6 +1650,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     # Buffer only — never injected to Gemini.
                     # _on_user_spoke combines this with the next live FINAL for Mongo.
                     _muted_inject["text"] = text
+                    _muted_transcript_log.append(text)
                 else:
                     body = await resp.text()
                     _log.warning(

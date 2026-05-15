@@ -74,6 +74,7 @@ async def generate_call_analysis(
     schema: dict,
     http_session: aiohttp.ClientSession,
     model: str = "gemini-2.5-flash-lite",
+    muted_transcript: list[str] | None = None,
 ) -> dict:
     if not transcript:
         return fallback_analysis(base_status)
@@ -169,6 +170,17 @@ async def generate_call_analysis(
         ensure_ascii=False,
     )
     lines = "\n".join(f"{t['role'].upper()}: {t['text']}" for t in transcript)
+    _muted_lines = ""
+    if muted_transcript:
+        _muted_block = "\n".join(f"  - {m}" for m in muted_transcript)
+        _muted_lines = (
+            f"\n\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"MUTED-WINDOW TRANSCRIPT (user speech captured while bot was speaking)\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"These are things the buyer said DURING the bot's turns (mic was muted, so Gemini did not hear them).\n"
+            f"Use for outcome classification and context only — do NOT use for QnA extraction unless there is no corresponding live transcript turn.\n"
+            f"{_muted_block}"
+        )
     cut_note = (
         "\nNote: The call ended before the bot's closing phrase. "
         "Determine the outcome based on what was actually collected."
@@ -283,7 +295,7 @@ Current date and time (IST, GMT+5:30): {current_dt_str}
 ━━━━━━━━━━━━━━━━━━━━━━━━
 TRANSCRIPT
 ━━━━━━━━━━━━━━━━━━━━━━━━
-{lines}
+{lines}{_muted_lines}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 QUALIFICATION QUESTIONS

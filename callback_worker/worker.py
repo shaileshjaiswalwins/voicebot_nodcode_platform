@@ -45,9 +45,10 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
     status = doc.get("status", "completed")
 
     transcript = doc.get("transcript") or []
+    muted_transcript = doc.get("muted_transcript") or []
     try:
         analysis, b2b_score = await asyncio.gather(
-            generate_call_analysis(transcript, status, schema, http_session),
+            generate_call_analysis(transcript, status, schema, http_session, muted_transcript=muted_transcript),
             generate_b2b_score(transcript, http_session),
         )
     except Exception as e:
