@@ -1193,6 +1193,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "call_end_time": _end_time,
             "call_duration_sec": _duration,
             "greeting_retry": _greeting_retry_triggered,
+            "gemini_connect_failed": _gemini_connect_failed,
             "tagged": False,
             "tagged_at": None,
             "created_at": datetime.now(timezone.utc),
@@ -1844,6 +1845,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _greeting_done = False
     _bot_has_spoken = False  # True once the agent first transitions to "speaking"
     _greeting_retry_triggered = False
+    _gemini_connect_failed = False  # True when Gemini WebSocket never connected within 5 s
     _mic_enabled: bool = False  # mirrors the last value passed to set_audio_enabled
     _speaking_start_time: float | None = None  # wall-clock when current speaking turn started
     _barge_in_fired: bool = False  # True once the 2s unmute task fires for this bot turn
@@ -2076,7 +2078,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _log.warning(f"[FORCE-SPEAK] {reason} failed: {e}")
 
         async def _trigger_greeting() -> None:
-            nonlocal _greeting_done, _bot_has_spoken, _greeting_retry_triggered
+            nonlocal _greeting_done, _bot_has_spoken, _greeting_retry_triggered, _gemini_connect_failed
             for _ in range(50):  # wait up to 5 s for the Gemini websocket connection
                 async with _rt._session_lock:
                     connected = _rt._active_session is not None
@@ -2085,6 +2087,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 await asyncio.sleep(0.1)
             else:
                 _log.warning("[GREETING] Gemini did not connect within 5 s; skipping trigger")
+                _gemini_connect_failed = True
                 return
             await asyncio.sleep(0.2)  # let initial chat-history replay finish
             _rt._send_client_event(
@@ -2239,7 +2242,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         # into a generation cycle, which emits server_content.input_transcription
         # → _mark_current_generation_done → input_audio_transcription_completed
         # (is_final=True) with the user's buffered speech, before save_call_data runs.
-        if _rt is not None and getattr(_rt, "_active_session", None) is not None:
+        #
+        # GUARD: only flush if the mic was actually live at some point after greeting.
+        # During the greeting window the mic is muted — Gemini has no buffered user
+        # audio to flush. Sending "." without this guard causes Gemini to generate a
+        # spurious response that lands in the transcript and corrupts analysis.
+        if _rt is not None and getattr(_rt, "_active_session", None) is not None and _greeting_done:
             try:
                 _rt._send_client_event(
                     types.LiveClientContent(

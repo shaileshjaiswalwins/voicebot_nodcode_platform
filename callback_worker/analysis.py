@@ -75,7 +75,16 @@ async def generate_call_analysis(
     http_session: aiohttp.ClientSession,
     model: str = "gemini-2.5-flash-lite",
     muted_transcript: list[str] | None = None,
+    gemini_connect_failed: bool = False,
 ) -> dict:
+    if gemini_connect_failed:
+        return {
+            "call_outcome": "Technical Issue - Call Connected",
+            "call_outcome_description": DISPOSITION_MAP["Technical Issue - Call Connected"],
+            "call_summary": "Gemini realtime WebSocket failed to connect — bot was silent, no greeting was spoken.",
+            "is_business": "", "business_city": "", "business_name": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
     if not transcript:
         return fallback_analysis(base_status)
 
@@ -99,9 +108,16 @@ async def generate_call_analysis(
         t for t in transcript
         if t.get("role") == "assistant" and (t.get("text") or "").strip()
     ]
+    # Check whether any user-side signal exists at all (live transcript OR muted capture).
+    _has_any_user_signal = bool(non_empty_user_turns) or bool(
+        muted_transcript and any((m or "").strip() for m in muted_transcript)
+    )
     if not non_empty_user_turns:
-        if len(_agent_turns_with_text) <= 1:
-            # Only greeting was spoken — true Short Hangup, no engagement at all.
+        if not _has_any_user_signal:
+            # Zero user speech from any source — true Short Hangup.
+            # Do NOT rely on agent turn count here: the Gemini realtime model streams
+            # greeting TTS in multiple chunks, so 2+ agent turns can all be parts of
+            # the opening greeting, NOT evidence that the user spoke.
             return {
                 "call_outcome": "Short Hangup",
                 "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
@@ -109,8 +125,8 @@ async def generate_call_analysis(
                 "is_business": "", "business_city": "", "business_name": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
-        # Agent asked multiple turns — STT likely failed but buyer did speak.
-        # Fall through to LLM with agent-behaviour inference context.
+        # Muted transcript has content but no live user turns — STT failed on live mic
+        # but user did speak during muted window. Fall through to LLM with context.
 
     _VOICEMAIL_SIGNALS_PRE = [
         "leave a message", "leave your message", "please leave a message",
@@ -222,9 +238,12 @@ async def generate_call_analysis(
 
     # Agent-progression check: the bot is strictly programmed — it NEVER advances to
     # asking spec questions without first receiving product confirmation. So if the
-    # agent has ≥2 turns with text, the product was confirmed regardless of what the
-    # STT captured. This is more reliable than text-token matching (no Unicode issues).
-    _agent_progressed = len(_agent_turns_with_text) >= 2
+    # agent has ≥2 turns with text AND there is some user-side signal (live transcript
+    # or muted capture), the product was confirmed regardless of what STT captured.
+    # IMPORTANT: do NOT apply this when there is zero user signal — the Gemini realtime
+    # model streams greeting TTS in multiple chunks, so 2+ agent turns can all be parts
+    # of the greeting itself, not a response to the user speaking.
+    _agent_progressed = _has_any_user_signal and len(_agent_turns_with_text) >= 2
 
     # Text-token fallback for edge cases where agent count alone is ambiguous.
     def _tokens(text: str) -> set[str]:
@@ -659,8 +678,21 @@ STRICT OUTPUT RULES:
             }
 
             if outcome not in _HARD_OUTCOMES:
+                # 5a. No user signal at all → cannot be Interested/Enriched/Approved.
+                #     Gemini greeting TTS splits into multiple chunks, so 2 agent turns
+                #     with zero user speech is still a Short Hangup, not engagement.
+                if not _has_any_user_signal and outcome in ("Interested", "Enriched", "Approved"):
+                    logger.info(
+                        f"[POST-PROC] {outcome} with zero user signal (no live turns, no "
+                        f"muted transcript) → Short Hangup"
+                    )
+                    outcome = "Short Hangup"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+                    result["qna"] = []
+
                 # 5. Product confirmed → outcome must NOT be Could Not Confirm.
-                if _first_turn_is_confirmation and outcome == "Could Not Confirm":
+                elif _first_turn_is_confirmation and outcome == "Could Not Confirm":
                     corrected = "Enriched" if _valid_count >= 1 else "Interested"
                     logger.info(
                         f"[POST-PROC] Product confirmed but LLM said Could Not Confirm "
