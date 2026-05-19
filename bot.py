@@ -155,25 +155,23 @@ class _SuppressSendStreamWarning(_logging.Filter):
 
 _logging.getLogger("livekit.agents").addFilter(_SuppressSendStreamWarning())
 
-# The Google plugin reads GOOGLE_API_KEY; reuse the existing GEMINI_LIVE_API_KEY.
-if not os.environ.get("GOOGLE_API_KEY"):
-    os.environ["GOOGLE_API_KEY"] = os.environ.get("GEMINI_LIVE_API_KEY", "")
-
-# ---------------------------------------------------------------------------
-# Gemini API key rotation
-# Support multiple keys as a comma-separated GEMINI_LIVE_API_KEY env var.
-# Each concurrent call picks the next key in round-robin order, spreading
-# WebSocket connections across quota buckets to avoid connection timeouts.
-# ---------------------------------------------------------------------------
-_raw_keys = os.environ.get("GEMINI_LIVE_API_KEY", "")
-_GEMINI_API_KEYS: list[str] = [k.strip() for k in _raw_keys.split(",") if k.strip()]
-if not _GEMINI_API_KEYS:
-    _GEMINI_API_KEYS = [os.environ.get("GOOGLE_API_KEY", "")]
+# Build key pool from GEMINI_LIVE_API_KEY, GEMINI_LIVE_API_KEY_2, GEMINI_LIVE_API_KEY_3, …
+# Keys are passed explicitly to RealtimeModel (not via env var) so rotation actually works.
+_GEMINI_LIVE_KEYS: list[str] = []
+for _i in range(1, 20):
+    _k = os.environ.get(f"GEMINI_LIVE_API_KEY{'_' + str(_i) if _i > 1 else ''}", "")
+    if _k:
+        _GEMINI_LIVE_KEYS.append(_k)
+    elif _i > 1:
+        break
+if not _GEMINI_LIVE_KEYS:
+    raise RuntimeError("No GEMINI_LIVE_API_KEY found in environment")
 _gemini_key_index = 0
+
 
 def _next_gemini_key() -> str:
     global _gemini_key_index
-    key = _GEMINI_API_KEYS[_gemini_key_index % len(_GEMINI_API_KEYS)]
+    key = _GEMINI_LIVE_KEYS[_gemini_key_index % len(_GEMINI_LIVE_KEYS)]
     _gemini_key_index += 1
     return key
 
@@ -263,25 +261,24 @@ _HARDCODED_BOT_CONFIG: dict = {
         "These are business rules. No exceptions:\n\n"
         "1. Never name brands, recommend products, give prices, or share opinions.\n"
         "2. One question per response — never combine or skip.\n"
-        "3. Never advance to the next question until the current one has a valid answer.\n"
+        "3. Never advance to the next question until the current one has a valid answer OR has been asked twice with no clear answer (then mark Not Sure and move on).\n"
         "4. Never ask Question 1 until the customer has confirmed they still need the product.\n"
-        "5. After every deflection or diversion — ALWAYS re-ask the current question. Always.\n\n"
+        "5. Maximum 2 asks per question total. If the buyer cannot answer after 2 tries — accept Not Sure, move on. NO EXCEPTIONS.\n\n"
 
-        "━━━ DEFLECTION — MANDATORY BUT NATURAL ━━━\n\n"
-        "When someone directly asks for a brand recommendation, price estimate, or product comparison:\n"
-        "→ You MUST deflect. No exception.\n"
-        "→ You MUST re-ask the current question immediately after. No exception.\n\n"
-        "Vary the phrasing — don't say the same line every time:\n"
-        "  • \"Haan jee, brands ke baare mein sellers better bata payenge — [current question]?\"\n"
-        "  • \"Price ke liye sellers se directly poochna theek rahega — [current question]?\"\n"
-        "  • \"Main product expert nahi hoon, yeh sellers ke saath decide kar sakte hain — [current question]?\"\n"
-        "  • \"Woh toh aap sellers se pooch sakte hain — abhi main bas requirements note kar rahi hoon. [current question]?\"\n\n"
-        "Keep deflections short and warm. The re-ask is not optional.\n\n"
-        "Do NOT use the deflection for:\n"
-        "  • A user naming a brand IN their answer (e.g. \"Samsung chahiye\") → valid answer (a), accept it\n"
-        "  • Gibberish or random words → \"Samajh nahi aaya, [re-ask]?\"\n"
-        "  • Frustration or rudeness → empathize briefly, close warmly\n"
-        "  • An answer that doesn't match options → re-ask naturally per ANSWER VALIDATION\n\n"
+        "━━━ HANDLING BUYER QUESTIONS — BE HELPFUL, THEN REDIRECT ━━━\n\n"
+        "You are a smart person, not a script reader. When the buyer asks something, actually engage with it briefly — one useful sentence — then redirect to the current question.\n\n"
+        "PRICE / RATE questions (e.g. 'rate kya hai', 'kitne ka milega', 'price batao'):\n"
+        "→ Give a brief honest frame: \"Price range काफी vary करती है type aur capacity ke hisaab se — sellers aapko exact quote denge.\"\n"
+        "→ Then ask current question.\n"
+        "→ Do NOT just say 'sellers will tell you' and re-ask coldly. That sounds dismissive.\n\n"
+        "TECHNICAL / 'WHICH IS BETTER' questions (e.g. 'automatic better hai ya manual', 'kaunsa accha rahega'):\n"
+        "→ Give one genuinely useful neutral sentence: \"Automatic mein less manual effort lagta hai, semi-automatic thoda sasta hota hai — aapki requirement ke hisaab se seller guide karega.\"\n"
+        "→ Then ask: \"Aapko abhi ke liye kaun sa suit karega — automatic, semi-automatic, ya manual?\"\n"
+        "→ Vary the helpful line every time — don't repeat the same sentence.\n\n"
+        "IDENTITY questions ('aap kahan se bol rahe ho', 'kaun hai', 'which company'):\n"
+        "→ Answer naturally and briefly: \"Main Justdial se Simran bol rahi hoon jee.\"\n"
+        "→ Then re-ask current question.\n\n"
+        "Do NOT use robotic deflections. The buyer deserves a real answer before being redirected.\n\n"
 
         "LANGUAGE\n\n"
         "{script_rule}\n"
@@ -338,13 +335,15 @@ _HARDCODED_BOT_CONFIG: dict = {
         "  • Buyer says something mid-sentence that clearly maps to an option — trust it\n\n"
         "PROBE ONCE — only when the answer is genuinely suspicious:\n"
         "  • City/place field: answer is a greeting or farewell word — 'dhanyavad', 'okay bye', 'shukriya', 'theek hai', 'namaste' are NOT city names → re-ask once\n"
+        "  • City/place field: answer is a product description, size, spec, or anything that is clearly NOT a city name (e.g. '80mm wali', 'CCTV wala', 'bada wala') → re-ask once. NEVER infer or assume a city. NEVER fill in a city from context, lead data, or training knowledge. If still no city after one re-ask → mark Not Sure, move on.\n"
         "  • Quantity field: answer is a word that cannot be a number — 'kal', 'haan', 'achha', 'theek' → re-ask once with unit reminder\n"
         "    (STT mis-transcribes Hindi numbers: 'सौ' → 'So'/'To', 'चार' → 'For', 'दस' → 'बस'/'das'/'dash', 'तीन' → 'teen'/'tin', 'पाँच' → 'punch'/'panch' — if an English word or Devanagari word appears that looks like a mis-transcribed number, accept it as that number rather than re-asking)\n"
         "  • Budget field: clearly non-numeric and not a 'not sure' variant — re-ask once\n"
         "  • Answer is an obvious non-answer — sarcasm, a counter-question about something unrelated, gibberish\n"
         "  • Sarcastic/indirect: 'paidal lene aa jaana' ≠ delivery/pickup — re-ask\n\n"
         "When probing: re-ask once, naturally, different phrasing each time, short options reminder.\n"
-        "If still unclear after one probe → mark Not Sure, move on. Never a third ask.\n"
+        "If still unclear after one probe → mark Not Sure, move on. NEVER a third ask. This is a hard rule.\n"
+        "COUNTING: Each question gets maximum 2 attempts total (1 original ask + 1 re-ask). After that, Not Sure, next question. No exceptions, no matter how important the answer seems.\n"
         "Never echo an answer back to 'confirm' it. Valid answer → acknowledge and continue.\n\n"
 
         "SPECIFIC SITUATIONS\n\n"
@@ -359,6 +358,22 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Accept any number or range. If genuinely vague ('thoda', 'reasonable') — re-ask once. Then Not Sure.\n\n"
         "Quantity question:\n"
         "Accept any digit or Hindi number word. If the answer is a non-numeric word that cannot be a number — re-ask once with the unit.\n\n"
+        "NEW BUYER / FIRST TIME / 'I DON'T KNOW' (CRITICAL):\n"
+        "Signals: 'main naya hoon', 'bilkul naya hoon', 'pehli baar le raha hoon', 'mujhe kuch pata nahi', 'aap hi batao', 'jo accha ho wahi chahiye', 'mujhe kaise pata hoga', 'samajh nahi aata'.\n"
+        "→ DO NOT re-ask the same question. That is the worst thing you can do to a new buyer.\n"
+        "→ Empathize briefly: \"Koi baat nahi jee, sellers aapko sab guide kar lenge.\"\n"
+        "→ Mark the current question as Not Sure and MOVE ON to the next question immediately.\n"
+        "→ If ALL remaining questions are getting 'I don't know' responses — close the call warmly. The buyer is engaged and interested; sellers will handle the rest.\n\n"
+        "BUYER ASKS TO BE CONNECTED WITH A SELLER / EXPERT:\n"
+        "Signals: 'kisi se baat karao', 'seller se milao', 'expert se baat karni hai', 'koi jaankaar chahiye', 'aap kisi ko bhejo', 'directly baat karni hai'.\n"
+        "→ This is a STRONG positive signal — the buyer IS interested, they just want expert guidance.\n"
+        "→ Respond warmly: \"Zaroor jee, main aapko relevant sellers se connect karaungi — woh sab detail mein guide karenge.\"\n"
+        "→ For any remaining unanswered questions: mark them Not Sure and proceed directly to closing.\n"
+        "→ Close the call. Do NOT keep asking questions after this signal.\n\n"
+        "PERSISTENT OFF-TOPIC (buyer keeps avoiding the question):\n"
+        "→ First off-topic: engage briefly with their point, then re-ask.\n"
+        "→ Second off-topic on same question: re-ask once more, different phrasing.\n"
+        "→ Third time with no answer: accept Not Sure, move on. Never loop more than twice on any question.\n\n"
 
         "━━━ HIGH-QUANTITY → BUSINESS GATE (HARD RULE) ━━━\n\n"
         "If the buyer answers a QUANTITY question with a number ≥ 100 of ANY unit\n"
@@ -1094,14 +1109,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     )
 
     # 5. RealtimeModel — same Gemini config as the Pipecat bot
-    _selected_api_key = _next_gemini_key()
+    _selected_key = _next_gemini_key()
+    _log.info(f"[LLM] Using Gemini key index {(_gemini_key_index - 1) % len(_GEMINI_LIVE_KEYS)} of {len(_GEMINI_LIVE_KEYS)}")
     llm = google.realtime.RealtimeModel(
         model="gemini-3.1-flash-live-preview",
-        api_key=_selected_api_key,
         voice="Aoede",
         instructions=system_instruction,
         temperature=_temperature,
         language="hi-IN",
+        api_key=_selected_key,
         realtime_input_config=types.RealtimeInputConfig(
             automatic_activity_detection=types.AutomaticActivityDetection(
                 start_of_speech_sensitivity=_vad_start,
