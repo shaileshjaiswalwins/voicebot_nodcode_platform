@@ -15,7 +15,7 @@ CALLBACK_API_URL = os.getenv(
     "http://192.168.8.67:8000/leads/ai-lead-qualify/callback",
 )
 
-GEMINI_API_KEY = os.getenv("GEMINI_LIVE_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_ANALYSIS_API_KEY")
 
 POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "60"))
 BATCH_LIMIT = int(os.getenv("BATCH_LIMIT", "50"))

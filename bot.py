@@ -160,6 +160,24 @@ if not os.environ.get("GOOGLE_API_KEY"):
     os.environ["GOOGLE_API_KEY"] = os.environ.get("GEMINI_LIVE_API_KEY", "")
 
 # ---------------------------------------------------------------------------
+# Gemini API key rotation
+# Support multiple keys as a comma-separated GEMINI_LIVE_API_KEY env var.
+# Each concurrent call picks the next key in round-robin order, spreading
+# WebSocket connections across quota buckets to avoid connection timeouts.
+# ---------------------------------------------------------------------------
+_raw_keys = os.environ.get("GEMINI_LIVE_API_KEY", "")
+_GEMINI_API_KEYS: list[str] = [k.strip() for k in _raw_keys.split(",") if k.strip()]
+if not _GEMINI_API_KEYS:
+    _GEMINI_API_KEYS = [os.environ.get("GOOGLE_API_KEY", "")]
+_gemini_key_index = 0
+
+def _next_gemini_key() -> str:
+    global _gemini_key_index
+    key = _GEMINI_API_KEYS[_gemini_key_index % len(_GEMINI_API_KEYS)]
+    _gemini_key_index += 1
+    return key
+
+# ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------
 
@@ -1076,8 +1094,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     )
 
     # 5. RealtimeModel — same Gemini config as the Pipecat bot
+    _selected_api_key = _next_gemini_key()
     llm = google.realtime.RealtimeModel(
         model="gemini-3.1-flash-live-preview",
+        api_key=_selected_api_key,
         voice="Aoede",
         instructions=system_instruction,
         temperature=_temperature,
