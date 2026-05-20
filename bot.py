@@ -19,6 +19,7 @@ Run::
 
 import array as _array
 import asyncio
+import fcntl
 import io
 import json
 import logging as _logging
@@ -166,14 +167,28 @@ for _i in range(1, 20):
         break
 if not _GEMINI_LIVE_KEYS:
     raise RuntimeError("No GEMINI_LIVE_API_KEY found in environment")
-_gemini_key_index = 0
+
+_KEY_INDEX_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".gemini_key_index")
 
 
 def _next_gemini_key() -> str:
-    global _gemini_key_index
-    key = _GEMINI_LIVE_KEYS[_gemini_key_index % len(_GEMINI_LIVE_KEYS)]
-    _gemini_key_index += 1
-    return key
+    """Round-robin across keys using a file-based counter shared by all worker processes."""
+    if len(_GEMINI_LIVE_KEYS) == 1:
+        return _GEMINI_LIVE_KEYS[0]
+    try:
+        with open(_KEY_INDEX_FILE, "a+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.seek(0)
+            raw = f.read().strip()
+            idx = int(raw) if raw.isdigit() else 0
+            next_idx = (idx + 1) % len(_GEMINI_LIVE_KEYS)
+            f.seek(0)
+            f.truncate()
+            f.write(str(next_idx))
+            return _GEMINI_LIVE_KEYS[idx]
+    except Exception:
+        # Fallback: just use first key rather than crashing a call
+        return _GEMINI_LIVE_KEYS[0]
 
 # ---------------------------------------------------------------------------
 # Module-level constants
@@ -1112,7 +1127,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # 5. RealtimeModel — same Gemini config as the Pipecat bot
     _selected_key = _next_gemini_key()
-    _log.info(f"[LLM] Using Gemini key index {(_gemini_key_index - 1) % len(_GEMINI_LIVE_KEYS)} of {len(_GEMINI_LIVE_KEYS)}")
+    _log.info(f"[LLM] Using Gemini key ...{_selected_key[-6:]} ({len(_GEMINI_LIVE_KEYS)} keys in pool)")
     llm = google.realtime.RealtimeModel(
         model="gemini-3.1-flash-live-preview",
         voice="Aoede",
