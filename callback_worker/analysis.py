@@ -767,7 +767,7 @@ DERIVED FIELDS
 - urgency_flag: Set true if the prospect explicitly mentions urgency (e.g. "urgent", "ASAP", "by Friday", specific near deadline). Otherwise false.
 - extracted_quantity: The numeric quantity stated. If a range is given, return the average.
 - estimated_unit_price: Infer a reasonable B2B market price range per unit strictly in the Indian landscape, based on the product type and any constraints mentioned on the call. Return as an object with low and high values in INR.
-- estimated_deal_value: Computed as extracted_quantity * ((estimated_unit_price.low + estimated_unit_price.high) / 2). Use the average of the unit price range, not a low–high spread.
+- estimated_deal_value: STRICTLY computed as extracted_quantity * ((estimated_unit_price.low + estimated_unit_price.high) / 2). Without fail, use the average of the unit price range, DO NOT use a not a low–high range of the value at any instance.
 - lead_category: Based on final_score — "High" (7–10), "Medium" (4–6.9), "Low" (0–3.9).
 
 HARD RULES

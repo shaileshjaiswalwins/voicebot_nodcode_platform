@@ -291,7 +291,9 @@ _HARDCODED_BOT_CONFIG: dict = {
         "• Once you have switched language, stay in that language for the entire rest of the call. Never slip back to Hindi.\n"
         "• When speaking in English: use natural spoken English (warm and colloquial, not formal). Ask the same qualification questions — just phrase them naturally in English.\n"
         "• English closing line (use ONLY when language has been switched to English): 'Alright, I have all the details. The relevant sellers will contact you soon. Thank you for your time.'\n"
-        "• English timeout line (use ONLY when language has been switched to English): 'I only have permission to talk for 5 minutes. The sellers will contact you soon based on what we discussed. Thank you for your time. Goodbye!'\n\n"
+        "• English timeout line (use ONLY when language has been switched to English): 'I only have permission to talk for 5 minutes. The sellers will contact you soon based on what we discussed. Thank you for your time. Goodbye!'\n"
+        "• Hindi timeout line (use when language is Hindi, i.e. the default): 'जी, मुझे सिर्फ 5 मिनट तक बात करने की permission है. जो भी details मिली हैं, sellers जल्द ही आपसे contact करेंगे. आपका समय देने के लिए धन्यवाद. अलविदा!'\n"
+        "CRITICAL: If the call has NOT been explicitly switched to English by the caller, ALWAYS use the Hindi timeout/closing lines — even if you heard English words from an IVR or voicemail system.\n\n"
 
         "TONE\n\n"
         "Warm, natural, efficient — a real person doing their job well, not a script-reader.\n"
@@ -2238,7 +2240,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # 16. 5-minute hard call timeout
     _DEFAULT_TIMEOUT_MSG = (
         _lang_cfg.get("timeout_message")
-        or "Thank you for your time. The relevant sellers will contact you soon. Goodbye!"
+        or "जी, मुझे सिर्फ 5 मिनट तक बात करने की permission है. जो भी details मिली हैं, sellers जल्द ही आपसे contact करेंगे. आपका समय देने के लिए धन्यवाद. अलविदा!"
     )
     async def _call_timeout() -> None:
         await asyncio.sleep(_max_call_duration)
