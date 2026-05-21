@@ -721,6 +721,20 @@ STRICT OUTPUT RULES:
                     result["call_outcome"] = outcome
                     result["call_outcome_description"] = DISPOSITION_MAP[outcome]
 
+                # 8. Enriched + bot said the canonical closing line → Approved.
+                #    "ठीक है जी, सारी details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे"
+                #    is only said when the bot is satisfied it collected everything — override the LLM.
+                elif outcome == "Enriched" and _valid_count >= 1:
+                    _last_asst = next(
+                        (t.get("text", "") for t in reversed(transcript) if t.get("role") == "assistant"),
+                        "",
+                    )
+                    if "सारी details मिल गईं" in _last_asst and "relevant sellers" in _last_asst:
+                        logger.info("[POST-PROC] Enriched but bot said canonical closing line → Approved")
+                        outcome = "Approved"
+                        result["call_outcome"] = outcome
+                        result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+
             # ── END POST-PROCESSING ────────────────────────────────────────
 
             return result
