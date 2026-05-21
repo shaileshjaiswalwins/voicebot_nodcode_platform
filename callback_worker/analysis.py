@@ -369,6 +369,11 @@ GP-7  AGENT PROGRESSION GUARANTEES PRODUCT CONFIRMATION: The bot is strictly pro
         • This overrides any superficially vague or unclear buyer responses you observe.
       You do not need to re-derive product_confirmed from buyer turns alone when the agent's
       own behaviour already proves it.
+      EXCEPTION — bot mis-step: if the buyer's ONLY response to the opening product question
+      was entirely off-topic (e.g., said a person's name, spoke as if answering a personal
+      call, gave a completely unrelated utterance like "Aryan" or "Himank hello"), the bot
+      may have advanced incorrectly. In this case GP-7 does NOT apply — evaluate
+      product_confirmed from the buyer's actual words, and Could Not Confirm is permitted.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 DEFINITIONS
@@ -719,7 +724,30 @@ STRICT OUTPUT RULES:
                 if (entry.get("answ") or "").strip().lower() in ("not sure", ""):
                     entry["opt_id"] = None
 
-            # 2. Hard outcomes that must never be overridden by downstream logic.
+            # 2. Enriched → Approved when every schema question ID has a real answer.
+            #    The LLM sometimes counts business-name/city questions (asked after specs)
+            #    as unanswered qualification questions, leaving the outcome at Enriched even
+            #    though every schema question has a valid answer in the qna array.
+            #    Guard: we check by schema question ID, not raw count, so spurious extra
+            #    qna entries from business-detail questions don't trigger the promotion.
+            if outcome == "Enriched" and questions:
+                schema_ids = {str(q.get("id", "")) for q in questions if q.get("id")}
+                answered_ids = {
+                    str(e.get("id", ""))
+                    for e in qna
+                    if str(e.get("id", "")) in schema_ids
+                    and (e.get("answ") or "").strip().lower() not in ("not sure", "")
+                }
+                if schema_ids and answered_ids >= schema_ids:
+                    logger.info(
+                        f"[POST-PROC] Enriched → Approved: all schema question IDs "
+                        f"{schema_ids} have valid answers"
+                    )
+                    outcome = "Approved"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+
+            # 3. Hard outcomes that must never be overridden by downstream logic.
             _HARD_OUTCOMES = {
                 "Short Hangup", "Voicemail", "Wrong Number", "Seller Intent",
                 "Abusive Lead", "DNC Client : Don't Call Further",
@@ -727,7 +755,7 @@ STRICT OUTPUT RULES:
             }
 
             if outcome not in _HARD_OUTCOMES:
-                # 3. No user signal at all → cannot be Interested/Enriched/Approved.
+                # 4. No user signal at all → cannot be Interested/Enriched/Approved.
                 #    Gemini greeting TTS splits into multiple chunks, so 2 agent turns
                 #    with zero user speech is still a Short Hangup, not engagement.
                 if not _has_any_user_signal and outcome in ("Interested", "Enriched", "Approved"):
