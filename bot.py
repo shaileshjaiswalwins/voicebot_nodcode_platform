@@ -486,7 +486,7 @@ _HARDCODED_BOT_CONFIG: dict = {
     },
     "language": "hindi",
     "temperature": 0.7,
-    "gemini_start_sensitivity": "START_SENSITIVITY_LOW",
+    "gemini_start_sensitivity": "START_SENSITIVITY_HIGH",
     "gemini_end_sensitivity": "END_SENSITIVITY_HIGH",
     "gemini_silence_duration_ms": 300,
     "gemini_prefix_padding_ms": 200,
@@ -1084,7 +1084,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _category_change_api = _api_urls.get("category_change_api") or CATEGORY_CHANGE_API
     _language           = "hindi"
     _temperature        = float(_bot_config.get("temperature") or 0.4)
-    _vad_start          = _bot_config.get("gemini_start_sensitivity") or "START_SENSITIVITY_LOW"
+    _vad_start          = _bot_config.get("gemini_start_sensitivity") or "START_SENSITIVITY_HIGH"
     _vad_end            = _bot_config.get("gemini_end_sensitivity")   or "END_SENSITIVITY_LOW"
     _vad_silence_ms     = int(_bot_config.get("gemini_silence_duration_ms") or 1500)
     _vad_prefix_ms      = int(_bot_config.get("gemini_prefix_padding_ms")   or 100)
@@ -1194,10 +1194,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             f"record_id={lead_id!r} | call_id={call_state.get('call_id')!r} | "
             f"lead_record_present={bool(call_state.get('lead_record'))}"
         )
-        # Flush any muted-window Sarvam transcript that never got combined with live speech.
-        if _muted_inject["text"]:
-            _live_transcript.append({"role": "user", "text": _muted_inject["text"]})
-            _muted_inject["text"] = ""
+        # Discard any un-combined muted-window text — it was never processed by Gemini
+        # and already lives in muted_transcript; don't pollute the main transcript.
+        _muted_inject["text"] = ""
         # Flush any partial user turn that never received a final transcription
         if _pending_user_text and (
             not _live_transcript or _live_transcript[-1].get("text") != _pending_user_text
@@ -1761,7 +1760,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _closing_buffer += " " + text
         if text:
             _log.info(f"[TRANSCRIPT] Turn {_turn_counter} | AGENT: {text!r}")
-            _live_transcript.append({"role": "assistant", "text": text})
+            if not _live_transcript or _live_transcript[-1] != {"role": "assistant", "text": text}:
+                _live_transcript.append({"role": "assistant", "text": text})
         # Sniffer partial is superseded by the officially committed item — clear it.
         _pending_assistant_text = ""
         # Early mute: partial closing phrases are unique to the wrap-up line — mute
@@ -1937,15 +1937,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if _echo_guard_task and not _echo_guard_task.done():
                 _echo_guard_task.cancel()
                 _log.info("[SPEAKING-MUTE] cancelled previous hold — new speaking turn")
-            # If there's a buffered muted transcript that never got combined (no live
-            # speech arrived before the next bot turn), save it to _live_transcript now
-            # so it's visible in Mongo, then clear.
+            # Discard any buffered muted-window text — it was never processed by Gemini
+            # and is already saved to muted_transcript; don't add it to the main transcript.
             if _muted_inject["text"]:
                 _log.info(
-                    f"[MUTED-CAPTURE] flushing uncombined muted text to transcript: "
+                    f"[MUTED-CAPTURE] discarding uncombined muted text (not sent to Gemini): "
                     f"{_muted_inject['text']!r}"
                 )
-                _live_transcript.append({"role": "user", "text": _muted_inject["text"]})
                 _muted_inject["text"] = ""
             # Mute mic at the start of every bot speaking turn.
             # For mid-call turns: unmute after 2 s so the user can interrupt.
