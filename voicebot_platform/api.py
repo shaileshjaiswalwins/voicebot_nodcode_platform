@@ -23,6 +23,7 @@ from .config_store import (
     search_transcripts,
     upsert_campaign,
 )
+from .livekit_sessions import LiveKitConfigError, create_webrtc_test_room
 from .mongo import ensure_indexes
 
 app = FastAPI(title="JustDial Voice AI Platform", version="0.1.0")
@@ -144,6 +145,26 @@ def test_session(bot_id: str, payload: dict[str, Any], x_jd_user: str | None = H
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.post("/api/bots/{bot_id}/webrtc-test-session")
+async def webrtc_test_session(
+    bot_id: str,
+    payload: dict[str, Any],
+    x_jd_user: str | None = Header(default=None),
+):
+    try:
+        session = create_test_session(bot_id, payload, current_user(x_jd_user))
+        return await create_webrtc_test_room(session["room_metadata"], current_user(x_jd_user))
+    except LiveKitConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not create LiveKit test room. Check LIVEKIT_URL/API credentials and agent worker availability. Raw error: {exc}",
+        ) from exc
+
+
 @app.get("/api/transcripts")
 def transcripts(
     bot_id: str | None = Query(default=None),
@@ -177,4 +198,3 @@ def transcript_detail(transcript_id: str):
     if not doc:
         raise HTTPException(status_code=404, detail="transcript_not_found")
     return doc
-

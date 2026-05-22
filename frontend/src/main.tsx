@@ -1,6 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
+  createLocalAudioTrack,
+  LocalAudioTrack,
+  Room,
+  RoomEvent,
+  Track
+} from 'livekit-client';
+import {
+  AlertTriangle,
   Activity,
   Bot,
   Braces,
@@ -10,7 +18,8 @@ import {
   Mic,
   Play,
   Rocket,
-  Save
+  Save,
+  Square
 } from 'lucide-react';
 import { api, Bot as BotType, BotVersion, Transcript } from './api';
 import './styles.css';
@@ -37,6 +46,22 @@ function App() {
   const [configText, setConfigText] = useState(JSON.stringify(defaultConfig, null, 2));
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [message, setMessage] = useState('');
+  const [testForm, setTestForm] = useState({
+    campaign_id: 'test',
+    lead_id: '',
+    call_id: `TEST-${Date.now()}`,
+    mobile: '',
+    srchterm: 'air conditioner',
+    buyer_name: 'Test User',
+    city: 'Mumbai'
+  });
+  const [testStatus, setTestStatus] = useState('Idle');
+  const [testError, setTestError] = useState('');
+  const [testRoomName, setTestRoomName] = useState('');
+  const [remoteAudioReady, setRemoteAudioReady] = useState(false);
+  const livekitRoomRef = useRef<Room | null>(null);
+  const localTrackRef = useRef<LocalAudioTrack | null>(null);
+  const remoteAudioRef = useRef<HTMLDivElement | null>(null);
 
   const selectedBot = useMemo(
     () => bots.find((bot) => bot._id === selectedBotId) || bots[0],
@@ -90,6 +115,76 @@ function App() {
     const version = await api.publish(selectedBot._id, draft?._id);
     setMessage(`Published version ${version.version}`);
     await refresh();
+  }
+
+  async function startWebRtcTest() {
+    if (!selectedBot) {
+      setTestError('Select a bot before starting a test call.');
+      return;
+    }
+    setTestError('');
+    setRemoteAudioReady(false);
+    setTestStatus('Creating LiveKit room...');
+    try {
+      await stopWebRtcTest();
+      const session = await api.createWebRtcTestSession(selectedBot._id, testForm);
+      setTestRoomName(session.room_name);
+      setTestStatus('Connecting browser to LiveKit...');
+
+      const room = new Room({
+        adaptiveStream: true,
+        dynacast: true
+      });
+      livekitRoomRef.current = room;
+
+      room.on(RoomEvent.Connected, () => setTestStatus('Connected. Waiting for bot audio...'));
+      room.on(RoomEvent.Disconnected, () => setTestStatus('Disconnected'));
+      room.on(RoomEvent.Reconnecting, () => setTestStatus('Reconnecting to LiveKit...'));
+      room.on(RoomEvent.Reconnected, () => setTestStatus('Reconnected. Continue testing.'));
+      room.on(RoomEvent.ParticipantConnected, (participant) => {
+        setTestStatus(`Participant joined: ${participant.identity}`);
+      });
+      room.on(RoomEvent.TrackSubscribed, (track) => {
+        if (track.kind !== Track.Kind.Audio || !remoteAudioRef.current) return;
+        const element = track.attach();
+        element.autoplay = true;
+        remoteAudioRef.current.appendChild(element);
+        setRemoteAudioReady(true);
+        setTestStatus('Bot audio connected. Speak into your microphone.');
+      });
+      room.on(RoomEvent.MediaDevicesError, (error) => {
+        setTestError(`Microphone permission/device error: ${error.message}`);
+      });
+
+      await room.connect(session.livekit_url, session.token);
+      setTestStatus('Requesting microphone permission...');
+      const micTrack = await createLocalAudioTrack({
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      });
+      localTrackRef.current = micTrack;
+      await room.localParticipant.publishTrack(micTrack);
+      setTestStatus('Microphone is live. Waiting for the bot to respond...');
+    } catch (error) {
+      await stopWebRtcTest();
+      setTestError(friendlyTestError(error));
+      setTestStatus('Failed to start test');
+    }
+  }
+
+  async function stopWebRtcTest() {
+    localTrackRef.current?.stop();
+    localTrackRef.current = null;
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.innerHTML = '';
+    }
+    if (livekitRoomRef.current) {
+      livekitRoomRef.current.disconnect();
+      livekitRoomRef.current = null;
+    }
+    setRemoteAudioReady(false);
+    setTestStatus('Idle');
   }
 
   return (
@@ -170,7 +265,20 @@ function App() {
         )}
 
         {view === 'campaigns' && <Placeholder title="Campaign Mapping" lines={['Map each outbound campaign to a bot.', 'Point it to the existing lead API.', 'Dispatch room metadata with assistant_id, campaign_id, lead_id and call_id.']} />}
-        {view === 'test' && <Placeholder title="Controlled Test Call" lines={['Generate LiveKit room metadata for a sample lead.', 'Place a test outbound call through the in-house dialer.', 'Open the transcript after the call completes.']} />}
+        {view === 'test' && (
+          <TestCallPanel
+            selectedBot={selectedBot}
+            form={testForm}
+            setForm={setTestForm}
+            status={testStatus}
+            error={testError}
+            roomName={testRoomName}
+            remoteAudioReady={remoteAudioReady}
+            remoteAudioRef={remoteAudioRef}
+            onStart={startWebRtcTest}
+            onStop={stopWebRtcTest}
+          />
+        )}
         {view === 'observability' && <Placeholder title="Operations" lines={['Langfuse traces show call lifecycle and model latency.', 'LiveKit monitor tracks active rooms and participants.', 'Alerts focus on no greeting, high first-word latency, Gemini errors and callback failures.']} />}
 
         {view === 'transcripts' && (
@@ -196,6 +304,89 @@ function App() {
         )}
       </main>
     </div>
+  );
+}
+
+function friendlyTestError(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (raw.includes('LiveKit is not configured')) {
+    return 'LiveKit is not configured on the backend. Ask backend/infra to set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET in .env, then restart ./start_api.sh.';
+  }
+  if (raw.includes('Could not create LiveKit test room')) {
+    return 'Backend could not create the LiveKit room. Check LiveKit server URL, API credentials, and whether the LiveKit server is reachable from this machine.';
+  }
+  if (raw.toLowerCase().includes('permission') || raw.toLowerCase().includes('microphone')) {
+    return 'Browser microphone access failed. Allow microphone permission, check the selected input device, then try again.';
+  }
+  if (raw.toLowerCase().includes('websocket') || raw.toLowerCase().includes('network')) {
+    return 'Browser could not connect to LiveKit. Check LIVEKIT_URL is reachable from your browser and uses ws/wss correctly.';
+  }
+  return raw || 'Unknown test call error. Check backend logs and LiveKit server status.';
+}
+
+function TestCallPanel({
+  selectedBot,
+  form,
+  setForm,
+  status,
+  error,
+  roomName,
+  remoteAudioReady,
+  remoteAudioRef,
+  onStart,
+  onStop
+}: {
+  selectedBot?: BotType;
+  form: Record<string, string>;
+  setForm: React.Dispatch<React.SetStateAction<{
+    campaign_id: string;
+    lead_id: string;
+    call_id: string;
+    mobile: string;
+    srchterm: string;
+    buyer_name: string;
+    city: string;
+  }>>;
+  status: string;
+  error: string;
+  roomName: string;
+  remoteAudioReady: boolean;
+  remoteAudioRef: React.RefObject<HTMLDivElement>;
+  onStart: () => void;
+  onStop: () => void;
+}) {
+  function updateField(key: string, value: string) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  return (
+    <section className="test-grid">
+      <div className="panel">
+        <h2>{selectedBot ? `Test ${selectedBot.name}` : 'Select a bot to test'}</h2>
+        <p className="muted">This creates a LiveKit room, connects your browser microphone, and dispatches the voicebot agent into the same room.</p>
+        <div className="form-grid">
+          <label>Campaign ID<input value={form.campaign_id} onChange={(event) => updateField('campaign_id', event.target.value)} /></label>
+          <label>Lead ID<input value={form.lead_id} onChange={(event) => updateField('lead_id', event.target.value)} /></label>
+          <label>Call ID<input value={form.call_id} onChange={(event) => updateField('call_id', event.target.value)} /></label>
+          <label>Mobile<input value={form.mobile} onChange={(event) => updateField('mobile', event.target.value)} /></label>
+          <label>Product / Search Term<input value={form.srchterm} onChange={(event) => updateField('srchterm', event.target.value)} /></label>
+          <label>Buyer Name<input value={form.buyer_name} onChange={(event) => updateField('buyer_name', event.target.value)} /></label>
+          <label>City<input value={form.city} onChange={(event) => updateField('city', event.target.value)} /></label>
+        </div>
+        <div className="actions">
+          <button className="primary" onClick={onStart} disabled={!selectedBot}><Play size={16} /> Start WebRTC Test</button>
+          <button onClick={onStop}><Square size={16} /> End Test</button>
+        </div>
+      </div>
+      <div className="panel status-panel">
+        <h2>Connection</h2>
+        <div className="status-line"><span>Status</span><strong>{status}</strong></div>
+        <div className="status-line"><span>Room</span><strong>{roomName || '-'}</strong></div>
+        <div className="status-line"><span>Bot Audio</span><strong>{remoteAudioReady ? 'Connected' : 'Waiting'}</strong></div>
+        <div ref={remoteAudioRef} />
+        {error && <div className="error-box"><AlertTriangle size={16} /> {error}</div>}
+      </div>
+    </section>
   );
 }
 

@@ -197,6 +197,12 @@ tbody tr:hover {
   gap: 16px;
 }
 
+.test-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 16px;
+}
+
 .panel {
   padding: 16px;
 }
@@ -214,6 +220,64 @@ textarea {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 13px;
   line-height: 1.55;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: #43505c;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+input {
+  min-height: 38px;
+  border: 1px solid #cfd8e1;
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #ffffff;
+  color: #172026;
+}
+
+.status-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.status-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #edf1f4;
+}
+
+.status-line span {
+  color: #66717d;
+}
+
+.status-line strong {
+  text-align: right;
+}
+
+.error-box {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px;
+  border: 1px solid #f1c7c7;
+  background: #fff2f2;
+  color: #8c2525;
+  border-radius: 8px;
+  line-height: 1.35;
 }
 
 .version-row {
@@ -243,7 +307,9 @@ textarea {
   }
 
   .topbar,
-  .builder-grid {
+  .builder-grid,
+  .test-grid,
+  .form-grid {
     display: block;
   }
 

@@ -314,6 +314,88 @@ mobile
 text
 ```
 
+### Start WebRTC Test Call
+
+Backend route:
+
+```txt
+POST /api/bots/{bot_id}/webrtc-test-session
+```
+
+Payload:
+
+```json
+{
+  "campaign_id": "test",
+  "lead_id": "lead-123",
+  "call_id": "TEST-001",
+  "mobile": "9999999999",
+  "srchterm": "air conditioner",
+  "buyer_name": "Test User",
+  "city": "Mumbai"
+}
+```
+
+Response:
+
+```json
+{
+  "room_name": "test-e8c0fd31-a1b2c3d4e5",
+  "livekit_url": "ws://your-livekit-server:7880",
+  "token": "browser-livekit-jwt",
+  "metadata": {
+    "assistant_id": "e8c0fd31-2d60-4531-a029-2047b17988c4",
+    "campaign_id": "test",
+    "lead_id": "lead-123",
+    "call_id": "TEST-001",
+    "mobile": "9999999999",
+    "srchterm": "air conditioner",
+    "buyer_name": "Test User",
+    "city": "Mumbai",
+    "test_session": true,
+    "room_name": "test-e8c0fd31-a1b2c3d4e5"
+  },
+  "agent_name": "voice-bot-justdial",
+  "expires_in_sec": 1800
+}
+```
+
+Required backend `.env` values:
+
+```bash
+LIVEKIT_URL=ws://your-livekit-server:7880
+LIVEKIT_API_KEY=...
+LIVEKIT_API_SECRET=...
+LIVEKIT_AGENT_NAME=voice-bot-justdial
+```
+
+Frontend behavior:
+
+1. Calls `/api/bots/{bot_id}/webrtc-test-session`.
+2. Connects browser to `livekit_url` using `token`.
+3. Requests microphone permission.
+4. Publishes microphone audio.
+5. Plays bot audio when the agent joins the room.
+
+```mermaid
+sequenceDiagram
+    participant FE as React Test UI
+    participant API as FastAPI
+    participant LK as LiveKit
+    participant Bot as bot.py Agent
+    participant Gemini as Gemini Live
+
+    FE->>API: POST /api/bots/{bot_id}/webrtc-test-session
+    API->>LK: Create room with metadata
+    API-->>FE: room_name, livekit_url, token
+    FE->>LK: Connect using token
+    FE->>LK: Publish browser microphone
+    LK->>Bot: Dispatch voice-bot agent
+    Bot->>Gemini: Start Gemini Live
+    Bot->>LK: Publish bot audio
+    LK-->>FE: Play bot audio in browser
+```
+
 ## File Responsibilities
 
 ```txt
@@ -352,7 +434,7 @@ Current dashboard UI.
 2. Add SSO role enforcement from headers.
 3. Add stricter validation for bot config fields.
 4. Add callback mapping APIs.
-5. Add WebRTC test-call token generation when LiveKit browser testing starts.
+5. Harden WebRTC test-call error handling and room cleanup.
 
 ## Frontend Developer Next Steps
 

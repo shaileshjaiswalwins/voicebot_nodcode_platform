@@ -45,6 +45,16 @@ export type Transcript = {
   created_at?: string;
 };
 
+export type WebRtcTestSession = {
+  room_name: string;
+  livekit_url: string;
+  token: string;
+  metadata: Record<string, unknown>;
+  agent_name: string;
+  expires_in_sec: number;
+  next_steps: string[];
+};
+
 export const api = {
   bots: () => request<Bot[]>('/api/bots'),
   bot: (id: string) => request<{ bot: Bot; versions: BotVersion[] }>(`/api/bots/${id}`),
@@ -56,6 +66,11 @@ export const api = {
     request<BotVersion>(`/api/bots/${botId}/publish`, {
       method: 'POST',
       body: JSON.stringify({ version_id: versionId })
+    }),
+  createWebRtcTestSession: (botId: string, payload: unknown) =>
+    request<WebRtcTestSession>(`/api/bots/${botId}/webrtc-test-session`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
     }),
   transcripts: () => request<Transcript[]>('/api/transcripts'),
   campaigns: () => request<unknown[]>('/api/campaigns'),

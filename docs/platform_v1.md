@@ -45,6 +45,27 @@ npm run dev
 
 Open `http://localhost:5173`.
 
+## WebRTC Test Calls
+
+The Test Call screen creates a LiveKit room and connects the browser microphone directly to the bot.
+
+Required `.env` values:
+
+```bash
+LIVEKIT_URL=ws://your-livekit-server:7880
+LIVEKIT_API_KEY=...
+LIVEKIT_API_SECRET=...
+LIVEKIT_AGENT_NAME=voice-bot-justdial
+```
+
+Flow:
+
+1. Frontend calls `POST /api/bots/{bot_id}/webrtc-test-session`.
+2. FastAPI creates a LiveKit room with bot metadata and dispatches the agent named `voice-bot-justdial`.
+3. FastAPI returns `livekit_url`, `room_name` and a short-lived browser token.
+4. React connects with `livekit-client`, publishes microphone audio and plays bot audio.
+5. `bot.py` treats this like a normal LiveKit room and stores the transcript/config snapshot after the test ends.
+
 ## Mongo Collections
 
 - `bot_definitions`: bot identity, owner, status, active version pointer.
