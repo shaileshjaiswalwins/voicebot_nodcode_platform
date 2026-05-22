@@ -2060,7 +2060,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _closing_buffer += " " + text
         if text:
             _log.info(f"[TRANSCRIPT] Turn {_turn_counter} | AGENT: {text!r}")
-            if not _live_transcript or _live_transcript[-1] != {"role": "assistant", "text": text}:
+            # Barge-in cleanup: if the user interrupted this bot turn mid-sentence,
+            # _barge_in_fired is still True from that turn (reset to False only when
+            # the NEXT speaking turn starts). A committed item that ends without
+            # sentence-ending punctuation is a truncated partial — skip it.
+            _last_char = text.rstrip()[-1] if text.rstrip() else ""
+            _is_incomplete = _barge_in_fired and _last_char not in ("।", ".", "?", "!", "…")
+            if _is_incomplete:
+                _log.info(f"[BARGE-IN] Skipping interrupted partial bot turn: {text!r}")
+            elif not _live_transcript or _live_transcript[-1] != {"role": "assistant", "text": text}:
                 _live_transcript.append({"role": "assistant", "text": text})
         # Sniffer partial is superseded by the officially committed item — clear it.
         _pending_assistant_text = ""
@@ -2139,20 +2147,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 )
             _partial_first_time = None
             _pending_user_text = ""
-            # Barge-in cleanup: if the user interrupted the bot mid-sentence, the last
-            # committed assistant item is an incomplete partial (no sentence-ending
-            # punctuation). Strip it so Mongo transcript stays clean.
-            if (
-                _barge_in_fired
-                and _live_transcript
-                and _live_transcript[-1]["role"] == "assistant"
-            ):
-                _last_bot = _live_transcript[-1]["text"].rstrip()
-                if _last_bot and not _last_bot[-1] in ("।", ".", "?", "!", "…"):
-                    _log.info(
-                        f"[BARGE-IN] Stripping interrupted partial bot turn: {_last_bot!r}"
-                    )
-                    _live_transcript.pop()
             # Gemini confirmed this turn — rotate WAV segment so next turn starts fresh
             _wav_reset_flag = True
             # Silero sanity-check: Gemini occasionally fires on background audio (TV,
