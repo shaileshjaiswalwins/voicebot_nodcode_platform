@@ -128,6 +128,39 @@ async def generate_call_analysis(
         # Muted transcript has content but no live user turns — STT failed on live mic
         # but user did speak during muted window. Fall through to LLM with context.
 
+    # Hard IVR signals — checked across ALL turns and muted_transcript, position doesn't matter.
+    # These phrases never appear in genuine human speech, so any occurrence means IVR answered.
+    _HARD_IVR_SIGNALS = [
+        "reason for calling",
+        "रीज़न फॉर कॉलिंग",
+        "please press",
+        "press 1", "press 2", "press 3", "press 4",
+        "दबाएं", "के लिए दबाएं",          # Hindi "press X for Y" IVR
+        "please state your",
+        "your call is important",
+        "all our agents are",
+        "all agents are busy",
+        "our representatives are",
+        "estimated wait time",
+        "for english press",
+        "currently unavailable",
+        "not available at the moment",
+        "आईवीआर", "ivr system",
+    ]
+    _all_text = " ".join(
+        (t.get("text") or "").lower() for t in transcript
+    )
+    _muted_text = " ".join((m or "").lower() for m in (muted_transcript or []))
+    _full_text = f"{_all_text} {_muted_text}"
+    if any(sig in _full_text for sig in _HARD_IVR_SIGNALS):
+        return {
+            "call_outcome": "Voicemail",
+            "call_outcome_description": DISPOSITION_MAP["Voicemail"],
+            "call_summary": "Call was answered by an automated IVR system, not a live person.",
+            "is_business": "", "business_city": "", "business_name": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
+
     _VOICEMAIL_SIGNALS_PRE = [
         "leave a message", "leave your message", "please leave a message",
         "after the beep", "after the tone", "at the beep",
