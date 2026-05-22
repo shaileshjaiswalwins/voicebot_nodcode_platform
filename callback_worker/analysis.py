@@ -125,7 +125,24 @@ async def generate_call_analysis(
                 "is_business": "", "business_city": "", "business_name": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
-        # Muted transcript has content but no live user turns — STT failed on live mic
+        # Muted transcript has content — check if it's only greetings.
+        # A bare "hello" during the bot's opening turn is not product confirmation.
+        _GREETING_SET = {"hello", "हेलो", "helo", "halo", "हैलो", "hi", "हाय", "हाँ", "haan", "ha", "han"}
+        _muted_words = {
+            w.strip(".,!? ।").lower()
+            for m in (muted_transcript or [])
+            for w in (m or "").split()
+            if w.strip(".,!? ।")
+        }
+        if _muted_words and not (_muted_words - _GREETING_SET):
+            return {
+                "call_outcome": "Short Hangup",
+                "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
+                "call_summary": "User responded with a greeting only — no product confirmation or engagement obtained.",
+                "is_business": "", "business_city": "", "business_name": "",
+                "qna": [], "product_change": {}, "rescheduled_to": "",
+            }
+        # Muted transcript has substantive content but no live user turns — STT failed on live mic
         # but user did speak during muted window. Fall through to LLM with context.
 
     # Hard IVR signals — checked across ALL turns and muted_transcript, position doesn't matter.
@@ -143,9 +160,19 @@ async def generate_call_analysis(
         "our representatives are",
         "estimated wait time",
         "for english press",
+        "hindi ke liye",
         "currently unavailable",
         "not available at the moment",
         "आईवीआर", "ivr system",
+        # Carrier / voicemail system messages — never uttered by a live person
+        "you may hang up", "may hang up now",
+        "यू मे हैंग अप",
+        "the person you are trying to",
+        "the person you are calling",
+        "the number you are trying to",
+        "पर्सन यू आर ट्राइंग", "पर्सन यू आर कॉलिंग",
+        "after the beep", "leave your message after",
+        "do you have recording",
     ]
     _all_text = " ".join(
         (t.get("text") or "").lower() for t in transcript
@@ -163,14 +190,13 @@ async def generate_call_analysis(
 
     _VOICEMAIL_SIGNALS_PRE = [
         "leave a message", "leave your message", "please leave a message",
-        "after the beep", "after the tone", "at the beep",
+        "after the tone", "at the beep",
         "you have reached", "you've reached",
         "unable to take your call", "cannot take your call",
         "not available to take your call",
         "record your message", "record a message",
         "mailbox is full", "mailbox full",
         "voice mail recording", "voicemail recording",
-        "you may hang up", "may hang up now",
         "finished recording hang up", "when you have finished recording",
     ]
     _HOLD_MUSIC_SIGNALS_PRE = [
