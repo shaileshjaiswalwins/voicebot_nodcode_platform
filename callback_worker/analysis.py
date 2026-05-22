@@ -139,22 +139,30 @@ async def generate_call_analysis(
         "voice mail recording", "voicemail recording",
         "you may hang up", "may hang up now",
         "finished recording hang up", "when you have finished recording",
-        # Carrier IVR hold-music announcements that repeat in multiple languages
-        # are indistinguishable from voicemail for classification purposes.
-        "please stay on the line",
-        "stay on the line",
     ]
     _HOLD_MUSIC_SIGNALS_PRE = [
         "put your call on hold",
         "placed your call on hold",
         "has put your call on hold",
+        "please stay on the line",
+        "stay on the line",
         "पुट योर कॉल ऑन होल्ड",           # transliterated English in Hindi script
         "होल्ड पर राख्यो छे",              # Gujarati hold-music phrase
         "hold par rakho chhe",
     ]
 
+    # Only short-circuit if the signal appears before any real user response.
+    # If hold/voicemail text appears after a real conversation, let the LLM decide.
+    _GREETING_TOKENS = {"hello", "हेलो", "helo", "halo", "हैलो"}
+    seen_substantive_user_turn = False
     for turn in transcript:
         text_lower = (turn.get("text") or "").lower()
+        if turn.get("role") in ("user", "buyer"):
+            words = {re.sub(r"[^\w-￿]", "", w.lower()) for w in (turn.get("text") or "").split() if w.strip()}
+            if words - _GREETING_TOKENS:
+                seen_substantive_user_turn = True
+        if seen_substantive_user_turn:
+            continue
         if any(sig in text_lower for sig in _VOICEMAIL_SIGNALS_PRE):
             return {
                 "call_outcome": "Voicemail",

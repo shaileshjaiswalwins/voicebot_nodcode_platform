@@ -7,7 +7,7 @@ import aiohttp
 from loguru import logger
 
 from .analysis import DISPOSITION_MAP, fuzzy_match_opt_id, status_to_outcome
-from .config import CALLBACK_API_URL
+from .config import CALLBACK_API_URL, CALLBACK_UPDATE_API_URL
 
 
 async def send_callback(
@@ -37,6 +37,53 @@ async def send_callback(
         except Exception as e:
             logger.error(f"[CALLBACK] attempt {attempt} failed: {type(e).__name__}: {e}")
     logger.error("[CALLBACK] All 3 attempts failed — callback not delivered")
+    return False
+
+
+async def send_callback_update(
+    call_id: str,
+    lead_id: str,
+    updates: dict,
+    http_session: aiohttp.ClientSession,
+    callback_update_api_url: str = CALLBACK_UPDATE_API_URL,
+) -> bool:
+    """Patch specific fields on an already-sent callback. Only pass fields you want to change —
+    the API overwrites any field you include, so never spread the full payload here."""
+    payload = {
+        "call_id": call_id,
+        "lead_id": str(lead_id),
+        "ai_partner": "inh-suny-bot",
+        **updates,
+    }
+    delays = [0, 2, 4]
+    for attempt, delay in enumerate(delays, 1):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            logger.info(
+                f"[CALLBACK-UPDATE] Sending to {callback_update_api_url} (attempt {attempt}/3) | "
+                f"payload={json.dumps(payload, ensure_ascii=False)}"
+            )
+            async with http_session.post(
+                callback_update_api_url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                body = await resp.text()
+                if resp.status not in (200, 201):
+                    logger.warning(f"[CALLBACK-UPDATE] attempt {attempt} — {resp.status}: {body[:300]}")
+                    continue
+                # API returns 200 even on failure — check the body
+                try:
+                    parsed = json.loads(body)
+                    if parsed.get("error", {}).get("code", 0) != 0:
+                        logger.warning(f"[CALLBACK-UPDATE] attempt {attempt} — API error: {body[:300]}")
+                        continue
+                except Exception:
+                    pass
+                logger.info(f"[CALLBACK-UPDATE] attempt {attempt} — {resp.status} OK: {body[:300]}")
+                return True
+        except Exception as e:
+            logger.error(f"[CALLBACK-UPDATE] attempt {attempt} failed: {type(e).__name__}: {e}")
+    logger.error("[CALLBACK-UPDATE] All 3 attempts failed — update not delivered")
     return False
 
 
