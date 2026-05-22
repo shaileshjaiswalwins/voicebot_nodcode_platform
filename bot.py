@@ -2525,10 +2525,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
             # Fallback: if Gemini silently fails to produce the greeting (e.g. "no active
             # generation" race), _on_agent_state never fires → mic stays muted forever.
-            # After 8 s with no greeting, force-unmute immediately — do NOT resend the
+            # After 12 s with no greeting, force-unmute immediately — do NOT resend the
             # "." trigger, as a second generation produces a different greeting phrasing
             # which looks inconsistent in the transcript.
-            await asyncio.sleep(8)
+            # 12 s (not 8 s) — the greeting audio itself takes ~8-9 s; 8 s was firing
+            # ~900 ms before the greeting finished, causing false greeting_retry=True.
+            await asyncio.sleep(12)
             if not _greeting_done and not _call_ended:
                 _greeting_retry_triggered = True
                 _greeting_done = True
