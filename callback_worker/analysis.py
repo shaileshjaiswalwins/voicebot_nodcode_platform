@@ -158,7 +158,7 @@ async def generate_call_analysis(
     for turn in transcript:
         text_lower = (turn.get("text") or "").lower()
         if turn.get("role") in ("user", "buyer"):
-            words = {re.sub(r"[^\w-￿]", "", w.lower()) for w in (turn.get("text") or "").split() if w.strip()}
+            words = {w.strip(".,!? ").lower() for w in (turn.get("text") or "").split() if w.strip()}
             if words - _GREETING_TOKENS:
                 seen_substantive_user_turn = True
         if seen_substantive_user_turn:
