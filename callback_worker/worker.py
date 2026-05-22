@@ -11,6 +11,7 @@ from pymongo import ASCENDING, MongoClient
 from .analysis import fallback_analysis, generate_b2b_score, generate_call_analysis
 from .callback import CALLBACK_API_URL, build_callback_payload, send_callback
 from .config import BATCH_LIMIT, MONGO_COLLECTION, MONGO_DB, MONGO_URI, POLL_INTERVAL_SEC
+from voicebot_platform.observability import recorder as _observability
 
 _stop = asyncio.Event()
 
@@ -64,8 +65,30 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
             {"$set": {"tagged": True, "tagged_at": datetime.utcnow()}},
         ))
         logger.info(f"[WORKER] Tagged doc {doc_id} | lead_id={lead_id!r}")
+        _observability.event(
+            "callback_sent",
+            {
+                "doc_id": str(doc_id),
+                "lead_id": lead_id,
+                "call_id": doc.get("call_id", ""),
+                "bot_id": doc.get("bot_id", ""),
+                "bot_version_id": doc.get("bot_version_id", ""),
+                "campaign_id": doc.get("campaign_id", ""),
+            },
+        )
     else:
         logger.warning(f"[WORKER] Callback failed for doc {doc_id} | lead_id={lead_id!r} — will retry next tick")
+        _observability.event(
+            "callback_failed",
+            {
+                "doc_id": str(doc_id),
+                "lead_id": lead_id,
+                "call_id": doc.get("call_id", ""),
+                "bot_id": doc.get("bot_id", ""),
+                "bot_version_id": doc.get("bot_version_id", ""),
+                "campaign_id": doc.get("campaign_id", ""),
+            },
+        )
 
 
 async def _tick(collection, http_session: aiohttp.ClientSession) -> None:

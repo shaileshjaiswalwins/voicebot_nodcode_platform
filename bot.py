@@ -28,6 +28,7 @@ import sys
 import time
 import unicodedata
 import wave
+from copy import deepcopy
 from datetime import date as _date
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -55,6 +56,9 @@ except ImportError:
     _RemoveParticipantRequest = None
 from livekit.plugins import google
 from google.genai import types
+
+from voicebot_platform.config_store import fetch_active_bot_config
+from voicebot_platform.observability import recorder as _observability
 
 load_dotenv(override=True)
 
@@ -447,8 +451,12 @@ _HARDCODED_BOT_CONFIG: dict = {
 
 
 async def fetch_bot_config(assistant_id: str) -> dict | None:
-    """Return hardcoded bot config (no HTTP call)."""
-    return _HARDCODED_BOT_CONFIG
+    """Fetch the active published bot config from MongoDB."""
+    try:
+        return fetch_active_bot_config(assistant_id)
+    except Exception as e:
+        logger.warning(f"[CONFIG] active config lookup failed for assistant_id={assistant_id!r}: {e}")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1031,19 +1039,42 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _assistant_id = _room_meta_raw.get("assistant_id", "")
     _bc = await fetch_bot_config(_assistant_id) if _assistant_id else None
     _bot_config: dict = _bc or _HARDCODED_BOT_CONFIG
+    _config_snapshot = deepcopy(_bot_config)
+    _bot_id = _bot_config.get("bot_id", "")
+    _bot_version_id = _bot_config.get("bot_version_id", "")
+    _bot_version = _bot_config.get("bot_version")
+    _campaign_id = _room_meta_raw.get("campaign_id", "")
+
+    _observability.event(
+        "call_started",
+        {
+            "room_name": room_name,
+            "assistant_id": _assistant_id,
+            "bot_id": _bot_id,
+            "bot_version_id": _bot_version_id,
+            "bot_version": _bot_version,
+            "campaign_id": _campaign_id,
+            "lead_id": _lead_id_meta,
+            "mobile": _room_mobile,
+        },
+    )
 
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
 
     _api_urls = _bot_config.get("api_urls") or {}
     _mis_api_base        = _api_urls.get("mis_api_base") or MIS_API_BASE
     _category_change_api = _api_urls.get("category_change_api") or CATEGORY_CHANGE_API
-    _language           = "hindi"
+    _model              = _bot_config.get("model") or "gemini-3.1-flash-live-preview"
+    _voice              = _bot_config.get("voice") or "Aoede"
+    _language           = _bot_config.get("language") or "hindi"
+    _livekit_language   = _bot_config.get("livekit_language") or "hi-IN"
+    _sarvam_language    = _bot_config.get("sarvam_language") or _livekit_language
     _temperature        = float(_bot_config.get("temperature") or 0.4)
     _vad_start          = _bot_config.get("gemini_start_sensitivity") or "START_SENSITIVITY_LOW"
     _vad_end            = _bot_config.get("gemini_end_sensitivity")   or "END_SENSITIVITY_LOW"
     _vad_silence_ms     = int(_bot_config.get("gemini_silence_duration_ms") or 1500)
     _vad_prefix_ms      = int(_bot_config.get("gemini_prefix_padding_ms")   or 100)
-    _max_call_duration  = 300
+    _max_call_duration  = int(_bot_config.get("max_call_duration") or 300)
     _sarvam_min_rms                  = int(_bot_config.get("sarvam_min_rms") or 600)
     _sarvam_min_speech_ms            = int(_bot_config.get("sarvam_min_speech_ms") or 500)
     _sarvam_min_speech_ms_singleword = int(_bot_config.get("sarvam_min_speech_ms_singleword") or 1500)
@@ -1084,11 +1115,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # 5. RealtimeModel — same Gemini config as the Pipecat bot
     llm = google.realtime.RealtimeModel(
-        model="gemini-3.1-flash-live-preview",
-        voice="Aoede",
+        model=_model,
+        voice=_voice,
         instructions=system_instruction,
         temperature=_temperature,
-        language="hi-IN",
+        language=_livekit_language,
         realtime_input_config=types.RealtimeInputConfig(
             automatic_activity_detection=types.AutomaticActivityDetection(
                 start_of_speech_sensitivity=_vad_start,
@@ -1189,6 +1220,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "lead_id": lead_id,
             "call_id": call_state.get("call_id"),
             "assistant_id": _assistant_id,
+            "bot_id": _bot_id,
+            "bot_version_id": _bot_version_id,
+            "bot_version": _bot_version,
+            "campaign_id": _campaign_id,
+            "config_snapshot": _config_snapshot,
             "room_name": room_name,
             "status": status,
             "ended_naturally": call_state.get("ended_naturally"),
@@ -1208,6 +1244,19 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, lambda: _get_mongo_collection().insert_one(_mongo_doc))
             _log.info(f"[MONGO] Transcript saved | lead_id={lead_id!r} | call_id={call_state.get('call_id')!r}")
+            _observability.event(
+                "transcript_saved",
+                {
+                    "room_name": room_name,
+                    "call_id": call_state.get("call_id"),
+                    "lead_id": lead_id,
+                    "bot_id": _bot_id,
+                    "bot_version_id": _bot_version_id,
+                    "campaign_id": _campaign_id,
+                    "status": status,
+                    "call_duration_sec": _duration,
+                },
+            )
         except Exception as e:
             _log.error(f"[MONGO] insert failed: {e}")
 
@@ -1242,14 +1291,21 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "recording_link": None,
             "organization_id": _bot_config.get("organization_id", ""),
             "assistant_id": _assistant_id,
+            "bot_id": _bot_id,
+            "bot_version_id": _bot_version_id,
+            "campaign_id": _campaign_id,
             "status": "completed" if status == "completed" else "disconnected",
             "summary": "",
-            "call_type": "inbound",
+            "call_type": "outbound",
             "outcome": status,
             "transcripts": _transcripts,
             "meta_data": {
                 "lead_id": call_state.get("record_id", ""),
                 "lead_call_id": call_state.get("call_id", ""),
+                "bot_id": _bot_id,
+                "bot_version_id": _bot_version_id,
+                "bot_version": _bot_version,
+                "campaign_id": _campaign_id,
                 "product": _product,
                 "qna": [],
                 "is_business": "",
@@ -1263,6 +1319,19 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "sentiment": "neutral",
         }
         await save_call_log_to_backend(call_log_payload)
+        _observability.event(
+            "call_ended",
+            {
+                "room_name": room_name,
+                "call_id": call_state.get("call_id"),
+                "lead_id": lead_id,
+                "bot_id": _bot_id,
+                "bot_version_id": _bot_version_id,
+                "campaign_id": _campaign_id,
+                "status": status,
+                "call_duration_sec": _duration,
+            },
+        )
 
         _log.info(_SEP)
         _log.info(
@@ -1377,6 +1446,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # Turn-wise transcript + end-to-end latency tracking
     _turn_counter = 0
     _user_turn_time: float | None = None  # timestamp when user transcript arrived
+    _first_user_audio_reported = False
+    _first_agent_response_reported = False
     _live_transcript: list = []  # real-time capture; avoids missing turns on abrupt disconnect
     _pending_user_text: str = ""     # last partial user transcription (may never get a final)
     _pending_assistant_text: str = ""  # last partial assistant turn being streamed (may be cut mid-sentence)
@@ -1577,7 +1648,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _log.info(f"[SARVAM] Silero — speech confirmed (voiced_ms={voiced_ms:.0f})")
             form = aiohttp.FormData()
             form.add_field("file", wav_data, filename="audio.wav", content_type="audio/wav")
-            form.add_field("language_code", "hi-IN")
+            form.add_field("language_code", _sarvam_language)
             form.add_field("model", "saaras:v3")
             form.add_field("mode", "transcribe")
             async with _get_http_session().post(
@@ -1641,7 +1712,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _log.info(f"[MUTED-CAPTURE] Silero — speech confirmed (voiced_ms={voiced_ms:.0f})")
             form = aiohttp.FormData()
             form.add_field("file", wav_data, filename="audio.wav", content_type="audio/wav")
-            form.add_field("language_code", "hi-IN")
+            form.add_field("language_code", _sarvam_language)
             form.add_field("model", "saaras:v3")
             form.add_field("mode", "transcribe")
             async with _get_http_session().post(
@@ -1713,7 +1784,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("conversation_item_added")
     def _on_item_added(ev) -> None:
-        nonlocal _closing_buffer, _closing_triggered, _early_close_muting, _live_transcript, _pending_assistant_text
+        nonlocal _closing_buffer, _closing_triggered, _early_close_muting, _first_agent_response_reported, _live_transcript, _pending_assistant_text
         item = ev.item if hasattr(ev, "item") else ev
         role = getattr(item, "role", None)
         role_str = role.value if hasattr(role, "value") else str(role) if role else ""
@@ -1740,6 +1811,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if text:
             _log.info(f"[TRANSCRIPT] Turn {_turn_counter} | AGENT: {text!r}")
             _live_transcript.append({"role": "assistant", "text": text})
+            if not _first_agent_response_reported:
+                _first_agent_response_reported = True
+                _observability.event(
+                    "first_model_response",
+                    {
+                        "room_name": room_name,
+                        "call_id": call_state.get("call_id"),
+                        "bot_id": _bot_id,
+                        "bot_version_id": _bot_version_id,
+                        "campaign_id": _campaign_id,
+                    },
+                )
         # Sniffer partial is superseded by the officially committed item — clear it.
         _pending_assistant_text = ""
         # Early mute: partial closing phrases are unique to the wrap-up line — mute
@@ -1764,7 +1847,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("user_input_transcribed")
     def _on_user_spoke(ev) -> None:
-        nonlocal _turn_counter, _user_turn_time, _live_transcript, _pending_user_text, _wav_reset_flag
+        nonlocal _first_user_audio_reported, _turn_counter, _user_turn_time, _live_transcript, _pending_user_text, _wav_reset_flag
         # User spoke — reset inactivity timer
         if not _call_ended:
             _reset_inactivity()
@@ -1776,6 +1859,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         ).strip()
         if not transcript_text:
             return
+        if not _first_user_audio_reported:
+            _first_user_audio_reported = True
+            _observability.event(
+                "first_audio_received",
+                {
+                    "room_name": room_name,
+                    "call_id": call_state.get("call_id"),
+                    "bot_id": _bot_id,
+                    "bot_version_id": _bot_version_id,
+                    "campaign_id": _campaign_id,
+                },
+            )
         # Snapshot agent state at the moment user speech arrives (for interruption diagnosis).
         _agent_state_now = ""
         try:
