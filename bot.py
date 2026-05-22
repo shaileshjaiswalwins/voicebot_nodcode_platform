@@ -621,9 +621,8 @@ async def _build_sample_from_search(srchterm: str, buyer_name: str, category_api
         return None
     try:
         params = {"lead_id": lead_id, "search_term": srchterm}
-        async with aiohttp.ClientSession() as sess:
-            async with sess.get(category_api, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                data = json.loads(await resp.text())
+        async with _get_http_session().get(category_api, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            data = json.loads(await resp.text())
         schema = data.get("results", {}).get("search_result", {}) if isinstance(data, dict) else {}
         catname = schema.get("catname", srchterm)
         questions = schema.get("question", [])
@@ -661,13 +660,13 @@ async def _execute_function_call(fn_name: str, fn_args: dict, functions: list[di
     logger.info(f"[FnCall] {method} {url} | args={merged}")
 
     try:
-        async with aiohttp.ClientSession() as sess:
-            if method == "GET":
-                async with sess.get(url, params=merged, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    result = json.loads(await resp.text())
-            else:
-                async with sess.request(method, url, json=merged, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    result = json.loads(await resp.text())
+        sess = _get_http_session()
+        if method == "GET":
+            async with sess.get(url, params=merged, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                result = json.loads(await resp.text())
+        else:
+            async with sess.request(method, url, json=merged, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                result = json.loads(await resp.text())
 
         if fn_name == "FetchCategorySchema":
             schema = result.get("results", {}).get("search_result", {}) if isinstance(result, dict) else {}
@@ -1096,7 +1095,10 @@ _NOT_INTERESTED_MARKERS = (
 )
 
 _SUCCESS_CLOSE_MARKERS = (
-    "सारी details मिल गईं",   # canonical success close
+    "सारी details मिल गईं",   # canonical success close (Hinglish)
+    "सारी डिटेल्स मिल गई",   # Devanagari "details" variant
+    "details मिल गई",          # partial — covers "मिल गईं" and "मिल गई हैं"
+    "डिटेल्स मिल गई",          # pure Devanagari partial
     "all the details",
     "i have all the details",
 )
@@ -1162,7 +1164,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _language           = "hindi"
     _temperature        = float(_bot_config.get("temperature") or 0.4)
     _vad_start          = _bot_config.get("gemini_start_sensitivity") or "START_SENSITIVITY_HIGH"
-    _vad_end            = _bot_config.get("gemini_end_sensitivity")   or "END_SENSITIVITY_LOW"
+    _vad_end            = _bot_config.get("gemini_end_sensitivity")   or "END_SENSITIVITY_HIGH"
     _vad_silence_ms     = int(_bot_config.get("gemini_silence_duration_ms") or 1500)
     _vad_prefix_ms      = int(_bot_config.get("gemini_prefix_padding_ms")   or 100)
     _max_call_duration  = 300
@@ -1570,7 +1572,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     buf_lower = buf.lower()
                     if any(m in buf_lower for m in (
                         "details मिल गईं",
-                        "relevant sellers",
+                        "sellers आपसे contact",   # closing line only — not mid-call "relevant sellers से connect"
                         "sellers will contact",
                         "all details",
                     )):
@@ -2077,8 +2079,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if not _early_close_muting and not _closing_triggered:
             _buf_lower = _closing_buffer.lower()
             if any(m in _buf_lower for m in (
-                "details मिल गईं",   # start of Hindi closing line — appears before interruption can truncate
-                "relevant sellers",
+                "details मिल गईं",   # start of Hindi closing line
+                "sellers आपसे contact",   # closing line only — not mid-call "relevant sellers से connect"
                 "sellers will contact",
                 "all details",        # English equivalent
             )):
@@ -2088,8 +2090,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if _is_closing_phrase(_closing_buffer):
             _closing_triggered = True
             call_state["ended_naturally"] = True
-            # Determine close status before scheduling _handle_close.
-            nonlocal _close_status
             if _is_not_interested_close(_closing_buffer):
                 _close_status = "not_interested"
                 _log.info("[CLOSE DETECT] Not-interested close detected — status=not_interested")
@@ -2536,7 +2536,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _greeting_done = True
                 _bot_has_spoken = True
                 _set_mic(True, reason="greeting-timeout-force-unmute")
-                _log.warning("[MIC] Greeting not complete after 8 s — force-enabling mic")
+                _log.warning("[MIC] Greeting not complete after 12 s — force-enabling mic")
 
         asyncio.create_task(_trigger_greeting())
 
