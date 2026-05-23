@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import timedelta
 from uuid import uuid4
@@ -42,7 +43,8 @@ def _require_livekit_config() -> None:
 
 async def create_webrtc_test_room(room_metadata: dict, user: str) -> dict:
     _require_livekit_config()
-    runtime = get_runtime_settings()
+    loop = asyncio.get_running_loop()
+    runtime = await loop.run_in_executor(None, get_runtime_settings)
     livekit_api_url = runtime.get("livekit_api_url") or LIVEKIT_URL
     livekit_browser_url = runtime.get("livekit_browser_url") or LIVEKIT_URL
     livekit_agent_name = runtime.get("livekit_agent_name") or "voice-bot-justdial"

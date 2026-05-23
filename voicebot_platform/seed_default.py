@@ -1,22 +1,15 @@
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
-os.environ.setdefault(
-    "BOT_LOG_DIR",
-    str(Path(__file__).resolve().parent.parent / "logs"),
-)
-
-from bot import _HARDCODED_BOT_CONFIG
-
 from .config_store import seed_default_bot
+from .default_bot_config import build_default_bot_config
 from .mongo import ensure_indexes
+from .phrase_library import seed_default_phrases
 
 
 def main() -> None:
     ensure_indexes()
-    result = seed_default_bot(_HARDCODED_BOT_CONFIG)
+    seed_default_phrases()
+    result = seed_default_bot(build_default_bot_config())
     bot = result["bot"]
     version = result["version"]
     print(

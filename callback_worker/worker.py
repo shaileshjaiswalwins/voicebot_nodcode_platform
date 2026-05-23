@@ -6,12 +6,14 @@ from datetime import datetime
 
 import aiohttp
 from loguru import logger
-from pymongo import ASCENDING, MongoClient
+from pymongo import ASCENDING
+
+from voicebot_platform.mongo import get_client
+from voicebot_platform.observability import recorder as _observability
 
 from .analysis import fallback_analysis, generate_b2b_score, generate_call_analysis
 from .callback import CALLBACK_API_URL, build_callback_payload, send_callback
 from .config import BATCH_LIMIT, MONGO_COLLECTION, MONGO_DB, MONGO_URI, POLL_INTERVAL_SEC
-from voicebot_platform.observability import recorder as _observability
 
 _stop = asyncio.Event()
 
@@ -110,7 +112,7 @@ async def main() -> None:
 
     logger.info(f"[WORKER] Starting | mongo={MONGO_URI} | db={MONGO_DB} | collection={MONGO_COLLECTION} | poll={POLL_INTERVAL_SEC}s | batch={BATCH_LIMIT}")
 
-    client = MongoClient(MONGO_URI)
+    client = get_client()
     collection = client[MONGO_DB][MONGO_COLLECTION]
 
     await loop.run_in_executor(None, lambda: collection.create_index(
@@ -129,7 +131,8 @@ async def main() -> None:
             except asyncio.TimeoutError:
                 pass
 
-    client.close()
+    # Shared client is owned by voicebot_platform.mongo — leave it open for any
+    # in-process consumers; PyMongo cleans up on interpreter shutdown.
     logger.info("[WORKER] Stopped cleanly")
 
 

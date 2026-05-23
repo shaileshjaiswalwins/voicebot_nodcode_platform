@@ -1,5 +1,6 @@
 """Post-call Gemini analysis — ported verbatim from bot.py."""
 
+import asyncio
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -7,11 +8,17 @@ from datetime import datetime, timedelta, timezone
 import aiohttp
 from loguru import logger
 
+from voicebot_platform.outcome_catalog import get_disposition_map
+from voicebot_platform.phrase_library import get_phrase_texts
+
 from .config import GEMINI_API_KEY
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-DISPOSITION_MAP: dict[str, str] = {
+# Legacy in-process fallback. Live disposition data comes from
+# voicebot_platform.outcome_catalog.get_disposition_map() — this dict is the
+# safety net when Mongo is unreachable at module import time.
+_FALLBACK_DISPOSITION_MAP: dict[str, str] = {
     "Short Hangup":                      "The call ended with no product discussion — the customer said nothing at all, OR gave only a bare call-acknowledgment (e.g. hello, haan, hold on, ek second) and disconnected before any product topic was raised.",
     "Voicemail":                        "The call went to the recipient's voicemail instead of connecting directly.",
     "Wrong Number":                     "The number dialed does not belong to the intended customer.",
@@ -32,10 +39,69 @@ DISPOSITION_MAP: dict[str, str] = {
     "Language Issue":                   "Communication was not possible due to a language mismatch.",
 }
 
-_VALID_OUTCOMES = set(DISPOSITION_MAP.keys())
+
+def _current_disposition_map() -> dict[str, str]:
+    """Always-fresh-ish (60s cached) dispatch to the editable outcome catalog,
+    with a hardcoded fallback if Mongo is briefly unreachable.
+    """
+    try:
+        mapping = get_disposition_map()
+        if mapping:
+            return mapping
+    except Exception:
+        pass
+    return _FALLBACK_DISPOSITION_MAP
+
+
+# Public alias — preserves the historical name used by callback.py / build_callback_payload.
+# We re-resolve on every access so dashboard edits flow through, but use a fast
+# in-memory cache (TTL 60s) under the hood.
+class _LazyDispositionMap(dict):
+    def __getitem__(self, key):
+        return _current_disposition_map()[key]
+
+    def get(self, key, default=None):
+        return _current_disposition_map().get(key, default)
+
+    def keys(self):  # type: ignore[override]
+        return _current_disposition_map().keys()
+
+    def items(self):  # type: ignore[override]
+        return _current_disposition_map().items()
+
+    def __iter__(self):
+        return iter(_current_disposition_map())
+
+    def __contains__(self, key):  # type: ignore[override]
+        return key in _current_disposition_map()
+
+
+DISPOSITION_MAP: dict[str, str] = _LazyDispositionMap()
+
+
+def _valid_outcomes() -> set[str]:
+    return set(_current_disposition_map().keys())
 
 
 def status_to_outcome(status: str) -> str:
+    """Best-effort outcome when the LLM analysis is unavailable.
+
+    Maps the runtime call status into the closest disposition we can defend
+    without inspecting the transcript. Anything we can't classify falls back to
+    "Could Not Confirm" rather than the safer label getting misapplied to every
+    call.
+    """
+    normalized = (status or "").strip().lower()
+    if normalized in {"completed", "ended_naturally"}:
+        return "Could Not Confirm"
+    if normalized in {"disconnected", "hangup", "user_hangup"}:
+        return "Could Not Confirm"
+    if normalized in {"timeout", "inactivity_timeout", "max_duration"}:
+        return "Technical Issue - Call Connected"
+    if normalized in {"failed", "error"}:
+        return "Technical Issue - Call Connected"
+    if normalized in {"short_hangup", "no_response"}:
+        return "Short Hangup"
     return "Could Not Confirm"
 
 
@@ -94,26 +160,11 @@ async def generate_call_analysis(
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
-    _VOICEMAIL_SIGNALS_PRE = [
-        "leave a message", "leave your message", "please leave a message",
-        "after the beep", "after the tone", "at the beep",
-        "you have reached", "you've reached",
-        "unable to take your call", "cannot take your call",
-        "not available to take your call",
-        "record your message", "record a message",
-        "mailbox is full", "mailbox full",
-        "voice mail recording", "voicemail recording",
-        "you may hang up", "may hang up now",
-        "finished recording hang up", "when you have finished recording",
-    ]
-    _HOLD_MUSIC_SIGNALS_PRE = [
-        "put your call on hold",
-        "placed your call on hold",
-        "has put your call on hold",
-        "पुट योर कॉल ऑन होल्ड",           # transliterated English in Hindi script
-        "होल्ड पर राख्यो छे",              # Gujarati hold-music phrase
-        "hold par rakho chhe",
-    ]
+    # Editable from the dashboard — see voicebot_platform/phrase_library.py.
+    # Falls back to hardcoded defaults if Mongo is unreachable.
+    _VOICEMAIL_SIGNALS_PRE = get_phrase_texts("voicemail")
+    _HOLD_MUSIC_SIGNALS_PRE = get_phrase_texts("hold_music")
+    _DNC_SIGNALS_PRE = get_phrase_texts("dnc_trigger")
 
     for turn in transcript:
         text_lower = (turn.get("text") or "").lower()
@@ -130,6 +181,14 @@ async def generate_call_analysis(
                 "call_outcome": "Could Not Confirm",
                 "call_outcome_description": DISPOSITION_MAP["Could Not Confirm"],
                 "call_summary": "Caller placed the bot on hold; no product confirmation was obtained.",
+                "is_business": "", "business_city": "", "business_name": "",
+                "qna": [], "product_change": {}, "rescheduled_to": "",
+            }
+        if any(sig in text_lower for sig in _DNC_SIGNALS_PRE):
+            return {
+                "call_outcome": "DNC Client : Don't Call Further",
+                "call_outcome_description": DISPOSITION_MAP["DNC Client : Don't Call Further"],
+                "call_summary": "Customer explicitly requested not to be called again.",
                 "is_business": "", "business_city": "", "business_name": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
@@ -153,7 +212,8 @@ async def generate_call_analysis(
         "Determine the outcome based on what was actually collected."
         if base_status == "disconnected" else ""
     )
-    disposition_options = "\n".join(f'  "{k}": {v}' for k, v in DISPOSITION_MAP.items())
+    _disposition_map = _current_disposition_map()
+    disposition_options = "\n".join(f'  "{k}": {v}' for k, v in _disposition_map.items())
     current_dt_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
 
     prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Your ONLY job is to read the transcript and return accurate, structured JSON. Every rule below is mandatory — do not skip or approximate.{cut_note}
@@ -452,36 +512,44 @@ STRICT OUTPUT RULES:
 - Do NOT include null fields — use "" or {{}} as specified above.
 - Return ONLY the JSON object. No markdown fences, no commentary before or after."""
 
-    try:
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model}:generateContent?key={GEMINI_API_KEY}"
-        )
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
-        }
-        async with http_session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-            data = await resp.json()
-            if "candidates" not in data or not data["candidates"]:
-                raise ValueError(f"No candidates: {data.get('error') or data}")
-            raw = data["candidates"][0]["content"]["parts"][0]["text"]
-            result = json.loads(raw)
-            outcome = result.get("call_outcome", "")
-            if outcome not in _VALID_OUTCOMES:
-                outcome = status_to_outcome(base_status)
-                result["call_outcome"] = outcome
-            result["call_outcome_description"] = DISPOSITION_MAP.get(outcome, "")
-            result.setdefault("qna", [])
-            result.setdefault("product_change", {})
-            result.setdefault("rescheduled_to", "")
-            pc = result.get("product_change") or {}
-            if isinstance(pc, dict) and "new_product" in pc and "product_name" not in pc:
-                result["product_change"] = {"product_name": pc.get("new_product", "")}
-            return result
-    except Exception as e:
-        logger.error(f"[ANALYSIS] LLM analysis failed: {type(e).__name__}: {e}")
-        return fallback_analysis(base_status)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
+    }
+    headers = {"x-goog-api-key": GEMINI_API_KEY}
+
+    last_error: Exception | None = None
+    for attempt, delay in enumerate([0, 1, 4], 1):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            async with http_session.post(
+                url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)
+            ) as resp:
+                data = await resp.json()
+                if "candidates" not in data or not data["candidates"]:
+                    raise ValueError(f"No candidates: {data.get('error') or data}")
+                raw = data["candidates"][0]["content"]["parts"][0]["text"]
+                result = json.loads(raw)
+                outcome = result.get("call_outcome", "")
+                if outcome not in _valid_outcomes():
+                    outcome = status_to_outcome(base_status)
+                    result["call_outcome"] = outcome
+                result["call_outcome_description"] = _disposition_map.get(outcome, "")
+                result.setdefault("qna", [])
+                result.setdefault("product_change", {})
+                result.setdefault("rescheduled_to", "")
+                pc = result.get("product_change") or {}
+                if isinstance(pc, dict) and "new_product" in pc and "product_name" not in pc:
+                    result["product_change"] = {"product_name": pc.get("new_product", "")}
+                return result
+        except Exception as e:
+            last_error = e
+            logger.warning(f"[ANALYSIS] LLM attempt {attempt}/3 failed: {type(e).__name__}: {e}")
+
+    logger.error(f"[ANALYSIS] LLM analysis failed after 3 attempts: {last_error}")
+    return fallback_analysis(base_status)
 
 
 _FALLBACK_B2B_SCORE: dict = {"deal_value": "", "lead_intent_score": "", "urgency_flag": "no"}
@@ -542,25 +610,33 @@ OUTPUT — strict JSON, no additional keys or commentary:
 CONVERSATION TO ANALYZE:
 {lines}"""
 
-    try:
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model}:generateContent?key={GEMINI_API_KEY}"
-        )
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
-        }
-        async with http_session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-            data = await resp.json()
-            if "candidates" not in data or not data["candidates"]:
-                raise ValueError(f"No candidates: {data.get('error') or data}")
-            raw = data["candidates"][0]["content"]["parts"][0]["text"]
-            result = json.loads(raw)
-            result.setdefault("deal_value", "")
-            result.setdefault("lead_intent_score", "")
-            result.setdefault("urgency_flag", "no")
-            return result
-    except Exception as e:
-        logger.error(f"[B2B SCORE] LLM scoring failed: {type(e).__name__}: {e}")
-        return _FALLBACK_B2B_SCORE.copy()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
+    }
+    headers = {"x-goog-api-key": GEMINI_API_KEY}
+
+    last_error: Exception | None = None
+    for attempt, delay in enumerate([0, 1, 4], 1):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            async with http_session.post(
+                url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)
+            ) as resp:
+                data = await resp.json()
+                if "candidates" not in data or not data["candidates"]:
+                    raise ValueError(f"No candidates: {data.get('error') or data}")
+                raw = data["candidates"][0]["content"]["parts"][0]["text"]
+                result = json.loads(raw)
+                result.setdefault("deal_value", "")
+                result.setdefault("lead_intent_score", "")
+                result.setdefault("urgency_flag", "no")
+                return result
+        except Exception as e:
+            last_error = e
+            logger.warning(f"[B2B SCORE] LLM attempt {attempt}/3 failed: {type(e).__name__}: {e}")
+
+    logger.error(f"[B2B SCORE] LLM scoring failed after 3 attempts: {last_error}")
+    return _FALLBACK_B2B_SCORE.copy()
