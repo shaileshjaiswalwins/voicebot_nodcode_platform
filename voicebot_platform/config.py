@@ -26,6 +26,12 @@ PLATFORM_SETTINGS_COLLECTION = os.getenv(
 DEFAULT_USER = os.getenv("VOICEBOT_DEFAULT_USER", "system")
 VOICEBOT_ENV = os.getenv("VOICEBOT_ENV", "local")
 
+_DASHBOARD_ORIGINS_RAW = os.getenv(
+    "DASHBOARD_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173",
+)
+DASHBOARD_ORIGINS = [o.strip() for o in _DASHBOARD_ORIGINS_RAW.split(",") if o.strip()]
+
 LIVEKIT_URL = os.getenv("LIVEKIT_URL", "")
 LIVEKIT_API_URL = os.getenv("LIVEKIT_API_URL") or LIVEKIT_URL
 LIVEKIT_BROWSER_URL = os.getenv("LIVEKIT_BROWSER_URL") or LIVEKIT_URL

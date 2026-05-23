@@ -367,6 +367,30 @@ def _transcript_query(filters: dict[str, Any]) -> dict[str, Any]:
     return query
 
 
+# Fields safe to project for list view — full prompt snapshots and lead records
+# can be several KB each, so we omit them and let the detail endpoint load them
+# on demand.
+_TRANSCRIPT_LIST_PROJECTION = {
+    "call_id": 1,
+    "lead_id": 1,
+    "bot_id": 1,
+    "bot_version_id": 1,
+    "bot_version": 1,
+    "campaign_id": 1,
+    "assistant_id": 1,
+    "room_name": 1,
+    "status": 1,
+    "call_duration_sec": 1,
+    "ended_naturally": 1,
+    "tags": 1,
+    "callback_status": 1,
+    "recording_url": 1,
+    "created_at": 1,
+    "updated_at": 1,
+    "transcript_count": {"$size": {"$ifNull": ["$transcript", []]}},
+}
+
+
 def _normalize_transcript_doc(doc: dict[str, Any], source: str) -> dict[str, Any]:
     doc = deepcopy(doc)
     doc["transcript_source"] = source
@@ -378,17 +402,29 @@ def _normalize_transcript_doc(doc: dict[str, Any], source: str) -> dict[str, Any
     return doc
 
 
-def search_transcripts(filters: dict[str, Any]) -> list[dict[str, Any]]:
+def search_transcripts(
+    filters: dict[str, Any],
+    *,
+    limit: int = 50,
+    skip: int = 0,
+) -> list[dict[str, Any]]:
+    limit = max(1, min(limit, 200))
+    skip = max(0, skip)
     query = _transcript_query(filters)
+    # Per-source fetch budget: enough to fill the requested page after dedup +
+    # cross-source merge, without dragging full bodies.
+    per_source_limit = limit + skip + 20
     docs: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for source, collection in _transcript_sources():
-        for doc in collection.find(query).sort("created_at", -1).limit(100):
+        cursor = collection.find(query, _TRANSCRIPT_LIST_PROJECTION).sort("created_at", -1).limit(per_source_limit)
+        for doc in cursor:
             key = (source, str(doc["_id"]))
             if key in seen:
                 continue
             seen.add(key)
             docs.append(_normalize_transcript_doc(doc, source))
+
     def sort_value(item: dict[str, Any]) -> float:
         created_at = item.get("created_at")
         if isinstance(created_at, datetime):
@@ -396,11 +432,14 @@ def search_transcripts(filters: dict[str, Any]) -> list[dict[str, Any]]:
         return 0.0
 
     docs.sort(key=sort_value, reverse=True)
-    return serialize_doc(docs[:100])
+    return serialize_doc(docs[skip : skip + limit])
 
 
 def get_transcript(transcript_id: str) -> dict[str, Any] | None:
-    obj_id = ObjectId(transcript_id)
+    try:
+        obj_id = ObjectId(transcript_id)
+    except Exception:
+        return None
     for source, collection in _transcript_sources():
         doc = collection.find_one({"_id": obj_id})
         if doc:

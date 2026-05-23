@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from loguru import logger
 
+from .audit import RequestLoggingMiddleware
+
+from .config import DASHBOARD_ORIGINS, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL
 from .config_store import (
-    LANGUAGE_OPTIONS,
-    VOICE_OPTIONS,
     create_bot,
     create_test_session,
     duplicate_bot,
@@ -24,8 +27,44 @@ from .config_store import (
     upsert_campaign,
 )
 from .livekit_sessions import LiveKitConfigError, create_webrtc_test_room
-from .mongo import ensure_indexes
+from .mongo import ensure_indexes, get_client
 from .observability import recorder
+from .language_settings import (
+    delete_language_settings,
+    list_language_settings,
+    seed_default_language_settings,
+    upsert_language_settings,
+)
+from .option_catalogs import (
+    delete_language,
+    delete_voice,
+    list_languages,
+    list_voices,
+    seed_default_catalogs,
+    upsert_language,
+    upsert_voice,
+)
+from .outcome_catalog import list_outcomes, seed_default_outcomes, update_outcome
+from .phrase_library import (
+    VALID_CATEGORIES as PHRASE_CATEGORIES,
+    create_phrase,
+    delete_phrase,
+    list_phrases,
+    seed_default_phrases,
+    update_phrase,
+)
+from .schemas import (
+    CampaignPayload,
+    CreateBotPayload,
+    LangfuseUpdatePayload,
+    PhrasePayload,
+    PublishPayload,
+    RollbackPayload,
+    RuntimeSettingsUpdatePayload,
+    SaveDraftPayload,
+    TestSessionPayload,
+    assert_object_id,
+)
 from .platform_settings import (
     get_langfuse_settings,
     get_runtime_settings,
@@ -33,20 +72,46 @@ from .platform_settings import (
     update_runtime_settings,
 )
 
-app = FastAPI(title="JustDial Voice AI Platform", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        ensure_indexes()
+    except Exception as exc:
+        logger.warning(f"[STARTUP] index setup skipped: {exc}")
+    try:
+        seed_default_phrases()
+    except Exception as exc:
+        # Best-effort; the library reader has its own hardcoded fallback.
+        logger.warning(f"[STARTUP] phrase seed skipped: {exc}")
+    try:
+        seed_default_outcomes()
+    except Exception as exc:
+        logger.warning(f"[STARTUP] outcome catalog seed skipped: {exc}")
+    try:
+        seed_default_catalogs()
+    except Exception as exc:
+        logger.warning(f"[STARTUP] voice/language catalog seed skipped: {exc}")
+    try:
+        seed_default_language_settings()
+    except Exception as exc:
+        logger.warning(f"[STARTUP] language settings seed skipped: {exc}")
+    yield
+    try:
+        get_client().close()
+    except Exception:
+        pass
 
+
+app = FastAPI(title="JustDial Voice AI Platform", version="0.1.0", lifespan=lifespan)
+
+app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=DASHBOARD_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def startup() -> None:
-    ensure_indexes()
 
 
 def current_user(x_jd_user: str | None = Header(default=None)) -> str:
@@ -55,17 +120,118 @@ def current_user(x_jd_user: str | None = Header(default=None)) -> str:
 
 @app.get("/health")
 def health() -> dict[str, str]:
+    """Liveness only — always returns ok if the API process is up."""
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+def health_ready():
+    """Readiness probe — exercises Mongo and reports LiveKit credential state.
+
+    Returns 503 if Mongo is unreachable. LiveKit is informational because the
+    runtime can keep accepting platform requests even if LiveKit is down (only
+    the test-call endpoint depends on it).
+    """
+    mongo_ok = False
+    mongo_error: str | None = None
+    try:
+        get_client().admin.command("ping")
+        mongo_ok = True
+    except Exception as exc:
+        mongo_error = str(exc)
+
+    livekit_configured = bool(LIVEKIT_URL and LIVEKIT_API_KEY and LIVEKIT_API_SECRET)
+    body = {
+        "status": "ok" if mongo_ok else "degraded",
+        "mongo": {"ok": mongo_ok, "error": mongo_error},
+        "livekit": {"configured": livekit_configured, "url": LIVEKIT_URL or None},
+        "langfuse": recorder.status(),
+    }
+    if not mongo_ok:
+        raise HTTPException(status_code=503, detail=body)
+    return body
 
 
 @app.get("/api/options/voices")
 def voices() -> list[dict[str, Any]]:
-    return VOICE_OPTIONS
+    return list_voices()
 
 
 @app.get("/api/options/languages")
 def languages() -> list[dict[str, Any]]:
-    return LANGUAGE_OPTIONS
+    return list_languages()
+
+
+@app.get("/api/library/voices")
+def voices_admin_list() -> list[dict[str, Any]]:
+    return list_voices(include_disabled=True)
+
+
+@app.post("/api/library/voices")
+def voices_upsert(payload: dict[str, Any], x_jd_user: str | None = Header(default=None)):
+    try:
+        return upsert_voice(payload, current_user(x_jd_user))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/library/voices/{voice_id}")
+def voices_delete(voice_id: str):
+    try:
+        delete_voice(voice_id)
+        return {"status": "deleted"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/library/languages")
+def languages_admin_list() -> list[dict[str, Any]]:
+    return list_languages(include_disabled=True)
+
+
+@app.post("/api/library/languages")
+def languages_upsert(payload: dict[str, Any], x_jd_user: str | None = Header(default=None)):
+    try:
+        return upsert_language(payload, current_user(x_jd_user))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/library/languages/{language_id}")
+def languages_delete(language_id: str):
+    try:
+        delete_language(language_id)
+        return {"status": "deleted"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/library/language-settings")
+def language_settings_list() -> list[dict[str, Any]]:
+    return list_language_settings()
+
+
+@app.post("/api/library/language-settings")
+def language_settings_upsert(payload: dict[str, Any], x_jd_user: str | None = Header(default=None)):
+    try:
+        return upsert_language_settings(payload, current_user(x_jd_user))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/library/language-settings/{lang_id}")
+def language_settings_delete(lang_id: str):
+    try:
+        delete_language_settings(lang_id)
+        return {"status": "deleted"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/observability/langfuse")
@@ -75,9 +241,10 @@ def langfuse_settings() -> dict[str, Any]:
 
 
 @app.put("/api/observability/langfuse")
-def langfuse_settings_update(payload: dict[str, Any], x_jd_user: str | None = Header(default=None)):
+def langfuse_settings_update(payload: LangfuseUpdatePayload, x_jd_user: str | None = Header(default=None)):
     try:
-        settings = update_langfuse_settings(payload, current_user(x_jd_user))
+        settings = update_langfuse_settings(payload.model_dump(exclude_none=True), current_user(x_jd_user))
+        recorder.invalidate_settings_cache()
         return {**settings, "runtime_status": recorder.status()}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -89,8 +256,8 @@ def runtime_settings() -> dict[str, Any]:
 
 
 @app.put("/api/settings/runtime")
-def runtime_settings_update(payload: dict[str, Any], x_jd_user: str | None = Header(default=None)):
-    return update_runtime_settings(payload, current_user(x_jd_user))
+def runtime_settings_update(payload: RuntimeSettingsUpdatePayload, x_jd_user: str | None = Header(default=None)):
+    return update_runtime_settings(payload.model_dump(exclude_none=True), current_user(x_jd_user))
 
 
 @app.get("/api/templates")
@@ -112,15 +279,24 @@ def bots() -> list[dict[str, Any]]:
 
 
 @app.post("/api/bots")
-def create_bot_endpoint(payload: dict[str, Any], x_jd_user: str | None = Header(default=None)):
+def create_bot_endpoint(payload: CreateBotPayload, x_jd_user: str | None = Header(default=None)):
     try:
-        return create_bot(payload, current_user(x_jd_user))
-    except Exception as exc:
+        return create_bot(payload.model_dump(exclude_none=True), current_user(x_jd_user))
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _validate_bot_id(bot_id: str) -> str:
+    try:
+        assert_object_id(bot_id, "bot_id")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return bot_id
 
 
 @app.get("/api/bots/{bot_id}")
 def bot_detail(bot_id: str):
+    _validate_bot_id(bot_id)
     doc = get_bot(bot_id)
     if not doc:
         raise HTTPException(status_code=404, detail="bot_not_found")
@@ -128,31 +304,45 @@ def bot_detail(bot_id: str):
 
 
 @app.post("/api/bots/{bot_id}/draft")
-def draft(bot_id: str, payload: dict[str, Any], x_jd_user: str | None = Header(default=None)):
+def draft(bot_id: str, payload: SaveDraftPayload, x_jd_user: str | None = Header(default=None)):
+    _validate_bot_id(bot_id)
     try:
-        return save_draft(bot_id, payload, current_user(x_jd_user))
+        return save_draft(bot_id, payload.model_dump(exclude_none=True), current_user(x_jd_user))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/bots/{bot_id}/publish")
-def publish(bot_id: str, payload: dict[str, Any] | None = None, x_jd_user: str | None = Header(default=None)):
+def publish(
+    bot_id: str,
+    payload: PublishPayload | None = None,
+    x_jd_user: str | None = Header(default=None),
+):
+    _validate_bot_id(bot_id)
     try:
-        return publish_version(bot_id, (payload or {}).get("version_id"), current_user(x_jd_user))
+        return publish_version(
+            bot_id,
+            (payload.version_id if payload else None),
+            current_user(x_jd_user),
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/api/bots/{bot_id}/rollback")
-def rollback(bot_id: str, payload: dict[str, Any], x_jd_user: str | None = Header(default=None)):
+def rollback(bot_id: str, payload: RollbackPayload, x_jd_user: str | None = Header(default=None)):
+    _validate_bot_id(bot_id)
     try:
-        return rollback_bot(bot_id, payload["version_id"], current_user(x_jd_user))
+        return rollback_bot(bot_id, payload.version_id, current_user(x_jd_user))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/api/bots/{bot_id}/duplicate")
 def duplicate(bot_id: str, x_jd_user: str | None = Header(default=None)):
+    _validate_bot_id(bot_id)
     try:
         return duplicate_bot(bot_id, current_user(x_jd_user))
     except KeyError as exc:
@@ -165,14 +355,15 @@ def campaigns():
 
 
 @app.post("/api/campaigns")
-def campaign_upsert(payload: dict[str, Any], x_jd_user: str | None = Header(default=None)):
-    return upsert_campaign(payload, current_user(x_jd_user))
+def campaign_upsert(payload: CampaignPayload, x_jd_user: str | None = Header(default=None)):
+    return upsert_campaign(payload.model_dump(exclude_none=True), current_user(x_jd_user))
 
 
 @app.post("/api/bots/{bot_id}/test-session")
-def test_session(bot_id: str, payload: dict[str, Any], x_jd_user: str | None = Header(default=None)):
+def test_session(bot_id: str, payload: TestSessionPayload, x_jd_user: str | None = Header(default=None)):
+    _validate_bot_id(bot_id)
     try:
-        return create_test_session(bot_id, payload, current_user(x_jd_user))
+        return create_test_session(bot_id, payload.model_dump(exclude_none=True), current_user(x_jd_user))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -180,11 +371,14 @@ def test_session(bot_id: str, payload: dict[str, Any], x_jd_user: str | None = H
 @app.post("/api/bots/{bot_id}/webrtc-test-session")
 async def webrtc_test_session(
     bot_id: str,
-    payload: dict[str, Any],
+    payload: TestSessionPayload,
     x_jd_user: str | None = Header(default=None),
 ):
+    _validate_bot_id(bot_id)
     try:
-        session = create_test_session(bot_id, payload, current_user(x_jd_user))
+        session = create_test_session(
+            bot_id, payload.model_dump(exclude_none=True), current_user(x_jd_user)
+        )
         return await create_webrtc_test_room(session["room_metadata"], current_user(x_jd_user))
     except LiveKitConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -208,6 +402,8 @@ def transcripts(
     status: str | None = Query(default=None),
     mobile: str | None = Query(default=None),
     text: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    skip: int = Query(default=0, ge=0),
 ):
     return search_transcripts(
         {
@@ -220,13 +416,82 @@ def transcripts(
             "status": status,
             "mobile": mobile,
             "text": text,
-        }
+        },
+        limit=limit,
+        skip=skip,
     )
 
 
 @app.get("/api/transcripts/{transcript_id}")
 def transcript_detail(transcript_id: str):
+    try:
+        assert_object_id(transcript_id, "transcript_id")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     doc = get_transcript(transcript_id)
     if not doc:
         raise HTTPException(status_code=404, detail="transcript_not_found")
     return doc
+
+
+@app.get("/api/library/phrases")
+def phrases_list(category: str | None = Query(default=None)):
+    try:
+        return list_phrases(category)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/library/phrase-categories")
+def phrase_categories() -> list[str]:
+    return sorted(PHRASE_CATEGORIES)
+
+
+@app.post("/api/library/phrases")
+def phrases_create(payload: PhrasePayload, x_jd_user: str | None = Header(default=None)):
+    try:
+        return create_phrase(payload.model_dump(exclude_none=True), current_user(x_jd_user))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/library/phrases/{phrase_id}")
+def phrases_update(
+    phrase_id: str, payload: PhrasePayload, x_jd_user: str | None = Header(default=None)
+):
+    try:
+        assert_object_id(phrase_id, "phrase_id")
+        return update_phrase(phrase_id, payload.model_dump(exclude_none=True), current_user(x_jd_user))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/library/phrases/{phrase_id}")
+def phrases_delete(phrase_id: str):
+    try:
+        assert_object_id(phrase_id, "phrase_id")
+        delete_phrase(phrase_id)
+        return {"status": "deleted"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/library/outcomes")
+def outcomes_list():
+    return list_outcomes()
+
+
+@app.put("/api/library/outcomes/{key}")
+def outcomes_update(key: str, payload: dict[str, Any], x_jd_user: str | None = Header(default=None)):
+    # Keys are wired into downstream callback logic (callback.py upgrade rules)
+    # so we accept the key from the URL but only update description/display_label.
+    try:
+        return update_outcome(key, payload, current_user(x_jd_user))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

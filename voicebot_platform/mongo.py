@@ -45,5 +45,14 @@ def ensure_indexes() -> None:
             [("campaign_id", ASCENDING), ("created_at", DESCENDING)]
         )
         db[TRANSCRIPT_COLLECTION].create_index([("lead_id", ASCENDING), ("call_id", ASCENDING)])
+        db["tbl_ai_vb_phrase_library"].create_index(
+            [("category", ASCENDING), ("text", ASCENDING)], unique=True
+        )
+        db["tbl_ai_vb_outcome_catalog"].create_index([("key", ASCENDING)], unique=True)
+        db["tbl_ai_vb_voice_catalog"].create_index([("id", ASCENDING)], unique=True)
+        db["tbl_ai_vb_language_catalog"].create_index([("id", ASCENDING)], unique=True)
+        db["tbl_ai_vb_language_settings"].create_index([("id", ASCENDING)], unique=True)
+        db["tbl_ai_vb_audit_log"].create_index([("created_at", DESCENDING)])
+        db["tbl_ai_vb_audit_log"].create_index([("actor", ASCENDING), ("created_at", DESCENDING)])
     except Exception as exc:
         logger.warning(f"[MONGO] index setup skipped: {exc}")
