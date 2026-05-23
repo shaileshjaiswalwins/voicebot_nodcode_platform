@@ -42,12 +42,13 @@ import {
   Campaign,
   LangfuseSettings,
   LanguageOption,
+  RuntimeSettings,
   Transcript,
   VoiceOption
 } from './api';
 import './styles.css';
 
-type View = 'bots' | 'builder' | 'campaigns' | 'test' | 'transcripts' | 'observability';
+type View = 'bots' | 'builder' | 'campaigns' | 'test' | 'transcripts' | 'observability' | 'settings';
 type DiagnosticSeverity = 'info' | 'warning' | 'error';
 
 type Diagnostic = {
@@ -116,6 +117,7 @@ function App() {
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [languages, setLanguages] = useState<LanguageOption[]>([]);
   const [langfuseSettings, setLangfuseSettings] = useState<LangfuseSettings | null>(null);
+  const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings | null>(null);
   const [configText, setConfigText] = useState(JSON.stringify(defaultConfig, null, 2));
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [selectedTranscriptId, setSelectedTranscriptId] = useState('');
@@ -189,9 +191,10 @@ function App() {
       api.campaigns(),
       api.voices(),
       api.languages(),
-      api.langfuseSettings()
+      api.langfuseSettings(),
+      api.runtimeSettings()
     ]);
-    const scopes = ['Bots API', 'Transcripts API', 'Campaigns API', 'Voice Options API', 'Language Options API', 'Langfuse Settings API'];
+    const scopes = ['Bots API', 'Transcripts API', 'Campaigns API', 'Voice Options API', 'Language Options API', 'Langfuse Settings API', 'Runtime Settings API'];
     results.forEach((result, index) => {
       if (result.status === 'rejected') reportDiagnostic(scopes[index], result.reason, 'Retry refresh or use cached dashboard data');
     });
@@ -227,6 +230,11 @@ function App() {
       cacheSet('langfuse', results[5].value);
       clearDiagnostic('Langfuse Settings API');
     }
+    if (results[6].status === 'fulfilled') {
+      setRuntimeSettings(results[6].value);
+      cacheSet('runtimeSettings', results[6].value);
+      clearDiagnostic('Runtime Settings API');
+    }
     if (results.some((result) => result.status === 'rejected')) {
       setMessage('Some dashboard data could not load. You can retry or continue with cached data.');
     }
@@ -240,6 +248,7 @@ function App() {
     setVoices(cacheGet<VoiceOption[]>('voices', []));
     setLanguages(cacheGet<LanguageOption[]>('languages', []));
     setLangfuseSettings(cacheGet<LangfuseSettings | null>('langfuse', null));
+    setRuntimeSettings(cacheGet<RuntimeSettings | null>('runtimeSettings', null));
     refresh();
   }, []);
 
@@ -310,6 +319,15 @@ function App() {
       const nextSettings = await api.updateLangfuseSettings(payload);
       setLangfuseSettings(nextSettings);
       setMessage(`Langfuse ${nextSettings.enabled ? 'enabled' : 'disabled'} for ${nextSettings.environment}.`);
+    });
+  }
+
+  async function updateRuntime(payload: Partial<RuntimeSettings>) {
+    await runAction('runtimeSettings', 'Runtime Settings', async () => {
+      const nextSettings = await api.updateRuntimeSettings(payload);
+      setRuntimeSettings(nextSettings);
+      cacheSet('runtimeSettings', nextSettings);
+      setMessage(`Runtime settings saved. Test calls now dispatch to ${nextSettings.livekit_agent_name}.`);
     });
   }
 
@@ -413,6 +431,7 @@ function App() {
           <NavButton icon={<Play />} label="Test Call" active={view === 'test'} onClick={() => setView('test')} />
           <NavButton icon={<FileText />} label="Transcripts" active={view === 'transcripts'} onClick={() => setView('transcripts')} />
           <NavButton icon={<Gauge />} label="Observability" active={view === 'observability'} onClick={() => setView('observability')} />
+          <NavButton icon={<ClipboardList />} label="Settings" active={view === 'settings'} onClick={() => setView('settings')} />
         </div>
         <div className="sidebar-card">
           <span className={diagnostics.some((item) => item.severity === 'error') ? 'status-dot error-dot' : 'status-dot'} />
@@ -444,6 +463,7 @@ function App() {
           setVoices(cacheGet<VoiceOption[]>('voices', voices));
           setLanguages(cacheGet<LanguageOption[]>('languages', languages));
           setLangfuseSettings(cacheGet<LangfuseSettings | null>('langfuse', langfuseSettings));
+          setRuntimeSettings(cacheGet<RuntimeSettings | null>('runtimeSettings', runtimeSettings));
           setMessage('Loaded last known cached dashboard data.');
         }} />
 
@@ -532,6 +552,12 @@ function App() {
               langfuseSettings={langfuseSettings}
               onUpdateLangfuse={updateLangfuse}
             />
+          </ResilientPanel>
+        )}
+
+        {view === 'settings' && (
+          <ResilientPanel name="Settings" onDiagnostic={reportDiagnostic}>
+            <SettingsView runtimeSettings={runtimeSettings} onUpdateRuntime={updateRuntime} />
           </ResilientPanel>
         )}
       </main>
@@ -1149,6 +1175,71 @@ function ObservabilityView({
   );
 }
 
+function SettingsView({
+  runtimeSettings,
+  onUpdateRuntime
+}: {
+  runtimeSettings: RuntimeSettings | null;
+  onUpdateRuntime: (payload: Partial<RuntimeSettings>) => void;
+}) {
+  const [draft, setDraft] = useState({
+    livekit_api_url: runtimeSettings?.livekit_api_url || '',
+    livekit_browser_url: runtimeSettings?.livekit_browser_url || '',
+    livekit_agent_name: runtimeSettings?.livekit_agent_name || ''
+  });
+
+  useEffect(() => {
+    setDraft({
+      livekit_api_url: runtimeSettings?.livekit_api_url || '',
+      livekit_browser_url: runtimeSettings?.livekit_browser_url || '',
+      livekit_agent_name: runtimeSettings?.livekit_agent_name || ''
+    });
+  }, [runtimeSettings?._id, runtimeSettings?.livekit_api_url, runtimeSettings?.livekit_browser_url, runtimeSettings?.livekit_agent_name]);
+
+  return (
+    <section className="content-grid two-col">
+      <div className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>Runtime settings</h2>
+            <p>These values control where dashboard test calls are created and which LiveKit worker receives them.</p>
+          </div>
+          <StatusPill value={runtimeSettings?.livekit_credentials_configured ? 'ready' : 'missing keys'} />
+        </div>
+        <div className="form-grid">
+          <label>
+            LiveKit API URL
+            <input value={draft.livekit_api_url} onChange={(event) => setDraft({ ...draft, livekit_api_url: event.target.value })} />
+          </label>
+          <label>
+            Browser WebSocket URL
+            <input value={draft.livekit_browser_url} onChange={(event) => setDraft({ ...draft, livekit_browser_url: event.target.value })} />
+          </label>
+          <label>
+            Test call worker agent name
+            <input value={draft.livekit_agent_name} onChange={(event) => setDraft({ ...draft, livekit_agent_name: event.target.value })} />
+          </label>
+          <label>
+            Secret keys
+            <input value={runtimeSettings?.livekit_credentials_configured ? 'Configured in backend .env' : 'Missing in backend .env'} disabled />
+          </label>
+        </div>
+        <div className="button-row">
+          <button className="primary" onClick={() => onUpdateRuntime(draft)}><Save size={16} /> Save runtime settings</button>
+        </div>
+      </div>
+      <div className="panel">
+        <h2>Worker vs dashboard agent</h2>
+        <div className="timeline">
+          <Step title="Dashboard agent" text="The bot you create in the UI: prompt, voice, language and settings stored in Mongo." />
+          <Step title="LiveKit worker" text="A Python process connected to LiveKit. It receives rooms for a specific agent name and runs bot.py." />
+          <Step title="Safe testing" text="Use a separate worker name such as voice-bot-justdial-test so test calls do not route to live workers." />
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function NavButton({ icon, label, active, onClick }: {
   icon: React.ReactNode;
   label: string;
@@ -1195,7 +1286,8 @@ function titleFor(view: View) {
     campaigns: 'Campaigns',
     test: 'WebRTC Test Call',
     transcripts: 'Transcripts',
-    observability: 'Observability'
+    observability: 'Observability',
+    settings: 'Settings'
   }[view];
 }
 
@@ -1206,7 +1298,8 @@ function subtitleFor(view: View) {
     campaigns: 'Connect one bot to one campaign and its lead/callback APIs.',
     test: 'Start a controlled browser call with helpful connection diagnostics.',
     transcripts: 'Inspect raw call transcripts, outcomes, and config snapshots.',
-    observability: 'Track LiveKit health, Gemini latency, TTFW, and callback failures.'
+    observability: 'Track LiveKit health, Gemini latency, TTFW, and callback failures.',
+    settings: 'Control LiveKit routing and dashboard runtime options.'
   }[view];
 }
 

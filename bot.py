@@ -2391,7 +2391,7 @@ if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
-            agent_name="voice-bot-justdial",
+            agent_name=os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial"),
             num_idle_processes=3,
         )
     )

@@ -147,6 +147,17 @@ export type LangfuseSettings = {
   };
 };
 
+export type RuntimeSettings = {
+  _id?: string;
+  key?: string;
+  livekit_api_url: string;
+  livekit_browser_url: string;
+  livekit_agent_name: string;
+  livekit_credentials_configured: boolean;
+  updated_by?: string;
+  updated_at?: string;
+};
+
 export const api = {
   bots: () => request<Bot[]>('/api/bots'),
   bot: (id: string) => request<{ bot: Bot; versions: BotVersion[] }>(`/api/bots/${id}`),
@@ -167,6 +178,12 @@ export const api = {
   langfuseSettings: () => request<LangfuseSettings>('/api/observability/langfuse'),
   updateLangfuseSettings: (payload: Partial<LangfuseSettings>) =>
     request<LangfuseSettings>('/api/observability/langfuse', {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    }),
+  runtimeSettings: () => request<RuntimeSettings>('/api/settings/runtime'),
+  updateRuntimeSettings: (payload: Partial<RuntimeSettings>) =>
+    request<RuntimeSettings>('/api/settings/runtime', {
       method: 'PUT',
       body: JSON.stringify(payload)
     }),

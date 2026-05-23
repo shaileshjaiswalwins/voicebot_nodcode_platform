@@ -26,7 +26,12 @@ from .config_store import (
 from .livekit_sessions import LiveKitConfigError, create_webrtc_test_room
 from .mongo import ensure_indexes
 from .observability import recorder
-from .platform_settings import get_langfuse_settings, update_langfuse_settings
+from .platform_settings import (
+    get_langfuse_settings,
+    get_runtime_settings,
+    update_langfuse_settings,
+    update_runtime_settings,
+)
 
 app = FastAPI(title="JustDial Voice AI Platform", version="0.1.0")
 
@@ -76,6 +81,16 @@ def langfuse_settings_update(payload: dict[str, Any], x_jd_user: str | None = He
         return {**settings, "runtime_status": recorder.status()}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/settings/runtime")
+def runtime_settings() -> dict[str, Any]:
+    return get_runtime_settings()
+
+
+@app.put("/api/settings/runtime")
+def runtime_settings_update(payload: dict[str, Any], x_jd_user: str | None = Header(default=None)):
+    return update_runtime_settings(payload, current_user(x_jd_user))
 
 
 @app.get("/api/templates")

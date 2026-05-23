@@ -13,13 +13,11 @@ from livekit.api import (
 )
 
 from .config import (
-    LIVEKIT_AGENT_NAME,
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
-    LIVEKIT_API_URL,
-    LIVEKIT_BROWSER_URL,
     LIVEKIT_URL,
 )
+from .platform_settings import get_runtime_settings
 
 
 class LiveKitConfigError(RuntimeError):
@@ -31,8 +29,6 @@ def _require_livekit_config() -> None:
         name
         for name, value in {
             "LIVEKIT_URL": LIVEKIT_URL,
-            "LIVEKIT_API_URL": LIVEKIT_API_URL,
-            "LIVEKIT_BROWSER_URL": LIVEKIT_BROWSER_URL,
             "LIVEKIT_API_KEY": LIVEKIT_API_KEY,
             "LIVEKIT_API_SECRET": LIVEKIT_API_SECRET,
         }.items()
@@ -46,13 +42,17 @@ def _require_livekit_config() -> None:
 
 async def create_webrtc_test_room(room_metadata: dict, user: str) -> dict:
     _require_livekit_config()
+    runtime = get_runtime_settings()
+    livekit_api_url = runtime.get("livekit_api_url") or LIVEKIT_URL
+    livekit_browser_url = runtime.get("livekit_browser_url") or LIVEKIT_URL
+    livekit_agent_name = runtime.get("livekit_agent_name") or "voice-bot-justdial"
 
     room_name = f"test-{room_metadata['assistant_id'][:8]}-{uuid4().hex[:10]}"
     metadata = {**room_metadata, "room_name": room_name, "test_session": True}
     metadata_json = json.dumps(metadata, ensure_ascii=False)
 
     livekit = LiveKitAPI(
-        url=LIVEKIT_API_URL,
+        url=livekit_api_url,
         api_key=LIVEKIT_API_KEY,
         api_secret=LIVEKIT_API_SECRET,
     )
@@ -66,7 +66,7 @@ async def create_webrtc_test_room(room_metadata: dict, user: str) -> dict:
                 max_participants=4,
                 agents=[
                     RoomAgentDispatch(
-                        agent_name=LIVEKIT_AGENT_NAME,
+                        agent_name=livekit_agent_name,
                         metadata=metadata_json,
                     )
                 ],
@@ -95,10 +95,10 @@ async def create_webrtc_test_room(room_metadata: dict, user: str) -> dict:
 
     return {
         "room_name": room_name,
-        "livekit_url": LIVEKIT_BROWSER_URL,
+        "livekit_url": livekit_browser_url,
         "token": token,
         "metadata": metadata,
-        "agent_name": LIVEKIT_AGENT_NAME,
+        "agent_name": livekit_agent_name,
         "expires_in_sec": 1800,
         "next_steps": [
             "Browser connects to LiveKit with token.",

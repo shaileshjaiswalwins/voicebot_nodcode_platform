@@ -10,6 +10,11 @@ from .config import (
     LANGFUSE_ENABLED,
     LANGFUSE_PUBLIC_KEY,
     LANGFUSE_SECRET_KEY,
+    LIVEKIT_AGENT_NAME,
+    LIVEKIT_API_KEY,
+    LIVEKIT_API_SECRET,
+    LIVEKIT_API_URL,
+    LIVEKIT_BROWSER_URL,
     PLATFORM_SETTINGS_COLLECTION,
     VOICEBOT_ENV,
 )
@@ -98,4 +103,57 @@ def update_langfuse_settings(payload: dict[str, Any], user: str) -> dict[str, An
     )
     settings["credentials_configured"] = _credentials_present()
     settings["base_url"] = LANGFUSE_BASE_URL
+    return serialize_doc(settings)
+
+
+def _default_runtime_settings() -> dict[str, Any]:
+    return {
+        "key": "runtime",
+        "livekit_api_url": LIVEKIT_API_URL,
+        "livekit_browser_url": LIVEKIT_BROWSER_URL,
+        "livekit_agent_name": LIVEKIT_AGENT_NAME,
+        "livekit_credentials_configured": bool(LIVEKIT_API_KEY and LIVEKIT_API_SECRET),
+        "updated_by": "system",
+        "updated_at": _now(),
+    }
+
+
+def get_runtime_settings() -> dict[str, Any]:
+    db = get_db()
+    try:
+        settings = db[PLATFORM_SETTINGS_COLLECTION].find_one({"key": "runtime"})
+        if not settings:
+            settings = db[PLATFORM_SETTINGS_COLLECTION].find_one_and_update(
+                {"key": "runtime"},
+                {"$setOnInsert": {**_default_runtime_settings(), "created_at": _now()}},
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+            )
+    except Exception as exc:
+        settings = {
+            **_default_runtime_settings(),
+            "storage_status": "mongo_unavailable",
+            "storage_error": str(exc),
+        }
+    settings["livekit_credentials_configured"] = bool(LIVEKIT_API_KEY and LIVEKIT_API_SECRET)
+    return serialize_doc(settings)
+
+
+def update_runtime_settings(payload: dict[str, Any], user: str) -> dict[str, Any]:
+    allowed = {"livekit_api_url", "livekit_browser_url", "livekit_agent_name"}
+    update = {
+        key: str(payload[key]).strip()
+        for key in allowed
+        if key in payload and str(payload[key]).strip()
+    }
+    update["updated_by"] = user
+    update["updated_at"] = _now()
+    db = get_db()
+    settings = db[PLATFORM_SETTINGS_COLLECTION].find_one_and_update(
+        {"key": "runtime"},
+        {"$set": update, "$setOnInsert": {"key": "runtime", "created_at": _now()}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    settings["livekit_credentials_configured"] = bool(LIVEKIT_API_KEY and LIVEKIT_API_SECRET)
     return serialize_doc(settings)
