@@ -902,7 +902,14 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
             "  2. As soon as they say YES / हां / confirm: call FetchCategorySchema(srchterm=\"<new product in English>\") IMMEDIATELY.\n"
             "     Do NOT continue asking questions from the old schema.\n"
             "  3. When the function returns: say the 'instruction' field, then ask Question 1 from the new schema.\n"
-            "If they reconfirm the original product: continue without calling the function.\n"
+            "If they reconfirm the original product: continue without calling the function.\n\n"
+            "⚠ SELLER / MANUFACTURER BLOCK — HARD RULE (takes priority over product change):\n"
+            "If the user says they MAKE, MANUFACTURE, PRODUCE, SELL, or SUPPLY any product —\n"
+            "do NOT call FetchCategorySchema under any circumstances. This is a SELLER signal.\n"
+            "Key signals (any form of these): 'banate hain' / 'banata hoon' / 'banaate hain' /\n"
+            "'हम बनाते हैं' / 'हम ही बनाते' / 'main banata' / 'hum bechte' / 'हम बेचते हैं' /\n"
+            "'we make it' / 'we manufacture' / 'hum supplier' / 'hum dealer' / 'khud banate'.\n"
+            "→ Treat exactly like the CALLER IS A SELLER section above: one confirmation, then close.\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         )
 
@@ -2011,11 +2018,44 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _muted_transcript_log.append(text)
 
     # 7. Function tools
+    # Tokens that in ANY conjugation indicate the caller manufactures/sells the product.
+    # Gemini Live ASR mis-transcribes "plastic drum banate hain" → "stick drum banate hain"
+    # but the "banate" token survives — this guard catches it before the API fires.
+    _SELLER_MANUFACTURE_TOKENS = {
+        "banate", "banaate", "banata", "banaata", "banati", "banaati",
+        "बनाते", "बनाता", "बनाती", "बनाती", "बनाते हैं", "बनाता हूँ",
+        "bechte", "bechta", "बेचते", "बेचता",
+        "supplier", "manufacturer", "dealer", "distributor",
+        "supply karte", "khud banate", "खुद बनाते",
+    }
+
     @function_tool
     async def FetchCategorySchema(tool_ctx: RunContext, srchterm: str) -> dict:
         """Call when the buyer changes their product requirement mid-call.
         Pass the new product as a simple English search term (e.g. 'washing-machine', 'cctv')."""
         _log.info(f"[FetchCategorySchema] called with srchterm={srchterm!r}")
+
+        # Hard guard: block if recent user speech contains manufacturer/seller signals.
+        # This catches Gemini Live ASR errors where "plastic drum banate hain" gets
+        # transcribed as "stick drum banate hain" — the seller token still survives.
+        _recent = " ".join(
+            t.get("text", "") for t in _live_transcript[-4:] if t.get("role") in ("user", "buyer")
+        ).lower()
+        if any(tok.lower() in _recent for tok in _SELLER_MANUFACTURE_TOKENS):
+            _log.warning(
+                f"[FetchCategorySchema] SELLER BLOCK — manufacture/sell token in recent turns "
+                f"({_recent!r}). Returning seller_detected instead of category switch."
+            )
+            return {
+                "seller_detected": True,
+                "instruction": (
+                    "The caller is a SELLER or MANUFACTURER, NOT a buyer. "
+                    "Follow the CALLER IS A SELLER instructions: ask one confirmation "
+                    "(\"अच्छा जी — तो आप [product] खुद बनाते / बेचते हैं?\"), then close warmly. "
+                    "Do NOT ask any spec questions."
+                ),
+            }
+
         result = await _execute_function_call(
             "FetchCategorySchema", {"srchterm": srchterm},
             functions=_functions, call_state=call_state,
