@@ -14,9 +14,12 @@ from .config import (
     BOT_VERSION_COLLECTION,
     CAMPAIGN_COLLECTION,
     DEFAULT_USER,
+    LEGACY_TRANSCRIPT_COLLECTION,
+    LEGACY_TRANSCRIPT_DB,
+    MONGO_DB,
     TRANSCRIPT_COLLECTION,
 )
-from .mongo import get_db
+from .mongo import get_client, get_db
 from .serialization import serialize_doc
 
 
@@ -339,7 +342,13 @@ def create_test_session(bot_id: str, payload: dict[str, Any], user: str) -> dict
     }
 
 
-def search_transcripts(filters: dict[str, Any]) -> list[dict[str, Any]]:
+def _transcript_sources():
+    yield "platform", get_db()[TRANSCRIPT_COLLECTION]
+    if LEGACY_TRANSCRIPT_DB != MONGO_DB or LEGACY_TRANSCRIPT_COLLECTION != TRANSCRIPT_COLLECTION:
+        yield "legacy", get_client()[LEGACY_TRANSCRIPT_DB][LEGACY_TRANSCRIPT_COLLECTION]
+
+
+def _transcript_query(filters: dict[str, Any]) -> dict[str, Any]:
     query: dict[str, Any] = {}
     for key in ("bot_id", "bot_version_id", "campaign_id", "lead_id", "call_id", "assistant_id", "status"):
         if filters.get(key):
@@ -351,10 +360,45 @@ def search_transcripts(filters: dict[str, Any]) -> list[dict[str, Any]]:
         ]
     if filters.get("text"):
         query["transcript.text"] = {"$regex": filters["text"], "$options": "i"}
-    docs = list(get_db()[TRANSCRIPT_COLLECTION].find(query).sort("created_at", -1).limit(100))
-    return serialize_doc(docs)
+    return query
+
+
+def _normalize_transcript_doc(doc: dict[str, Any], source: str) -> dict[str, Any]:
+    doc = deepcopy(doc)
+    doc["transcript_source"] = source
+    doc.setdefault("campaign_id", "")
+    doc.setdefault("bot_id", "")
+    doc.setdefault("bot_version_id", "")
+    if not doc.get("call_id"):
+        doc["call_id"] = doc.get("room_name") or str(doc.get("_id", ""))
+    return doc
+
+
+def search_transcripts(filters: dict[str, Any]) -> list[dict[str, Any]]:
+    query = _transcript_query(filters)
+    docs: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for source, collection in _transcript_sources():
+        for doc in collection.find(query).sort("created_at", -1).limit(100):
+            key = (source, str(doc["_id"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            docs.append(_normalize_transcript_doc(doc, source))
+    def sort_value(item: dict[str, Any]) -> float:
+        created_at = item.get("created_at")
+        if isinstance(created_at, datetime):
+            return created_at.timestamp()
+        return 0.0
+
+    docs.sort(key=sort_value, reverse=True)
+    return serialize_doc(docs[:100])
 
 
 def get_transcript(transcript_id: str) -> dict[str, Any] | None:
-    doc = get_db()[TRANSCRIPT_COLLECTION].find_one({"_id": ObjectId(transcript_id)})
-    return serialize_doc(doc) if doc else None
+    obj_id = ObjectId(transcript_id)
+    for source, collection in _transcript_sources():
+        doc = collection.find_one({"_id": obj_id})
+        if doc:
+            return serialize_doc(_normalize_transcript_doc(doc, source))
+    return None

@@ -14,6 +14,11 @@ BOT_VERSION_COLLECTION = os.getenv("VOICEBOT_VERSION_COLLECTION", "tbl_ai_vb_bot
 BOT_TEMPLATE_COLLECTION = os.getenv("VOICEBOT_TEMPLATE_COLLECTION", "tbl_ai_vb_bot_templates")
 CAMPAIGN_COLLECTION = os.getenv("VOICEBOT_CAMPAIGN_COLLECTION", "tbl_ai_vb_campaigns")
 TRANSCRIPT_COLLECTION = os.getenv("MONGO_COLLECTION", "tbl_ai_vb_call_transcripts")
+LEGACY_TRANSCRIPT_DB = os.getenv("VOICEBOT_LEGACY_TRANSCRIPT_DB", "ai_lead_qualify")
+LEGACY_TRANSCRIPT_COLLECTION = os.getenv(
+    "VOICEBOT_LEGACY_TRANSCRIPT_COLLECTION",
+    "call_transcripts",
+)
 PLATFORM_SETTINGS_COLLECTION = os.getenv(
     "VOICEBOT_PLATFORM_SETTINGS_COLLECTION",
     "tbl_ai_vb_platform_settings",
