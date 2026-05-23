@@ -513,6 +513,7 @@ function App() {
   }
 
   async function stopWebRtcTest() {
+    const roomName = testRoomName;
     localTrackRef.current?.stop();
     localTrackRef.current = null;
     // Properly detach every subscribed track so LiveKit releases its element references.
@@ -537,7 +538,20 @@ function App() {
       try { await livekitRoomRef.current.disconnect(); } catch { /* ignore */ }
       livekitRoomRef.current = null;
     }
+    if (roomName) {
+      try {
+        setTestStatus('Closing LiveKit test room...');
+        await api.closeWebRtcTestSession(roomName);
+      } catch (error) {
+        reportDiagnostic(
+          'WebRTC Test Call',
+          friendlyTestError(error),
+          'The browser disconnected locally. Retry Stop once, then check worker logs if the transcript is missing.'
+        );
+      }
+    }
     setRemoteAudioReady(false);
+    setTestRoomName('');
     setTestStatus('Idle');
   }
 

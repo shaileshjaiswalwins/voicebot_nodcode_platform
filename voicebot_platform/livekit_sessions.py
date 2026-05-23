@@ -8,6 +8,7 @@ from uuid import uuid4
 from livekit.api import (
     AccessToken,
     CreateRoomRequest,
+    DeleteRoomRequest,
     LiveKitAPI,
     RoomAgentDispatch,
     VideoGrants,
@@ -107,5 +108,39 @@ async def create_webrtc_test_room(room_metadata: dict, user: str) -> dict:
             "Browser publishes microphone audio.",
             "LiveKit dispatches the voice-bot agent into the room.",
             "The agent reads room metadata and loads the published bot config.",
+        ],
+    }
+
+
+async def close_webrtc_test_room(room_name: str) -> dict:
+    """Close a dashboard-created test room.
+
+    Browser disconnect alone can leave the agent process alive with
+    close_on_disconnect=False. Deleting the room gives the worker a clear room
+    disconnected event, which it uses to flush and save the test transcript.
+    """
+    _require_livekit_config()
+    if not room_name.startswith("test-"):
+        raise LiveKitConfigError("Only dashboard test rooms can be closed from this endpoint.")
+
+    loop = asyncio.get_running_loop()
+    runtime = await loop.run_in_executor(None, get_runtime_settings)
+    livekit_api_url = runtime.get("livekit_api_url") or LIVEKIT_URL
+    livekit = LiveKitAPI(
+        url=livekit_api_url,
+        api_key=LIVEKIT_API_KEY,
+        api_secret=LIVEKIT_API_SECRET,
+    )
+    try:
+        await livekit.room.delete_room(DeleteRoomRequest(room=room_name))
+    finally:
+        await livekit.aclose()
+
+    return {
+        "room_name": room_name,
+        "status": "close_requested",
+        "next_steps": [
+            "LiveKit disconnects the browser and bot participants.",
+            "The bot worker saves the transcript when it receives the room disconnect.",
         ],
     }

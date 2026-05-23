@@ -26,7 +26,7 @@ from .config_store import (
     search_transcripts,
     upsert_campaign,
 )
-from .livekit_sessions import LiveKitConfigError, create_webrtc_test_room
+from .livekit_sessions import LiveKitConfigError, close_webrtc_test_room, create_webrtc_test_room
 from .mongo import ensure_indexes, get_client
 from .observability import recorder
 from .language_settings import (
@@ -388,6 +388,19 @@ async def webrtc_test_session(
         raise HTTPException(
             status_code=502,
             detail=f"Could not create LiveKit test room. Check LIVEKIT_URL/API credentials and agent worker availability. Raw error: {exc}",
+        ) from exc
+
+
+@app.post("/api/webrtc-test-sessions/{room_name}/close")
+async def webrtc_test_session_close(room_name: str):
+    try:
+        return await close_webrtc_test_room(room_name)
+    except LiveKitConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not close LiveKit test room. The browser can still disconnect locally. Raw error: {exc}",
         ) from exc
 
 

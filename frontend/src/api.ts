@@ -214,6 +214,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
+  closeWebRtcTestSession: (roomName: string) =>
+    request<{ room_name: string; status: string }>(
+      `/api/webrtc-test-sessions/${encodeURIComponent(roomName)}/close`,
+      { method: 'POST' }
+    ),
   langfuseSettings: () => request<LangfuseSettings>('/api/observability/langfuse'),
   updateLangfuseSettings: (payload: Partial<LangfuseSettings>) =>
     request<LangfuseSettings>('/api/observability/langfuse', {

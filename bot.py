@@ -2192,6 +2192,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     @ctx.room.on("participant_disconnected")
     def _on_disconnect(p: rtc.RemoteParticipant) -> None:
         nonlocal _call_ended, _buffer_frozen
+        _log.info(
+            f"[ROOM] participant_disconnected | identity={getattr(p, 'identity', '')!r} | "
+            f"room={room_name}"
+        )
         _cancel_inactivity()
         if call_state["ended_naturally"]:
             return
@@ -2217,6 +2221,31 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 )
             except Exception:
                 pass
+        asyncio.ensure_future(_save_and_close("disconnected"))
+
+    @ctx.room.on("track_unpublished")
+    def _on_track_unpublished(publication, participant) -> None:
+        nonlocal _call_ended, _buffer_frozen
+        _log.info(
+            f"[ROOM] track_unpublished | participant={getattr(participant, 'identity', '')!r} | "
+            f"room={room_name}"
+        )
+        if not _room_meta_raw.get("test_session") or call_state.get("save_done"):
+            return
+        _cancel_inactivity()
+        _buffer_frozen = True
+        _call_ended = True
+        asyncio.ensure_future(_save_and_close("disconnected"))
+
+    @ctx.room.on("disconnected")
+    def _on_room_disconnected(reason=None) -> None:
+        nonlocal _call_ended, _buffer_frozen
+        _log.info(f"[ROOM] disconnected | reason={reason!r} | room={room_name}")
+        _cancel_inactivity()
+        if call_state.get("save_done"):
+            return
+        _buffer_frozen = True
+        _call_ended = True
         asyncio.ensure_future(_save_and_close("disconnected"))
 
     # Keep entrypoint alive until save_call_data + callback finish.
