@@ -174,8 +174,8 @@ CATEGORY_CHANGE_API = f"{MIS_API_BASE}/leads/ai-lead-qualify/search"
 IST = timezone(timedelta(hours=5, minutes=30))
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://192.168.13.65:27017")
-MONGO_DB = "ai_lead_qualify"
-MONGO_COLLECTION = "call_transcripts"
+MONGO_DB = os.getenv("VOICEBOT_PLATFORM_DB") or os.getenv("MONGO_DB", "ai_voice_bot_management")
+MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "tbl_ai_vb_call_transcripts")
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
@@ -1009,6 +1009,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _lead_id_meta = _room_meta_raw.get("lead_id", "")
     _room_mobile_m = re.search(r'__(\d{10,12})_', room_name)
     _room_mobile = normalize_mobile(_room_mobile_m.group(1)) if _room_mobile_m else ""
+    _is_test_session = bool(_room_meta_raw.get("test_session"))
     _caller_key = _room_mobile or room_name[-15:]
     _log = logger.bind(caller=_caller_key)
 
@@ -1030,7 +1031,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _log.info(_SEP)
 
     _early_lead_task: asyncio.Task | None = None
-    if _lead_id_meta or _room_mobile:
+    if (_lead_id_meta or _room_mobile) and not (_is_test_session and _room_meta_raw.get("srchterm")):
         _early_lead_task = asyncio.ensure_future(
             fetch_lead(lead_id=_lead_id_meta, mobile=_room_mobile, mis_api_base=MIS_API_BASE)
         )
@@ -2268,7 +2269,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     record = call_state.get("lead_record")
     caller_mobile = normalize_mobile(sip_info["caller_number"]) if sip_info["caller_number"] else _room_mobile
 
-    if not record and caller_mobile:
+    if not record and caller_mobile and not (_is_test_session and _room_meta_raw.get("srchterm")):
         record = await fetch_lead(mobile=caller_mobile, mis_api_base=_mis_api_base)
         if record:
             call_state["record_id"] = record.get("_id") or record.get("ref_id")
@@ -2285,7 +2286,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 lead_id=_room_meta_raw.get("lead_id", "") or "test_lead",
             )
             if record:
-                call_state["record_id"] = "test_lead"
+                call_state["record_id"] = record.get("_id") or _room_meta_raw.get("lead_id") or "test_lead"
                 call_state["call_id"] = _room_meta_raw.get("call_id") or room_name
                 call_state["lead_record"] = record
 

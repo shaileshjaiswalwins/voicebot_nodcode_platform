@@ -344,7 +344,11 @@ def create_test_session(bot_id: str, payload: dict[str, Any], user: str) -> dict
 
 def _transcript_sources():
     yield "platform", get_db()[TRANSCRIPT_COLLECTION]
-    if LEGACY_TRANSCRIPT_DB != MONGO_DB or LEGACY_TRANSCRIPT_COLLECTION != TRANSCRIPT_COLLECTION:
+    if (
+        LEGACY_TRANSCRIPT_DB
+        and LEGACY_TRANSCRIPT_COLLECTION
+        and (LEGACY_TRANSCRIPT_DB != MONGO_DB or LEGACY_TRANSCRIPT_COLLECTION != TRANSCRIPT_COLLECTION)
+    ):
         yield "legacy", get_client()[LEGACY_TRANSCRIPT_DB][LEGACY_TRANSCRIPT_COLLECTION]
 
 

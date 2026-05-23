@@ -7,8 +7,8 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://192.168.13.65:27017")
-MONGO_DB = "ai_lead_qualify"
-MONGO_COLLECTION = "call_transcripts"
+MONGO_DB = os.getenv("VOICEBOT_PLATFORM_DB") or os.getenv("MONGO_DB", "ai_voice_bot_management")
+MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "tbl_ai_vb_call_transcripts")
 
 CALLBACK_API_URL = os.getenv(
     "CALLBACK_API_URL",

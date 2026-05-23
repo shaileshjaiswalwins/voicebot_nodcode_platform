@@ -72,7 +72,7 @@ Flow:
 - `bot_versions`: immutable draft/published configs.
 - `bot_templates`: reusable starter configs.
 - `campaigns`: outbound campaign to bot/lead API mapping.
-- `call_transcripts`: existing transcript collection, now enriched with config snapshots.
+- `tbl_ai_vb_call_transcripts`: platform transcript collection, enriched with immutable config snapshots.
 
 ## Runtime Safety Rule
 

@@ -202,7 +202,7 @@ erDiagram
 Important implementation note:
 
 - `bot_versions.config` is the editable/publishable runtime config.
-- `call_transcripts.config_snapshot` is immutable evidence of what the bot used during that call.
+- `tbl_ai_vb_call_transcripts.config_snapshot` is immutable evidence of what the bot used during that call.
 
 ## Frontend Handoff
 
