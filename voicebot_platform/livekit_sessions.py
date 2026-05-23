@@ -8,7 +8,6 @@ from livekit.api import (
     AccessToken,
     CreateRoomRequest,
     LiveKitAPI,
-    RoomAgent,
     RoomAgentDispatch,
     VideoGrants,
 )
@@ -66,13 +65,9 @@ async def create_webrtc_test_room(room_metadata: dict, user: str) -> dict:
                 departure_timeout=30,
                 max_participants=4,
                 agents=[
-                    RoomAgent(
-                        dispatches=[
-                            RoomAgentDispatch(
-                                agent_name=LIVEKIT_AGENT_NAME,
-                                metadata=metadata_json,
-                            )
-                        ]
+                    RoomAgentDispatch(
+                        agent_name=LIVEKIT_AGENT_NAME,
+                        metadata=metadata_json,
                     )
                 ],
             )
