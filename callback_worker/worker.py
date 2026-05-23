@@ -47,9 +47,10 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
     transcript = doc.get("transcript") or []
     muted_transcript = doc.get("muted_transcript") or []
     gemini_connect_failed = bool(doc.get("gemini_connect_failed"))
+    duration_secs = doc.get("call_duration_sec")
     try:
         analysis, b2b_score = await asyncio.gather(
-            generate_call_analysis(transcript, status, schema, http_session, muted_transcript=muted_transcript, gemini_connect_failed=gemini_connect_failed),
+            generate_call_analysis(transcript, status, schema, http_session, muted_transcript=muted_transcript, gemini_connect_failed=gemini_connect_failed, duration_secs=duration_secs),
             generate_b2b_score(transcript, http_session),
         )
     except Exception as e:

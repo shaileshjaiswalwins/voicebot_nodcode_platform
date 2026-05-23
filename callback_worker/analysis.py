@@ -2,6 +2,7 @@
 
 import json
 import re
+import unicodedata
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
@@ -76,6 +77,7 @@ async def generate_call_analysis(
     model: str = "gemini-3.1-flash-lite",
     muted_transcript: list[str] | None = None,
     gemini_connect_failed: bool = False,
+    duration_secs: float | None = None,
 ) -> dict:
     if gemini_connect_failed:
         return {
@@ -125,20 +127,32 @@ async def generate_call_analysis(
                 "is_business": "", "business_city": "", "business_name": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
-        # Muted transcript has content — check if it's only greetings.
-        # A bare "hello" during the bot's opening turn is not product confirmation.
-        _GREETING_SET = {"hello", "हेलो", "helo", "halo", "हैलो", "hi", "हाय", "हाँ", "haan", "ha", "han"}
+        # Muted transcript has content — check if it's only greetings/acknowledgements.
+        # A bare "hello" / "haan bolo" / "haan" during the bot's opening turn is not
+        # product confirmation.  Normalise to NFC so Devanagari from different STT
+        # engines compares correctly regardless of Unicode composition form.
+        _GREETING_SET = {
+            "hello", "हेलो", "helo", "halo", "हैलो", "hi", "हाय",
+            "हाँ", "हां", "haan", "ha", "han", "ji", "jee",
+            "haan bolo", "ha bolo", "हाँ बोलो", "हां बोलो",
+            "bolo", "बोलो", "bol", "बोल",
+            "okay", "ok", "ek second", "एक second", "एक सेकंड",
+            "hold on", "ruko", "kaun", "कौन", "kaun hai", "कौन है",
+        }
+        def _nfc(s: str) -> str:
+            return unicodedata.normalize("NFC", s)
         _muted_words = {
-            w.strip(".,!? ।").lower()
+            _nfc(w.strip(".,!? ।").lower())
             for m in (muted_transcript or [])
-            for w in (m or "").split()
+            for w in (_nfc(m or "")).split()
             if w.strip(".,!? ।")
         }
-        if _muted_words and not (_muted_words - _GREETING_SET):
+        _greeting_set_nfc = {_nfc(g) for g in _GREETING_SET}
+        if _muted_words and not (_muted_words - _greeting_set_nfc):
             return {
                 "call_outcome": "Short Hangup",
                 "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
-                "call_summary": "User responded with a greeting only — no product confirmation or engagement obtained.",
+                "call_summary": "User responded with a greeting or acknowledgement only — no product confirmation or engagement obtained.",
                 "is_business": "", "business_city": "", "business_name": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
@@ -315,9 +329,12 @@ async def generate_call_analysis(
 
     # Agent-progression check: the bot is strictly programmed — it NEVER advances to
     # asking spec questions without first receiving product confirmation. So if the
-    # agent has ≥2 turns with text AND there is some user-side signal (live transcript
-    # or muted capture), the product was confirmed regardless of what STT captured.
-    _agent_progressed = _has_any_user_signal and len(_agent_turns_with_text) >= 2
+    # agent has ≥2 turns with text AND the user has at least one LIVE transcript turn,
+    # the product was confirmed regardless of what STT captured for that turn.
+    # We require live turns (not muted-only) because 2 agent turns can be greeting +
+    # re-ask of the same greeting (user said "haan bolo", bot re-asked) — that is NOT
+    # progression past the greeting.  Muted-only signal is too weak to infer progression.
+    _agent_progressed = bool(non_empty_user_turns) and len(_agent_turns_with_text) >= 2
 
     def _tokens(text: str) -> set[str]:
         import unicodedata as _ud
@@ -379,8 +396,27 @@ QnA EXTRACTION when buyer turns are absent:
 
     disposition_options = "\n".join(f'  "{k}": {v}' for k, v in DISPOSITION_MAP.items())
     current_dt_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+    _duration_note = ""
+    if duration_secs is not None:
+        _dur_label = f"{duration_secs:.0f}s"
+        if duration_secs < 15:
+            _duration_note = (
+                f"\n⚠ SHORT CALL ({_dur_label}): This call lasted under 15 seconds. "
+                f"A call this short rarely produces genuine product engagement. "
+                f"If the buyer's only signal is a bare acknowledgement (हाँ / ji / yes / ok) "
+                f"with no product-specific statement, prefer Short Hangup over Interested. "
+                f"Only classify as Interested if the buyer gave a clear, product-specific "
+                f"confirmation beyond a single-word acknowledgement."
+            )
+        elif duration_secs < 25:
+            _duration_note = (
+                f"\n📞 CALL DURATION: {_dur_label}. Relatively short — "
+                f"weigh buyer engagement carefully before classifying as Interested."
+            )
+        else:
+            _duration_note = f"\n📞 CALL DURATION: {_dur_label}."
 
-    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}
+    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}
 
 Current date/time (IST, GMT+5:30): {current_dt_str}
 
@@ -436,11 +472,29 @@ GP-7  AGENT PROGRESSION GUARANTEES PRODUCT CONFIRMATION: The bot is strictly pro
         • This overrides any superficially vague or unclear buyer responses you observe.
       You do not need to re-derive product_confirmed from buyer turns alone when the agent's
       own behaviour already proves it.
-      EXCEPTION — bot mis-step: if the buyer's ONLY response to the opening product question
-      was entirely off-topic (e.g., said a person's name, spoke as if answering a personal
-      call, gave a completely unrelated utterance like "Aryan" or "Himank hello"), the bot
-      may have advanced incorrectly. In this case GP-7 does NOT apply — evaluate
-      product_confirmed from the buyer's actual words, and Could Not Confirm is permitted.
+      EXCEPTION — bot mis-step (applies to FIRST turn OR ALL turns):
+        Case A — First turn only: if the buyer's first response to the opening product question
+          was entirely off-topic (e.g., a person's name, a personal-call response, an unrelated
+          utterance like "Aryan" or "Himank hello"), the bot may have advanced incorrectly on a
+          misread. GP-7 does NOT apply — evaluate product_confirmed from the buyer's actual words.
+        Case B — All turns are background noise (apply GP-8 before GP-7): if EVERY buyer turn
+          throughout the entire call is off-topic personal chatter, name-calls, or background
+          conversation unrelated to the product — no single turn engages with any product topic,
+          spec, or buying signal — then the bot ran a one-sided conversation with background noise.
+          GP-7 does NOT apply. Evaluate as Could Not Confirm.
+
+GP-8  PHANTOM ENGAGEMENT / BACKGROUND NOISE: When ALL of the following are true simultaneously:
+        ✓ closing_line_spoken is TRUE (bot completed its flow)
+        ✓ ZERO valid_spec_values were captured across all questions
+        ✓ NO buyer turn contains any product-related word, quantity, spec, or buying signal
+        ✓ Buyer turns read as background conversations, name-calls, or side-chatter
+          (e.g. calling out a person's name, commenting on unrelated topics like payments/internet,
+          rambling in Hindi with no product relevance)
+      → The agent was capturing background noise, not a real engaged buyer.
+      → product_confirmed = FALSE. GP-7 does NOT apply.
+      → Outcome: "Could Not Confirm"
+      This overrides the closing_line_spoken signal — a bot that closed while talking to an
+      empty phone or background noise did not achieve genuine qualification.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 DEFINITIONS
@@ -544,8 +598,14 @@ SELLER INTENT
   → "Seller Intent"
 
 ALREADY SPOKEN
-  Condition: requirement already discussed with JD/seller, OR requirement already fulfilled.
-  Examples: "already purchased", "kaam ho gaya", "le liya", "sorted", "already spoken to seller".
+  Condition: requirement already discussed with JD/seller, OR requirement already fulfilled/no longer active.
+  Examples: "already purchased", "kaam ho gaya", "le liya", "sorted", "already spoken to seller",
+    "ab nahi hai" / "nahi ab nahi hai" (not anymore — requirement existed but is now gone/fulfilled),
+    "ho gaya" / "khatam ho gaya" / "pura ho gaya" (done / finished / completed),
+    "already hua" / "already le liya" / "already connected" / "already kisi ne baat ki".
+  KEY RULE: if the buyer uses "ab" (now/anymore) to negate the requirement — "ab nahi chahiye",
+    "ab nahi hai", "pehle tha ab nahi", "ab zaroorat nahi" — treat as Already Spoken, NOT Not
+    Interested. The "ab" signals the requirement existed before and has since been resolved.
   → "Already Spoken"
 
 CALL RESCHEDULED
@@ -584,6 +644,10 @@ Evaluate in this exact order:
    bot's confirmed completion is authoritative and supersedes your individual spec evaluation.
    If you are about to emit Enriched or Interested and closing_line_spoken is TRUE, STOP and
    emit Approved instead.
+   EXCEPTION — GP-8 overrides this rule: if GP-8 (phantom engagement / background noise)
+   applies — zero valid spec values AND all buyer turns are incoherent background noise — then
+   closing_line_spoken does NOT make this Approved. The closing line fired on a phantom
+   conversation. Classify as Could Not Confirm.
 
 2. APPROVED — all specs answered
    IF all {len(questions)} qualification question(s) received valid_spec_value answers:
@@ -634,12 +698,15 @@ Disambiguation:
 
 NOT INTERESTED
   Condition: buyer CONSISTENTLY and CLEARLY stated they do not need the product. The
-    requirement itself is entirely gone.
+    requirement itself is entirely gone AND was never fulfilled elsewhere.
   ALL must be true:
     ✓ buyer explicitly rejected the product (not just an initial reflex "नहीं")
     ✓ NO positive engagement, NO spec answers, NO product questions anywhere in the call
     ✓ buyer's FINAL overall stance is negative
     ✓ cannot be explained by Seller Intent / Will do it Myself / Already Spoken / Wrong Number
+  STRICT EXCLUSION: if buyer uses temporal language — "ab nahi chahiye", "ab nahi hai",
+    "pehle tha ab nahi", "nahi ab nahi" — the requirement existed before and is now gone.
+    This is Already Spoken (fulfilled), NOT Not Interested.
   Apply GP-1 (POSITIVE PROGRESSION) and GP-3 (NEGATIVE TONE ≠ REJECTION).
   → "Not Interested"
 
@@ -791,7 +858,29 @@ STRICT OUTPUT RULES:
                 if (entry.get("answ") or "").strip().lower() in ("not sure", ""):
                     entry["opt_id"] = None
 
-            # 2. Enriched → Approved when every schema question ID has a real answer.
+            # 2a. Approved → Could Not Confirm when the LLM applied the closing-line hard
+            #     override but zero valid spec values were actually captured (GP-8 phantom
+            #     engagement, or all-Not-Sure responses).  "Approved" requires ≥1 valid spec —
+            #     if the LLM returns Approved with none, it has mis-applied the rule.
+            if outcome == "Approved" and questions:
+                _schema_ids_chk = {str(q.get("id", "")) for q in questions if q.get("id")}
+                _valid_chk = {
+                    str(e.get("id", ""))
+                    for e in qna
+                    if str(e.get("id", "")) in _schema_ids_chk
+                    and (e.get("answ") or "").strip().lower() not in ("not sure", "")
+                }
+                if _schema_ids_chk and not _valid_chk:
+                    logger.info(
+                        "[POST-PROC] Approved → Could Not Confirm: closing line fired "
+                        "but zero valid spec values captured (phantom engagement / all-Not-Sure)"
+                    )
+                    outcome = "Could Not Confirm"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+                    result["qna"] = []
+
+            # 2b. Enriched → Approved when every schema question ID has a real answer.
             #    The LLM sometimes counts business-name/city questions (asked after specs)
             #    as unanswered qualification questions, leaving the outcome at Enriched even
             #    though every schema question has a valid answer in the qna array.
@@ -834,6 +923,45 @@ STRICT OUTPUT RULES:
                     result["call_outcome"] = outcome
                     result["call_outcome_description"] = DISPOSITION_MAP[outcome]
                     result["qna"] = []
+
+                # 5. Duration-aware Interested → Short Hangup for very short calls.
+                #    Calls under 15 s with only bare acknowledgements (हाँ / ji / yes / ok)
+                #    and no valid spec values are almost always Short Hangups — the buyer
+                #    said a reflexive yes and disconnected, not a genuine product confirmation.
+                #    ~10 % of these may be genuine quick yeses; that tradeoff is accepted.
+                if (
+                    outcome == "Interested"
+                    and duration_secs is not None
+                    and duration_secs < 15
+                ):
+                    _BARE_ACK_SET = {
+                        "haan", "ha", "han", "ji", "jee", "yes", "okay", "ok",
+                        "हाँ", "हां", "हा", "जी", "ठीक", "theek", "bilkul",
+                        "haan ji", "ji haan", "sahi", "acha", "achha", "accha",
+                    }
+                    _bare_ack_nfc = {unicodedata.normalize("NFC", w) for w in _BARE_ACK_SET}
+                    _all_user_words: set[str] = set()
+                    for _t in transcript:
+                        if _t.get("role") == "user":
+                            for _w in (_t.get("text") or "").split():
+                                _clean = unicodedata.normalize("NFC", re.sub(r"[^\w]", "", _w.lower()))
+                                if _clean:
+                                    _all_user_words.add(_clean)
+                    # Also include words from muted transcript
+                    for _m in (muted_transcript or []):
+                        for _w in (_m or "").split():
+                            _clean = unicodedata.normalize("NFC", re.sub(r"[^\w]", "", _w.lower()))
+                            if _clean:
+                                _all_user_words.add(_clean)
+                    if not _all_user_words or not (_all_user_words - _bare_ack_nfc):
+                        logger.info(
+                            f"[POST-PROC] Interested → Short Hangup: duration={duration_secs:.0f}s < 15s, "
+                            f"user signal is bare acknowledgement only: {_all_user_words}"
+                        )
+                        outcome = "Short Hangup"
+                        result["call_outcome"] = outcome
+                        result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+                        result["qna"] = []
 
             # ── END POST-PROCESSING ────────────────────────────────────────
 

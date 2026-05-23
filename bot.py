@@ -372,7 +372,8 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Never re-ask something the buyer already answered, even if they phrased it loosely.\n\n"
         "Step 3 — Closing\n"
         "Only after EVERY question has an answer (even \"Not Sure\"):\n"
-        "\"ठीक है जी, सारी details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए शुक्रिया.\" then stop — do not add anything after.\n\n"
+        "\"ठीक है जी, सारी details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए शुक्रिया.\" then stop — do not add anything after.\n"
+        "CRITICAL: If the buyer's final answer also contains a side-question ('aap kahan se ho', 'aapka naam kya hai', 'ye kaun si company hai', 'kahan se call kar rahe ho', etc.) — do NOT answer it. Extract the answer, then go directly to the closing line. Never explain yourself or introduce yourself again at closing.\n\n"
 
         "━━━ READING ANSWERS — TRUST FIRST, PROBE ONLY WHEN SUSPICIOUS ━━━\n\n"
         "Default: trust the buyer. Accept intent over exact wording. If the meaning is reasonably clear — even loosely phrased — accept it and move on.\n\n"
@@ -2169,12 +2170,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         except Exception:
             _agent_state_now = "?"
         # Live speech arrived — discard any buffered muted-window text.
-        # (Muted text is only saved to Mongo when NO live speech follows.)
+        # Remove from the Mongo log too: it was never sent to Gemini, so it shouldn't
+        # influence analysis as if it were a user response.
         if _muted_inject["text"]:
             _log.info(
                 f"[MUTED-CAPTURE] live speech arrived — discarding muted buffer "
                 f"{_muted_inject['text']!r}"
             )
+            if _muted_transcript_log and _muted_transcript_log[-1] == _muted_inject["text"]:
+                _muted_transcript_log.pop()
             _muted_inject["text"] = ""
         muted_prefix = ""  # no longer combining
         if is_final:
@@ -2336,13 +2340,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if _echo_guard_task and not _echo_guard_task.done():
                 _echo_guard_task.cancel()
                 _log.info("[SPEAKING-MUTE] cancelled previous hold — new speaking turn")
-            # Discard any buffered muted-window text — it was never processed by Gemini
-            # and is already saved to muted_transcript; don't add it to the main transcript.
+            # Discard any buffered muted-window text — it was never processed by Gemini.
+            # Also remove from Mongo log so it doesn't inflate user signal in analysis.
             if _muted_inject["text"]:
                 _log.info(
                     f"[MUTED-CAPTURE] discarding uncombined muted text (not sent to Gemini): "
                     f"{_muted_inject['text']!r}"
                 )
+                if _muted_transcript_log and _muted_transcript_log[-1] == _muted_inject["text"]:
+                    _muted_transcript_log.pop()
                 _muted_inject["text"] = ""
             # Mute mic at the start of every bot speaking turn.
             # For mid-call turns: unmute after 4 s so the user can interrupt.
