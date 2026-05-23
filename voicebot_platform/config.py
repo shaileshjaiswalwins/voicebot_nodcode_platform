@@ -3,7 +3,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
+# Keep .env as the default config source, but allow one-off process launches to
+# override values safely (for example a test worker with a different agent name).
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://192.168.13.65:27017")
 MONGO_DB = os.getenv("VOICEBOT_PLATFORM_DB", "ai_voice_bot_management")

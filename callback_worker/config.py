@@ -3,8 +3,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load .env from the repo root (parent of this package)
-load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
+# Load .env from the repo root while allowing launch-time overrides.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://192.168.13.65:27017")
 MONGO_DB = os.getenv("VOICEBOT_PLATFORM_DB") or os.getenv("MONGO_DB", "ai_voice_bot_management")
