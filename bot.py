@@ -1074,6 +1074,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "ended_naturally": call_state.get("ended_naturally"),
             "product_change": call_state.get("product_change"),
             "transcript": transcript,
+            "transcript_count": len(transcript),
             "lead_record": call_state.get("lead_record"),
             "sip_info": sip_info,
             "call_start_time": _start,

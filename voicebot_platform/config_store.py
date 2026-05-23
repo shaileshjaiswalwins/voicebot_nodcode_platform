@@ -387,7 +387,7 @@ _TRANSCRIPT_LIST_PROJECTION = {
     "recording_url": 1,
     "created_at": 1,
     "updated_at": 1,
-    "transcript_count": {"$size": {"$ifNull": ["$transcript", []]}},
+    "transcript_count": 1,
 }
 
 
