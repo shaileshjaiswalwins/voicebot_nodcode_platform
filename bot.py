@@ -2305,12 +2305,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 )
                 _muted_inject["text"] = ""
             # Mute mic at the start of every bot speaking turn.
-            # For mid-call turns: unmute after 2 s so the user can interrupt.
-            # Greeting (first turn) and closing (last turn) stay muted for the full turn.
+            # For mid-call turns: unmute after 4 s so the user can interrupt.
+            # Greeting turn: unmute after 7 s so Gemini warms up to the audio
+            # stream before the greeting ends, reducing post-greeting input latency.
+            # Closing turn stays muted for the full turn.
             # Caller audio continues to flow into _buffer_user_audio (raw track is
             # unaffected) and is written to _muted_capture while _mic_enabled=False.
             _set_mic(False, reason="speaking-start")
-            # Cancel any previous 2 s timer that didn't fire yet (new turn arrived faster).
+            # Cancel any previous timer that didn't fire yet (new turn arrived faster).
             if _speaking_unmute_task and not _speaking_unmute_task.done():
                 _speaking_unmute_task.cancel()
                 _speaking_unmute_task = None
@@ -2322,6 +2324,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         _barge_in_fired = True
                         _set_mic(True, reason="4s-speaking-unmute")
                 _speaking_unmute_task = asyncio.create_task(_delayed_unmute())
+            elif not _greeting_done and not _closing_triggered:
+                # Greeting turn early unmute: re-enable Gemini audio input at 7 s so
+                # it is already processing the stream when the greeting finishes.
+                async def _greeting_early_unmute() -> None:
+                    await asyncio.sleep(7.0)
+                    if not _greeting_done and not _call_ended:
+                        _set_mic(True, reason="greeting-7s-early-unmute")
+                _speaking_unmute_task = asyncio.create_task(_greeting_early_unmute())
 
         elif state_str in ("listening", "idle"):
             if _bot_has_spoken and not _greeting_done:
