@@ -1,36 +1,45 @@
 services:
   livekit-monitor:
-    image: jossephus/livekit-monitor:latest
+    # Pin to a digest or specific tag for reproducible deploys.
+    # `latest` from a personal repo is a supply-chain risk — replace with a
+    # known-good tag once the team agrees on a version.
+    image: jossephus/livekit-monitor:v0.5.0
     restart: unless-stopped
     ports:
       - "9095:9095"
     environment:
-      LIVEKIT_URL: "${LIVEKIT_URL}"
-      LIVEKIT_API_KEY: "${LIVEKIT_API_KEY}"
-      LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET}"
+      LIVEKIT_URL: "${LIVEKIT_URL:?LIVEKIT_URL is required}"
+      LIVEKIT_API_KEY: "${LIVEKIT_API_KEY:?LIVEKIT_API_KEY is required}"
+      LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET is required}"
       PORT: "9095"
 
   langfuse-db:
-    image: postgres:16
+    image: postgres:16.4-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: langfuse
       POSTGRES_USER: langfuse
-      POSTGRES_PASSWORD: "${LANGFUSE_POSTGRES_PASSWORD:-change-me}"
+      POSTGRES_PASSWORD: "${LANGFUSE_POSTGRES_PASSWORD:?LANGFUSE_POSTGRES_PASSWORD is required}"
     volumes:
       - langfuse-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   langfuse:
-    image: langfuse/langfuse:2
+    image: langfuse/langfuse:2.95.0
     restart: unless-stopped
     depends_on:
-      - langfuse-db
+      langfuse-db:
+        condition: service_healthy
     ports:
       - "3000:3000"
     environment:
-      DATABASE_URL: "postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:-change-me}@langfuse-db:5432/langfuse"
-      NEXTAUTH_SECRET: "${LANGFUSE_NEXTAUTH_SECRET:-change-me}"
-      SALT: "${LANGFUSE_SALT:-change-me}"
+      DATABASE_URL: "postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD}@langfuse-db:5432/langfuse"
+      NEXTAUTH_SECRET: "${LANGFUSE_NEXTAUTH_SECRET:?LANGFUSE_NEXTAUTH_SECRET is required}"
+      SALT: "${LANGFUSE_SALT:?LANGFUSE_SALT is required}"
       NEXTAUTH_URL: "${LANGFUSE_PUBLIC_URL:-http://localhost:3000}"
 
 volumes:
