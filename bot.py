@@ -666,8 +666,11 @@ async def save_call_log_to_backend(payload: dict):
             if resp.status not in (200, 201):
                 text = await resp.text()
                 logger.warning(f"[CALL LOG] Backend {resp.status}: {text[:200]}")
+                return False
+            return True
     except Exception as e:
         logger.error(f"[CALL LOG] Failed to save: {e}")
+        return False
 
 
 
@@ -1318,7 +1321,20 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "tags": [status],
             "sentiment": "neutral",
         }
-        await save_call_log_to_backend(call_log_payload)
+        _callback_ok = await save_call_log_to_backend(call_log_payload)
+        _observability.event(
+            "callback_sent",
+            {
+                "room_name": room_name,
+                "call_id": call_state.get("call_id"),
+                "lead_id": lead_id,
+                "bot_id": _bot_id,
+                "bot_version_id": _bot_version_id,
+                "campaign_id": _campaign_id,
+                "status": "completed" if _callback_ok else "failed",
+                "callback_target": f"{BACKEND_URL}/backend/api/call-logs",
+            },
+        )
         _observability.event(
             "call_ended",
             {

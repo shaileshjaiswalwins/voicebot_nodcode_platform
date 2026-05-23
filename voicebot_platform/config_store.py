@@ -92,6 +92,11 @@ def seed_default_bot(default_config: dict[str, Any], user: str = DEFAULT_USER) -
                 "description": "Default outbound lead qualification bot seeded from the current runtime.",
                 "owner": user,
                 "status": "active",
+                "orchestration": {
+                    "mode": "prompt_settings",
+                    "flow_provider": None,
+                    "flow_id": None,
+                },
                 "created_at": now,
             },
             "$set": {"updated_at": now},
@@ -154,6 +159,8 @@ def create_bot(payload: dict[str, Any], user: str) -> dict[str, Any]:
         "description": payload.get("description", ""),
         "owner": payload.get("owner") or user,
         "status": "draft",
+        "orchestration": payload.get("orchestration")
+        or {"mode": "prompt_settings", "flow_provider": None, "flow_id": None},
         "created_at": now,
         "updated_at": now,
     }
