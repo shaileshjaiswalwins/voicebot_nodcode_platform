@@ -1,26 +1,39 @@
 const API_BASE = import.meta.env.VITE_API_BASE || '';
+const DEFAULT_TIMEOUT_MS = 4000;
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-JD-User': 'local-dev',
-      ...(options.headers || {})
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-JD-User': 'local-dev',
+        ...(options.headers || {})
+      }
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let message = text || `${response.status} ${response.statusText}`;
+      try {
+        const parsed = JSON.parse(text) as { detail?: string };
+        message = parsed.detail || message;
+      } catch {
+        // Keep the plain response text when the backend does not return JSON.
+      }
+      throw new Error(message);
     }
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    let message = text || `${response.status} ${response.statusText}`;
-    try {
-      const parsed = JSON.parse(text) as { detail?: string };
-      message = parsed.detail || message;
-    } catch {
-      // Keep the plain response text when the backend does not return JSON.
+    return response.json();
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`Network timeout after ${DEFAULT_TIMEOUT_MS / 1000}s for ${path}`);
     }
-    throw new Error(message);
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
   }
-  return response.json();
 }
 
 export type Bot = {

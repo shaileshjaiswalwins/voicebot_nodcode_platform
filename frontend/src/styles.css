@@ -63,6 +63,18 @@ button.primary:hover:not(:disabled) {
   border-color: #0b4f96;
 }
 
+button.fallback-button,
+.fallback-button {
+  border-color: #c88a1d;
+  background: #fff6e5;
+  color: #7a4f08;
+}
+
+button.fallback-button:hover:not(:disabled) {
+  border-color: #a96f09;
+  background: #ffefd1;
+}
+
 select,
 input,
 textarea {
@@ -205,6 +217,11 @@ code {
   box-shadow: 0 0 0 4px rgb(35 178 109 / 14%);
 }
 
+.error-dot {
+  background: #d64545;
+  box-shadow: 0 0 0 4px rgb(214 69 69 / 14%);
+}
+
 .workspace {
   min-width: 0;
   padding: 24px;
@@ -265,6 +282,74 @@ code {
   border-color: #efc8c8;
   background: #fff3f3;
   color: #8c2525;
+}
+
+.notice strong,
+.notice span {
+  display: block;
+}
+
+.notice span {
+  margin-top: 4px;
+  color: inherit;
+  opacity: 0.84;
+}
+
+.diagnostics-bar {
+  min-height: 52px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #f1d7a3;
+  border-radius: 8px;
+  background: #fff9ec;
+  color: #6f4a0c;
+}
+
+.diagnostics-bar.healthy {
+  border-color: #d7e5dd;
+  background: #f5fbf7;
+  color: #24573c;
+}
+
+.diagnostics-bar.error {
+  border-color: #efc8c8;
+  background: #fff3f3;
+  color: #8c2525;
+}
+
+.diagnostics-bar > div:first-of-type {
+  min-width: 0;
+  flex: 1;
+}
+
+.diagnostics-bar strong,
+.diagnostics-bar span {
+  display: block;
+}
+
+.diagnostics-bar strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.diagnostics-bar span {
+  margin-top: 2px;
+  font-size: 12px;
+  opacity: 0.86;
+}
+
+.diagnostics-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.diagnostics-actions button {
+  min-height: 34px;
 }
 
 .kpi-strip {
@@ -509,6 +594,21 @@ tbody tr:hover,
   color: #24573c;
 }
 
+.crash-panel {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  border-color: #efc8c8;
+  background: #fff6f6;
+  color: #7d2323;
+}
+
+.crash-panel p {
+  margin-top: 6px;
+  color: #7d4747;
+  line-height: 1.45;
+}
+
 .builder-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
@@ -631,6 +731,14 @@ label.full {
 .connection-icon.done {
   color: #17633c;
   background: #e8f7ef;
+}
+
+.test-error {
+  display: flex;
+}
+
+.test-error .button-row {
+  margin-top: 10px;
 }
 
 .search-box {

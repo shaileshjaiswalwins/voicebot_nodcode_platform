@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Component, ErrorInfo, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   createLocalAudioTrack,
@@ -16,6 +16,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock3,
+  ClipboardList,
   Database,
   FileText,
   Gauge,
@@ -47,6 +48,16 @@ import {
 import './styles.css';
 
 type View = 'bots' | 'builder' | 'campaigns' | 'test' | 'transcripts' | 'observability';
+type DiagnosticSeverity = 'info' | 'warning' | 'error';
+
+type Diagnostic = {
+  id: string;
+  scope: string;
+  severity: DiagnosticSeverity;
+  message: string;
+  action?: string;
+  createdAt: string;
+};
 
 type RuntimeConfig = {
   assistant_id?: string;
@@ -110,6 +121,8 @@ function App() {
   const [selectedTranscriptId, setSelectedTranscriptId] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
+  const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
+  const [actionState, setActionState] = useState<Record<string, 'idle' | 'running' | 'failed'>>({});
   const [searchText, setSearchText] = useState('');
   const [testForm, setTestForm] = useState<TestForm>({
     campaign_id: 'test',
@@ -157,34 +170,76 @@ function App() {
     });
   }, [searchText, transcripts]);
 
+  function reportDiagnostic(scope: string, error: unknown, action?: string, severity: DiagnosticSeverity = 'error') {
+    const diagnostic = buildDiagnostic(scope, error, action, severity);
+    setDiagnostics((current) => [diagnostic, ...current.filter((item) => item.scope !== scope)].slice(0, 8));
+    setMessage(diagnostic.message);
+  }
+
+  function clearDiagnostic(scope?: string) {
+    setDiagnostics((current) => scope ? current.filter((item) => item.scope !== scope) : []);
+  }
+
   async function refresh() {
     setLoading(true);
     setMessage('');
-    try {
-      const [nextBots, nextTranscripts, nextCampaigns, nextVoices, nextLanguages, nextLangfuse] = await Promise.all([
-        api.bots(),
-        api.transcripts(),
-        api.campaigns(),
-        api.voices(),
-        api.languages(),
-        api.langfuseSettings()
-      ]);
-      setBots(nextBots);
-      setTranscripts(nextTranscripts);
-      setCampaigns(nextCampaigns);
-      setVoices(nextVoices);
-      setLanguages(nextLanguages);
-      setLangfuseSettings(nextLangfuse);
-      if (!selectedBotId && nextBots[0]) setSelectedBotId(nextBots[0]._id);
-      if (!selectedTranscriptId && nextTranscripts[0]) setSelectedTranscriptId(nextTranscripts[0]._id);
-    } catch (error) {
-      setMessage(friendlyApiError(error));
-    } finally {
-      setLoading(false);
+    const results = await Promise.allSettled([
+      api.bots(),
+      api.transcripts(),
+      api.campaigns(),
+      api.voices(),
+      api.languages(),
+      api.langfuseSettings()
+    ]);
+    const scopes = ['Bots API', 'Transcripts API', 'Campaigns API', 'Voice Options API', 'Language Options API', 'Langfuse Settings API'];
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') reportDiagnostic(scopes[index], result.reason, 'Retry refresh or use cached dashboard data');
+    });
+    if (results[0].status === 'fulfilled') {
+      setBots(results[0].value);
+      cacheSet('bots', results[0].value);
+      if (!selectedBotId && results[0].value[0]) setSelectedBotId(results[0].value[0]._id);
+      clearDiagnostic('Bots API');
     }
+    if (results[1].status === 'fulfilled') {
+      setTranscripts(results[1].value);
+      cacheSet('transcripts', results[1].value);
+      if (!selectedTranscriptId && results[1].value[0]) setSelectedTranscriptId(results[1].value[0]._id);
+      clearDiagnostic('Transcripts API');
+    }
+    if (results[2].status === 'fulfilled') {
+      setCampaigns(results[2].value);
+      cacheSet('campaigns', results[2].value);
+      clearDiagnostic('Campaigns API');
+    }
+    if (results[3].status === 'fulfilled') {
+      setVoices(results[3].value);
+      cacheSet('voices', results[3].value);
+      clearDiagnostic('Voice Options API');
+    }
+    if (results[4].status === 'fulfilled') {
+      setLanguages(results[4].value);
+      cacheSet('languages', results[4].value);
+      clearDiagnostic('Language Options API');
+    }
+    if (results[5].status === 'fulfilled') {
+      setLangfuseSettings(results[5].value);
+      cacheSet('langfuse', results[5].value);
+      clearDiagnostic('Langfuse Settings API');
+    }
+    if (results.some((result) => result.status === 'rejected')) {
+      setMessage('Some dashboard data could not load. You can retry or continue with cached data.');
+    }
+    setLoading(false);
   }
 
   useEffect(() => {
+    setBots(cacheGet<BotType[]>('bots', []));
+    setTranscripts(cacheGet<Transcript[]>('transcripts', []));
+    setCampaigns(cacheGet<Campaign[]>('campaigns', []));
+    setVoices(cacheGet<VoiceOption[]>('voices', []));
+    setLanguages(cacheGet<LanguageOption[]>('languages', []));
+    setLangfuseSettings(cacheGet<LangfuseSettings | null>('langfuse', null));
     refresh();
   }, []);
 
@@ -199,11 +254,23 @@ function App() {
           bundle.versions[0];
         if (preferred) setConfigText(JSON.stringify(preferred.config, null, 2));
       })
-      .catch((error) => setMessage(friendlyApiError(error)));
+      .catch((error) => reportDiagnostic('Bot Versions API', error, 'Keep editing cached config or retry refresh'));
   }, [selectedBot?._id]);
 
-  async function createBot() {
+  async function runAction(actionKey: string, label: string, task: () => Promise<void>) {
+    setActionState((current) => ({ ...current, [actionKey]: 'running' }));
+    clearDiagnostic(label);
     try {
+      await task();
+      setActionState((current) => ({ ...current, [actionKey]: 'idle' }));
+    } catch (error) {
+      setActionState((current) => ({ ...current, [actionKey]: 'failed' }));
+      reportDiagnostic(label, error, 'Retry the action or keep editing locally');
+    }
+  }
+
+  async function createBot() {
+    await runAction('createBot', 'Create Bot', async () => {
       const bot = await api.createBot({
         name: 'New JustDial Voice Bot',
         description: 'Prompt and settings based outbound bot',
@@ -214,44 +281,36 @@ function App() {
       setView('builder');
       setMessage('Draft bot created. Add prompt details, save draft, then publish.');
       await refresh();
-    } catch (error) {
-      setMessage(friendlyApiError(error));
-    }
+    });
   }
 
   async function saveDraft() {
     if (!selectedBot || !parsedConfig.ok) return;
-    try {
+    await runAction('saveDraft', 'Save Draft', async () => {
       const version = await api.saveDraft(selectedBot._id, {
         config: parsedConfig.value,
         notes: 'Dashboard draft save'
       });
       setMessage(`Draft version ${version.version} saved. Publish it when ready for new calls.`);
       await refresh();
-    } catch (error) {
-      setMessage(friendlyApiError(error));
-    }
+    });
   }
 
   async function publishDraft() {
     if (!selectedBot) return;
-    try {
+    await runAction('publishDraft', 'Publish Bot', async () => {
       const version = await api.publish(selectedBot._id, latestDraft?._id);
       setMessage(`Published version ${version.version}. Live calls keep their old snapshot; new calls use this version.`);
       await refresh();
-    } catch (error) {
-      setMessage(friendlyApiError(error));
-    }
+    });
   }
 
   async function updateLangfuse(payload: Partial<LangfuseSettings>) {
-    try {
+    await runAction('langfuse', 'Langfuse Settings', async () => {
       const nextSettings = await api.updateLangfuseSettings(payload);
       setLangfuseSettings(nextSettings);
       setMessage(`Langfuse ${nextSettings.enabled ? 'enabled' : 'disabled'} for ${nextSettings.environment}.`);
-    } catch (error) {
-      setMessage(friendlyApiError(error));
-    }
+    });
   }
 
   function updateConfig(key: keyof RuntimeConfig, value: unknown) {
@@ -318,7 +377,9 @@ function App() {
       setTestStatus('Microphone is live. Waiting for the bot to respond...');
     } catch (error) {
       await stopWebRtcTest();
-      setTestError(friendlyTestError(error));
+      const message = friendlyTestError(error);
+      setTestError(message);
+      reportDiagnostic('WebRTC Test Call', message, 'Retry room setup or skip LiveKit and keep editing metadata');
       setTestStatus('Failed to start test');
     }
   }
@@ -354,9 +415,9 @@ function App() {
           <NavButton icon={<Gauge />} label="Observability" active={view === 'observability'} onClick={() => setView('observability')} />
         </div>
         <div className="sidebar-card">
-          <span className="status-dot" />
-          <strong>Mongo connected</strong>
-          <small>ai_voice_bot_management</small>
+          <span className={diagnostics.some((item) => item.severity === 'error') ? 'status-dot error-dot' : 'status-dot'} />
+          <strong>{diagnostics.length ? `${diagnostics.length} diagnostic${diagnostics.length > 1 ? 's' : ''}` : 'Systems nominal'}</strong>
+          <small>{diagnostics[0]?.scope || 'ai_voice_bot_management'}</small>
         </div>
       </aside>
 
@@ -372,9 +433,19 @@ function App() {
               {bots.map((bot) => <option key={bot._id} value={bot._id}>{bot.name}</option>)}
             </select>
             <button onClick={refresh}><RefreshCw size={16} /> Refresh</button>
-            <button className="primary" onClick={createBot}><Rocket size={16} /> New Agent</button>
+            <button className="primary" onClick={createBot} disabled={actionState.createBot === 'running'}><Rocket size={16} /> {actionState.createBot === 'failed' ? 'Retry New Agent' : 'New Agent'}</button>
           </div>
         </header>
+
+        <DiagnosticsBar diagnostics={diagnostics} onClear={clearDiagnostic} onRetry={refresh} onUseCache={() => {
+          setBots(cacheGet<BotType[]>('bots', bots));
+          setTranscripts(cacheGet<Transcript[]>('transcripts', transcripts));
+          setCampaigns(cacheGet<Campaign[]>('campaigns', campaigns));
+          setVoices(cacheGet<VoiceOption[]>('voices', voices));
+          setLanguages(cacheGet<LanguageOption[]>('languages', languages));
+          setLangfuseSettings(cacheGet<LangfuseSettings | null>('langfuse', langfuseSettings));
+          setMessage('Loaded last known cached dashboard data.');
+        }} />
 
         {message && (
           <div className={message.startsWith('Cannot') || message.startsWith('API') ? 'notice error' : 'notice'}>
@@ -385,69 +456,83 @@ function App() {
         <KpiStrip bots={bots} transcripts={transcripts} campaigns={campaigns} loading={loading} />
 
         {view === 'bots' && (
-          <BotsView
-            bots={bots}
-            selectedBot={selectedBot}
-            transcripts={transcripts}
-            onSelect={(botId) => { setSelectedBotId(botId); setView('builder'); }}
-          />
+          <ResilientPanel name="Agents" onDiagnostic={reportDiagnostic}>
+            <BotsView
+              bots={bots}
+              selectedBot={selectedBot}
+              transcripts={transcripts}
+              onSelect={(botId) => { setSelectedBotId(botId); setView('builder'); }}
+            />
+          </ResilientPanel>
         )}
 
         {view === 'builder' && (
-          <BuilderView
-            selectedBot={selectedBot}
-            versions={versions}
-            activeVersion={activeVersion}
-            latestDraft={latestDraft}
-            publishedCount={publishedCount}
-            config={parsedConfig}
-            configText={configText}
-            voices={voices}
-            languages={languages}
-            onConfigTextChange={setConfigText}
-            onUpdateConfig={updateConfig}
-            onUpdateLanguage={updateLanguage}
-            onSaveDraft={saveDraft}
-            onPublish={publishDraft}
-          />
+          <ResilientPanel name="Builder" onDiagnostic={reportDiagnostic}>
+            <BuilderView
+              selectedBot={selectedBot}
+              versions={versions}
+              activeVersion={activeVersion}
+              latestDraft={latestDraft}
+              publishedCount={publishedCount}
+              config={parsedConfig}
+              configText={configText}
+              voices={voices.length ? voices : cacheGet<VoiceOption[]>('voices', [])}
+              languages={languages.length ? languages : cacheGet<LanguageOption[]>('languages', [])}
+              onConfigTextChange={setConfigText}
+              onUpdateConfig={updateConfig}
+              onUpdateLanguage={updateLanguage}
+              onSaveDraft={saveDraft}
+              onPublish={publishDraft}
+              saveState={actionState.saveDraft}
+              publishState={actionState.publishDraft}
+            />
+          </ResilientPanel>
         )}
 
         {view === 'campaigns' && (
-          <CampaignsView campaigns={campaigns} bots={bots} />
+          <ResilientPanel name="Campaigns" onDiagnostic={reportDiagnostic}>
+            <CampaignsView campaigns={campaigns} bots={bots} />
+          </ResilientPanel>
         )}
 
         {view === 'test' && (
-          <TestCallPanel
-            selectedBot={selectedBot}
-            form={testForm}
-            setForm={setTestForm}
-            status={testStatus}
-            error={testError}
-            roomName={testRoomName}
-            remoteAudioReady={remoteAudioReady}
-            remoteAudioRef={remoteAudioRef}
-            onStart={startWebRtcTest}
-            onStop={stopWebRtcTest}
-          />
+          <ResilientPanel name="WebRTC Test" onDiagnostic={reportDiagnostic}>
+            <TestCallPanel
+              selectedBot={selectedBot}
+              form={testForm}
+              setForm={setTestForm}
+              status={testStatus}
+              error={testError}
+              roomName={testRoomName}
+              remoteAudioReady={remoteAudioReady}
+              remoteAudioRef={remoteAudioRef}
+              onStart={startWebRtcTest}
+              onStop={stopWebRtcTest}
+            />
+          </ResilientPanel>
         )}
 
         {view === 'transcripts' && (
-          <TranscriptsView
-            transcripts={filteredTranscripts}
-            selectedTranscript={selectedTranscript}
-            searchText={searchText}
-            onSearchText={setSearchText}
-            onSelect={setSelectedTranscriptId}
-          />
+          <ResilientPanel name="Transcripts" onDiagnostic={reportDiagnostic}>
+            <TranscriptsView
+              transcripts={filteredTranscripts}
+              selectedTranscript={selectedTranscript}
+              searchText={searchText}
+              onSearchText={setSearchText}
+              onSelect={setSelectedTranscriptId}
+            />
+          </ResilientPanel>
         )}
 
         {view === 'observability' && (
-          <ObservabilityView
-            selectedBot={selectedBot}
-            transcripts={transcripts}
-            langfuseSettings={langfuseSettings}
-            onUpdateLangfuse={updateLangfuse}
-          />
+          <ResilientPanel name="Observability" onDiagnostic={reportDiagnostic}>
+            <ObservabilityView
+              selectedBot={selectedBot}
+              transcripts={transcripts}
+              langfuseSettings={langfuseSettings}
+              onUpdateLangfuse={updateLangfuse}
+            />
+          </ResilientPanel>
         )}
       </main>
     </div>
@@ -469,6 +554,83 @@ function KpiStrip({ bots, transcripts, campaigns, loading }: {
       <Kpi icon={<Megaphone />} label="Campaigns" value={loading ? '...' : campaigns.length.toString()} helper="Mongo-backed mappings" />
       <Kpi icon={<PhoneCall />} label="Completed calls" value={loading ? '...' : completedCalls.toString()} helper={`${transcripts.length} transcripts`} />
       <Kpi icon={<Clock3 />} label="Avg duration" value={avgDuration ? `${avgDuration}s` : '-'} helper="from saved transcripts" />
+    </section>
+  );
+}
+
+class ResilientPanel extends Component<{
+  name: string;
+  children: ReactNode;
+  onDiagnostic: (scope: string, error: unknown, action?: string, severity?: DiagnosticSeverity) => void;
+}, { failed: boolean; error?: Error }> {
+  state = { failed: false, error: undefined as Error | undefined };
+
+  static getDerivedStateFromError(error: Error) {
+    return { failed: true, error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    this.props.onDiagnostic(
+      this.props.name,
+      `${error.message}\n${info.componentStack}`,
+      'Reset this widget or bypass it and continue elsewhere'
+    );
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <section className="panel crash-panel">
+          <AlertTriangle size={22} />
+          <div>
+            <h2>{this.props.name} crashed locally</h2>
+            <p>{this.state.error?.message || 'A widget-level render error occurred.'}</p>
+            <div className="button-row">
+              <button className="fallback-button" onClick={() => this.setState({ failed: false, error: undefined })}>
+                Reset local state
+              </button>
+              <button onClick={() => window.location.hash = '#diagnostics'}>Bypass / inspect diagnostics</button>
+            </div>
+          </div>
+        </section>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function DiagnosticsBar({
+  diagnostics,
+  onClear,
+  onRetry,
+  onUseCache
+}: {
+  diagnostics: Diagnostic[];
+  onClear: (scope?: string) => void;
+  onRetry: () => void;
+  onUseCache: () => void;
+}) {
+  if (!diagnostics.length) {
+    return (
+      <section className="diagnostics-bar healthy" id="diagnostics">
+        <CheckCircle2 size={16} />
+        <span>Dashboard diagnostics clear</span>
+      </section>
+    );
+  }
+  const latest = diagnostics[0];
+  return (
+    <section className={`diagnostics-bar ${latest.severity}`} id="diagnostics">
+      <AlertTriangle size={17} />
+      <div>
+        <strong>{latest.scope}: {latest.message}</strong>
+        <span>{latest.action || 'Retry, continue with cached data, or inspect the affected widget.'}</span>
+      </div>
+      <div className="diagnostics-actions">
+        <button className="fallback-button" onClick={onRetry}><RefreshCw size={15} /> Retry</button>
+        <button className="fallback-button" onClick={onUseCache}><ClipboardList size={15} /> Use cached</button>
+        <button onClick={() => onClear(latest.scope)}>Dismiss</button>
+      </div>
     </section>
   );
 }
@@ -559,7 +721,9 @@ function BuilderView({
   onUpdateConfig,
   onUpdateLanguage,
   onSaveDraft,
-  onPublish
+  onPublish,
+  saveState,
+  publishState
 }: {
   selectedBot?: BotType;
   versions: BotVersion[];
@@ -575,6 +739,8 @@ function BuilderView({
   onUpdateLanguage: (value: string) => void;
   onSaveDraft: () => void;
   onPublish: () => void;
+  saveState?: 'idle' | 'running' | 'failed';
+  publishState?: 'idle' | 'running' | 'failed';
 }) {
   const value = config.ok ? config.value : defaultConfig;
   return (
@@ -587,8 +753,12 @@ function BuilderView({
               <p>PMs edit the spoken behavior here. Developers can use the JSON panel for advanced runtime settings.</p>
             </div>
             <div className="button-row">
-              <button disabled={!config.ok} onClick={onSaveDraft}><Save size={16} /> Save draft</button>
-              <button className="primary" disabled={!latestDraft && versions.length > 0} onClick={onPublish}><Rocket size={16} /> Publish</button>
+              <button disabled={!config.ok || saveState === 'running'} onClick={onSaveDraft}>
+                <Save size={16} /> {saveState === 'failed' ? 'Retry save draft' : saveState === 'running' ? 'Saving...' : 'Save draft'}
+              </button>
+              <button className={publishState === 'failed' ? 'fallback-button' : 'primary'} disabled={publishState === 'running' || (!latestDraft && versions.length > 0)} onClick={onPublish}>
+                <Rocket size={16} /> {publishState === 'failed' ? 'Fallback: retry publish' : publishState === 'running' ? 'Publishing...' : 'Publish'}
+              </button>
             </div>
           </div>
           {!config.ok && <div className="notice error"><AlertTriangle size={16} /> JSON is invalid: {config.error}</div>}
@@ -772,7 +942,9 @@ function TestCallPanel({
           <label>City<input value={form.city} onChange={(event) => updateField('city', event.target.value)} /></label>
         </div>
         <div className="button-row">
-          <button className="primary" onClick={onStart} disabled={!selectedBot}><Play size={16} /> Start WebRTC test</button>
+          <button className={error ? 'fallback-button' : 'primary'} onClick={onStart} disabled={!selectedBot || status.includes('Creating') || status.includes('Connecting')}>
+            <Play size={16} /> {error ? 'Fallback: retry setup' : status.includes('Creating') || status.includes('Connecting') ? 'Starting...' : 'Start WebRTC test'}
+          </button>
           <button onClick={onStop}><Square size={16} /> End test</button>
         </div>
       </div>
@@ -783,7 +955,19 @@ function TestCallPanel({
         <ConnectionLine icon={<Mic />} label="Microphone" value={status.includes('Microphone') || remoteAudioReady ? 'Requested' : 'Waiting'} done={status.includes('Microphone') || remoteAudioReady} />
         <ConnectionLine icon={<Volume2 />} label="Bot audio" value={remoteAudioReady ? 'Connected' : 'Waiting'} done={remoteAudioReady} />
         <div ref={remoteAudioRef} />
-        {error && <div className="notice error"><AlertTriangle size={16} /> {error}</div>}
+        {error && (
+          <div className="notice error test-error">
+            <AlertTriangle size={16} />
+            <div>
+              <strong>{error}</strong>
+              <span>Fallback: keep the entered metadata, retry room setup, or end this test and continue editing the bot.</span>
+              <div className="button-row">
+                <button className="fallback-button" onClick={onStart}>Retry room setup</button>
+                <button onClick={onStop}>Skip test for now</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -1036,6 +1220,9 @@ function parseConfig(value: string): { ok: true; value: RuntimeConfig } | { ok: 
 
 function friendlyApiError(error: unknown) {
   const raw = error instanceof Error ? error.message : String(error);
+  if (raw.toLowerCase().includes('network timeout')) {
+    return `${raw}. The backend may be slow, down, or blocked by Mongo/LiveKit connectivity.`;
+  }
   if (raw.toLowerCase().includes('failed to fetch')) {
     return 'Cannot reach the FastAPI backend. Start it with ./start_api.sh, then refresh this page.';
   }
@@ -1076,4 +1263,38 @@ function average(values: number[]) {
   return Math.round(values.reduce((sum, item) => sum + item, 0) / values.length);
 }
 
-createRoot(document.getElementById('root')!).render(<App />);
+function buildDiagnostic(scope: string, error: unknown, action?: string, severity: DiagnosticSeverity = 'error'): Diagnostic {
+  const message = friendlyApiError(error);
+  const normalized = message.length > 220 ? `${message.slice(0, 220)}...` : message;
+  return {
+    id: `${scope}-${Date.now()}`,
+    scope,
+    severity,
+    message: normalized,
+    action,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function cacheSet<T>(key: string, value: T) {
+  try {
+    window.localStorage.setItem(`jd-vb:${key}`, JSON.stringify(value));
+  } catch {
+    // Cache is best-effort only.
+  }
+}
+
+function cacheGet<T>(key: string, fallback: T): T {
+  try {
+    const value = window.localStorage.getItem(`jd-vb:${key}`);
+    return value ? JSON.parse(value) as T : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+createRoot(document.getElementById('root')!).render(
+  <ResilientPanel name="Dashboard Shell" onDiagnostic={() => undefined}>
+    <App />
+  </ResilientPanel>
+);
