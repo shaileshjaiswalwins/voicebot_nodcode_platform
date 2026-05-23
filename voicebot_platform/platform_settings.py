@@ -42,6 +42,13 @@ def _default_langfuse_settings() -> dict[str, Any]:
     }
 
 
+def _insert_defaults() -> dict[str, Any]:
+    defaults = _default_langfuse_settings()
+    defaults.pop("updated_by", None)
+    defaults.pop("updated_at", None)
+    return {**defaults, "created_at": _now()}
+
+
 def get_langfuse_settings() -> dict[str, Any]:
     db = get_db()
     try:
@@ -49,7 +56,7 @@ def get_langfuse_settings() -> dict[str, Any]:
         if not settings:
             settings = db[PLATFORM_SETTINGS_COLLECTION].find_one_and_update(
                 {"key": "langfuse"},
-                {"$setOnInsert": {**_default_langfuse_settings(), "created_at": _now()}},
+                {"$setOnInsert": _insert_defaults()},
                 upsert=True,
                 return_document=ReturnDocument.AFTER,
             )
@@ -81,7 +88,7 @@ def update_langfuse_settings(payload: dict[str, Any], user: str) -> dict[str, An
     db = get_db()
     settings = db[PLATFORM_SETTINGS_COLLECTION].find_one_and_update(
         {"key": "langfuse"},
-        {"$set": update, "$setOnInsert": {**_default_langfuse_settings(), "created_at": _now()}},
+        {"$set": update, "$setOnInsert": _insert_defaults()},
         upsert=True,
         return_document=ReturnDocument.AFTER,
     )
