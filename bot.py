@@ -60,7 +60,9 @@ from google.genai import types
 from voicebot_platform.config_store import fetch_active_bot_config
 from voicebot_platform.observability import recorder as _observability
 
-load_dotenv(override=True)
+# Let one-off worker launches override .env, e.g.
+# LIVEKIT_AGENT_NAME=voice-bot-justdial-test WORKER_PORT=8091 uv run python bot.py start.
+load_dotenv(override=False)
 
 # ---------------------------------------------------------------------------
 # File logging — rotate daily, keep 30 days, write to LOG_DIR (default /var/log/voicebot)
