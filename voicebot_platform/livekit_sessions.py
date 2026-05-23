@@ -13,7 +13,14 @@ from livekit.api import (
     VideoGrants,
 )
 
-from .config import LIVEKIT_AGENT_NAME, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL
+from .config import (
+    LIVEKIT_AGENT_NAME,
+    LIVEKIT_API_KEY,
+    LIVEKIT_API_SECRET,
+    LIVEKIT_API_URL,
+    LIVEKIT_BROWSER_URL,
+    LIVEKIT_URL,
+)
 
 
 class LiveKitConfigError(RuntimeError):
@@ -25,6 +32,8 @@ def _require_livekit_config() -> None:
         name
         for name, value in {
             "LIVEKIT_URL": LIVEKIT_URL,
+            "LIVEKIT_API_URL": LIVEKIT_API_URL,
+            "LIVEKIT_BROWSER_URL": LIVEKIT_BROWSER_URL,
             "LIVEKIT_API_KEY": LIVEKIT_API_KEY,
             "LIVEKIT_API_SECRET": LIVEKIT_API_SECRET,
         }.items()
@@ -44,7 +53,7 @@ async def create_webrtc_test_room(room_metadata: dict, user: str) -> dict:
     metadata_json = json.dumps(metadata, ensure_ascii=False)
 
     livekit = LiveKitAPI(
-        url=LIVEKIT_URL,
+        url=LIVEKIT_API_URL,
         api_key=LIVEKIT_API_KEY,
         api_secret=LIVEKIT_API_SECRET,
     )
@@ -91,7 +100,7 @@ async def create_webrtc_test_room(room_metadata: dict, user: str) -> dict:
 
     return {
         "room_name": room_name,
-        "livekit_url": LIVEKIT_URL,
+        "livekit_url": LIVEKIT_BROWSER_URL,
         "token": token,
         "metadata": metadata,
         "agent_name": LIVEKIT_AGENT_NAME,

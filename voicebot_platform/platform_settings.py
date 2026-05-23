@@ -44,6 +44,10 @@ def _default_langfuse_settings() -> dict[str, Any]:
 
 def _insert_defaults() -> dict[str, Any]:
     defaults = _default_langfuse_settings()
+    defaults.pop("enabled", None)
+    defaults.pop("environment", None)
+    defaults.pop("send_transcripts", None)
+    defaults.pop("send_prompts", None)
     defaults.pop("updated_by", None)
     defaults.pop("updated_at", None)
     return {**defaults, "created_at": _now()}
