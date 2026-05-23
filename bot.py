@@ -66,6 +66,7 @@ load_dotenv(override=True)
 # File logging — rotate daily, keep 30 days, write to LOG_DIR (default /var/log/voicebot)
 # ---------------------------------------------------------------------------
 _BOT_PORT = os.environ.get("BOT_PORT", "8081")
+_WORKER_PORT = int(os.environ.get("WORKER_PORT", _BOT_PORT))
 _LOG_DIR = os.path.join(os.environ.get("BOT_LOG_DIR", "/home/yogeshv_10011835/voicebot_nodcode_platform/logs/"), _BOT_PORT)
 os.makedirs(_LOG_DIR, exist_ok=True)
 
@@ -2393,5 +2394,6 @@ if __name__ == "__main__":
             entrypoint_fnc=entrypoint,
             agent_name=os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial"),
             num_idle_processes=3,
+            port=_WORKER_PORT,
         )
     )
