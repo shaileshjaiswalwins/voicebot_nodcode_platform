@@ -910,6 +910,57 @@ label.full {
   min-height: auto;
 }
 
+.library-layout {
+  display: grid;
+  gap: 14px;
+}
+
+.library-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.library-tab {
+  min-height: 64px;
+  padding: 10px 14px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  text-align: left;
+  justify-content: flex-start;
+  border: 1px solid #d9e1ea;
+  background: #ffffff;
+  border-radius: 8px;
+}
+
+.library-tab strong {
+  font-size: 13px;
+}
+
+.library-tab small {
+  color: #647285;
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.library-tab.active {
+  border-color: #105cab;
+  background: #f0f7ff;
+  color: #105cab;
+}
+
+.callout > div {
+  display: grid;
+  gap: 4px;
+}
+
+.callout > div p {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 @media (max-width: 1180px) {
   .content-grid.two-col,
   .builder-layout,
@@ -920,6 +971,10 @@ label.full {
 
   .right-rail {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .library-tabs {
+    grid-template-columns: 1fr;
   }
 }
 

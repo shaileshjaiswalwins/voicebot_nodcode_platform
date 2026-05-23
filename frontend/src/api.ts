@@ -1,9 +1,12 @@
 const API_BASE = import.meta.env.VITE_API_BASE || '';
-const DEFAULT_TIMEOUT_MS = 4000;
+const READ_TIMEOUT_MS = 8000;
+const WRITE_TIMEOUT_MS = 20000;
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const method = (options.method || 'GET').toUpperCase();
+  const timeoutMs = method === 'GET' ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS;
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
@@ -28,7 +31,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     return response.json();
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error(`Network timeout after ${DEFAULT_TIMEOUT_MS / 1000}s for ${path}`);
+      throw new Error(`Network timeout after ${timeoutMs / 1000}s for ${path}`);
     }
     throw error;
   } finally {
@@ -82,6 +85,7 @@ export type Transcript = {
   status?: string;
   call_duration_sec?: number;
   transcript?: TranscriptTurn[];
+  transcript_count?: number;
   config_snapshot?: Record<string, unknown>;
   lead_record?: Record<string, unknown>;
   callback_status?: string;
@@ -158,6 +162,41 @@ export type RuntimeSettings = {
   updated_at?: string;
 };
 
+export type PhraseCategory = 'voicemail' | 'hold_music' | 'dnc_trigger';
+
+export type LibraryPhrase = {
+  _id: string;
+  category: PhraseCategory;
+  text: string;
+  language?: string;
+  notes?: string;
+  created_by?: string;
+  created_at?: string;
+  updated_by?: string;
+  updated_at?: string;
+};
+
+export type OutcomeEntry = {
+  _id?: string;
+  key: string;
+  description: string;
+  display_label?: string;
+  order?: number;
+  updated_by?: string;
+  updated_at?: string;
+};
+
+export type LanguageSettings = {
+  _id?: string;
+  id: string;
+  name: string;
+  timeout_message?: string;
+  inactivity_nudge?: string;
+  lang_notes?: string;
+  updated_by?: string;
+  updated_at?: string;
+};
+
 export const api = {
   bots: () => request<Bot[]>('/api/bots'),
   bot: (id: string) => request<{ bot: Bot; versions: BotVersion[] }>(`/api/bots/${id}`),
@@ -190,5 +229,25 @@ export const api = {
   transcripts: () => request<Transcript[]>('/api/transcripts'),
   campaigns: () => request<Campaign[]>('/api/campaigns'),
   voices: () => request<VoiceOption[]>('/api/options/voices'),
-  languages: () => request<LanguageOption[]>('/api/options/languages')
+  languages: () => request<LanguageOption[]>('/api/options/languages'),
+  phrases: (category?: PhraseCategory) =>
+    request<LibraryPhrase[]>(`/api/library/phrases${category ? `?category=${category}` : ''}`),
+  createPhrase: (payload: Partial<LibraryPhrase>) =>
+    request<LibraryPhrase>('/api/library/phrases', { method: 'POST', body: JSON.stringify(payload) }),
+  updatePhrase: (id: string, payload: Partial<LibraryPhrase>) =>
+    request<LibraryPhrase>(`/api/library/phrases/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deletePhrase: (id: string) =>
+    request<{ status: string }>(`/api/library/phrases/${id}`, { method: 'DELETE' }),
+  outcomes: () => request<OutcomeEntry[]>('/api/library/outcomes'),
+  updateOutcome: (key: string, payload: Partial<OutcomeEntry>) =>
+    request<OutcomeEntry>(`/api/library/outcomes/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    }),
+  languageSettings: () => request<LanguageSettings[]>('/api/library/language-settings'),
+  upsertLanguageSettings: (payload: Partial<LanguageSettings>) =>
+    request<LanguageSettings>('/api/library/language-settings', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
 };
