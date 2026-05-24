@@ -57,6 +57,7 @@ except ImportError:
 from livekit.plugins import google
 from google.genai import types
 
+from voicebot_platform.call_events import record_call_event
 from voicebot_platform.config_store import fetch_active_bot_config
 from voicebot_platform.language_settings import get_language_settings
 from voicebot_platform.observability import recorder as _observability
@@ -839,6 +840,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         f"[CALL START] room={room_name} | lead_id={_lead_id_meta!r} | mobile={_room_mobile!r}"
     )
     _log.info(_SEP)
+    record_call_event(
+        "call_started",
+        "info",
+        "LiveKit call started",
+        {
+            "room_name": room_name,
+            "assistant_id": _room_meta_raw.get("assistant_id", ""),
+            "campaign_id": _room_meta_raw.get("campaign_id", ""),
+            "lead_id": _lead_id_meta,
+        },
+        {"mobile": _room_mobile, "test_session": _is_test_session},
+    )
 
     _early_lead_task: asyncio.Task | None = None
     if (_lead_id_meta or _room_mobile) and not (_is_test_session and _room_meta_raw.get("srchterm")):
@@ -848,6 +861,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     await ctx.connect()
     await ctx.wait_for_participant()
+    record_call_event(
+        "livekit_room_joined",
+        "success",
+        "Worker joined LiveKit room and found participant",
+        {
+            "room_name": room_name,
+            "assistant_id": _room_meta_raw.get("assistant_id", ""),
+            "campaign_id": _room_meta_raw.get("campaign_id", ""),
+            "lead_id": _lead_id_meta,
+        },
+    )
 
     # 2. Resolve bot config and settings
     _assistant_id = _room_meta_raw.get("assistant_id", "")
@@ -871,6 +895,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 "status": "error",
             },
         )
+        record_call_event(
+            "config_fetch_failed",
+            "error",
+            "Active bot config lookup failed; runtime used fallback config",
+            {"room_name": room_name, "assistant_id": _assistant_id, "lead_id": _lead_id_meta},
+            {"reason": _config_source},
+        )
     _bot_config: dict = _bc or _HARDCODED_BOT_CONFIG
     _config_snapshot = deepcopy(_bot_config)
     _config_snapshot["__config_source"] = _config_source
@@ -878,6 +909,31 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _bot_version_id = _bot_config.get("bot_version_id", "")
     _bot_version = _bot_config.get("bot_version")
     _campaign_id = _room_meta_raw.get("campaign_id", "")
+
+    def _event_context() -> dict:
+        try:
+            call_id = call_state.get("call_id")
+            lead_id = call_state.get("record_id") or _lead_id_meta
+        except NameError:
+            call_id = room_name
+            lead_id = _lead_id_meta
+        return {
+            "room_name": room_name,
+            "call_id": call_id,
+            "assistant_id": _assistant_id,
+            "bot_id": _bot_id,
+            "bot_version_id": _bot_version_id,
+            "campaign_id": _campaign_id,
+            "lead_id": lead_id,
+        }
+
+    record_call_event(
+        "config_loaded",
+        "success" if _config_source == "mongo_active_version" else "warning",
+        "Bot runtime config loaded",
+        _event_context(),
+        {"config_source": _config_source, "bot_version": _bot_version},
+    )
 
     _observability.event(
         "call_started",
@@ -948,6 +1004,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             or room_name
         )
         call_state["lead_record"] = _prefetched_lead
+        record_call_event(
+            "lead_loaded",
+            "success",
+            "Lead loaded from early lookup",
+            _event_context(),
+            {"source": "prefetch"},
+        )
 
     # 4. Build system instruction from lead (or base rules if no lead yet)
     system_instruction = build_system_prompt(
@@ -1024,6 +1087,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             f"record_id={lead_id!r} | call_id={call_state.get('call_id')!r} | "
             f"lead_record_present={bool(call_state.get('lead_record'))}"
         )
+        record_call_event(
+            "transcript_save_started",
+            "info",
+            "Preparing transcript and call metadata for Mongo save",
+            _event_context(),
+            {"status": status},
+        )
         # Flush any muted-window Sarvam transcript that never got combined with live speech.
         if _muted_inject["text"]:
             _live_transcript.append({"role": "user", "text": _muted_inject["text"]})
@@ -1089,6 +1159,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, lambda: _get_mongo_collection().insert_one(_mongo_doc))
             _log.info(f"[MONGO] Transcript saved | lead_id={lead_id!r} | call_id={call_state.get('call_id')!r}")
+            record_call_event(
+                "transcript_save_succeeded",
+                "success",
+                "Transcript saved to Mongo",
+                _event_context(),
+                {"status": status, "transcript_count": len(transcript), "call_duration_sec": _duration},
+            )
             _observability.event(
                 "transcript_saved",
                 {
@@ -1104,6 +1181,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             )
         except Exception as e:
             _log.error(f"[MONGO] insert failed: {e}")
+            record_call_event(
+                "transcript_save_failed",
+                "error",
+                "Transcript save failed",
+                _event_context(),
+                {"error_type": type(e).__name__, "error": str(e)},
+            )
 
         _lead = call_state.get("lead_record") or {}
         _search_ctx = _lead.get("search_context") or {}
@@ -1167,7 +1251,21 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "tags": [status],
             "sentiment": "neutral",
         }
+        record_call_event(
+            "callback_started",
+            "info",
+            "Sending immediate call-log callback",
+            _event_context(),
+            {"callback_target": f"{BACKEND_URL}/backend/api/call-logs"},
+        )
         _callback_ok = await save_call_log_to_backend(call_log_payload)
+        record_call_event(
+            "callback_succeeded" if _callback_ok else "callback_failed",
+            "success" if _callback_ok else "error",
+            "Immediate call-log callback succeeded" if _callback_ok else "Immediate call-log callback failed",
+            _event_context(),
+            {"callback_target": f"{BACKEND_URL}/backend/api/call-logs"},
+        )
         _observability.event(
             "callback_sent",
             {
@@ -1193,6 +1291,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 "status": status,
                 "call_duration_sec": _duration,
             },
+        )
+        record_call_event(
+            "call_ended",
+            "success" if status == "completed" else "warning",
+            "Call ended and save flow completed",
+            _event_context(),
+            {"status": status, "call_duration_sec": _duration},
         )
 
         _log.info(_SEP)
@@ -1513,6 +1618,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             form.add_field("language_code", _sarvam_language)
             form.add_field("model", "saaras:v3")
             form.add_field("mode", "transcribe")
+            record_call_event(
+                "sarvam_fallback_started",
+                "info",
+                "Sarvam fallback transcription started",
+                _event_context(),
+                {"speech_ms": speech_ms, "language": _sarvam_language},
+            )
             async with _get_http_session().post(
                 SARVAM_STT_URL,
                 headers={"api-subscription-key": SARVAM_API_KEY},
@@ -1531,12 +1643,33 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             )
                             return None
                         _log.info(f"[SARVAM] Fallback STT: {text!r} (speech_ms={speech_ms:.0f})")
+                        record_call_event(
+                            "sarvam_fallback_succeeded",
+                            "success",
+                            "Sarvam fallback transcription succeeded",
+                            _event_context(),
+                            {"speech_ms": speech_ms, "text_length": len(text)},
+                        )
                         return text
                 else:
                     body = await resp.text()
                     _log.warning(f"[SARVAM] STT failed: {resp.status} {body[:200]}")
+                    record_call_event(
+                        "sarvam_fallback_failed",
+                        "error",
+                        "Sarvam fallback transcription failed",
+                        _event_context(),
+                        {"status_code": resp.status, "body": body[:300]},
+                    )
         except Exception as e:
             _log.warning(f"[SARVAM] STT error: {e}")
+            record_call_event(
+                "sarvam_fallback_failed",
+                "error",
+                "Sarvam fallback transcription raised an error",
+                _event_context(),
+                {"error_type": type(e).__name__, "error": str(e)},
+            )
         return None
 
     async def _transcribe_muted_period(frames: list, speech_ms: float) -> None:
@@ -1685,6 +1818,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         "campaign_id": _campaign_id,
                     },
                 )
+                record_call_event(
+                    "first_agent_response",
+                    "success",
+                    "First assistant response committed",
+                    _event_context(),
+                    {"turn": _turn_counter},
+                )
         # Sniffer partial is superseded by the officially committed item — clear it.
         _pending_assistant_text = ""
         # Early mute: partial closing phrases are unique to the wrap-up line — mute
@@ -1732,6 +1872,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     "bot_version_id": _bot_version_id,
                     "campaign_id": _campaign_id,
                 },
+            )
+            record_call_event(
+                "first_user_audio_received",
+                "success",
+                "First user transcript/audio received",
+                _event_context(),
             )
         # Snapshot agent state at the moment user speech arrives (for interruption diagnosis).
         _agent_state_now = ""
@@ -1788,6 +1934,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _live_transcript[-1]["text"] = transcript_text
             else:
                 _live_transcript.append({"role": "user", "text": transcript_text})
+            record_call_event(
+                "first_user_transcript_received" if _turn_counter == 1 else "user_transcript_received",
+                "success",
+                "User transcript finalized",
+                _event_context(),
+                {"turn": _turn_counter, "text_length": len(transcript_text)},
+            )
         else:
             # Partial — keep the latest chunk in _pending_user_text; also put a
             # placeholder in _live_transcript so save_call_data sees it even if
@@ -1804,6 +1957,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     _greeting_done = False
     _bot_has_spoken = False  # True once the agent first transitions to "speaking"
+    _first_word_reported = False
     _greeting_retry_triggered = False
     _mic_enabled: bool = False  # mirrors the last value passed to set_audio_enabled
     _speaking_start_time: float | None = None  # wall-clock when current speaking turn started
@@ -1822,7 +1976,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        nonlocal _echo_guard_task, _greeting_done, _bot_has_spoken, _user_turn_time, _speaking_start_time
+        nonlocal _echo_guard_task, _greeting_done, _bot_has_spoken, _first_word_reported, _user_turn_time, _speaking_start_time
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
@@ -1836,6 +1990,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if state_str == "speaking":
             _bot_has_spoken = True
             _speaking_start_time = time.time()
+            if not _first_word_reported:
+                _first_word_reported = True
+                record_call_event(
+                    "first_word_spoken",
+                    "success",
+                    "Assistant started speaking for the first time",
+                    _event_context(),
+                )
             if _user_turn_time is not None:
                 latency_ms = round((time.time() - _user_turn_time) * 1000)
                 _log.info(f"[LATENCY] Turn {_turn_counter} | E2E: {latency_ms} ms")
@@ -2050,6 +2212,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 await asyncio.sleep(0.1)
             else:
                 _log.warning("[GREETING] Gemini did not connect within 5 s; skipping trigger")
+                record_call_event(
+                    "gemini_error",
+                    "error",
+                    "Gemini realtime session did not connect before greeting trigger",
+                    _event_context(),
+                    {"timeout_sec": 5},
+                )
                 return
             await asyncio.sleep(0.2)  # let initial chat-history replay finish
             _rt._send_client_event(
@@ -2073,6 +2242,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if not _greeting_done and not _call_ended:
                 _greeting_retry_triggered = True
                 _log.warning("[GREETING] Gemini did not complete greeting within 8 s — retrying trigger")
+                record_call_event(
+                    "gemini_greeting_timeout",
+                    "warning",
+                    "Gemini greeting did not complete before retry",
+                    _event_context(),
+                    {"timeout_sec": 8, "retry": 1},
+                )
                 _rt._send_client_event(
                     types.LiveClientContent(
                         turns=[types.Content(parts=[types.Part(text=".")], role="user")],
@@ -2085,6 +2261,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     _bot_has_spoken = True
                     _set_mic(True, reason="greeting-retry-timeout")
                     _log.warning("[MIC] Greeting retry also failed — force-enabling mic")
+                    record_call_event(
+                        "gemini_error",
+                        "error",
+                        "Gemini greeting retry failed; mic was force-enabled",
+                        _event_context(),
+                        {"timeout_sec": 16},
+                    )
 
         asyncio.create_task(_trigger_greeting())
 
@@ -2120,6 +2303,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             call_state["record_id"] = record.get("_id") or record.get("ref_id")
             call_state["call_id"] = _room_meta_raw.get("call_id") or record.get("call_id") or room_name
             call_state["lead_record"] = record
+            record_call_event(
+                "lead_loaded",
+                "success",
+                "Lead loaded by caller mobile",
+                _event_context(),
+                {"source": "mobile_lookup"},
+            )
 
     if not record:
         _srchterm = _room_meta_raw.get("srchterm", "")
@@ -2134,6 +2324,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 call_state["record_id"] = record.get("_id") or _room_meta_raw.get("lead_id") or "test_lead"
                 call_state["call_id"] = _room_meta_raw.get("call_id") or room_name
                 call_state["lead_record"] = record
+                record_call_event(
+                    "lead_loaded",
+                    "success",
+                    "Test lead loaded from search term",
+                    _event_context(),
+                    {"source": "test_search", "srchterm": _srchterm},
+                )
 
     if not record:
         _buyer_name_fallback = _room_meta_raw.get("buyer_name", "Customer")
@@ -2160,6 +2357,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         call_state["call_id"] = record["call_id"]
         call_state["lead_record"] = record
         _log.info(f"[CALL SETUP] Using fallback lead for mobile={caller_mobile!r}")
+        record_call_event(
+            "lead_load_failed",
+            "warning",
+            "Lead lookup did not return a record; fallback lead was used",
+            _event_context(),
+            {"mobile_present": bool(caller_mobile), "test_session": _is_test_session},
+        )
 
     # 16. 5-minute hard call timeout
     _DEFAULT_TIMEOUT_MSG = (

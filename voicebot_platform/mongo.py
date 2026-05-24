@@ -9,6 +9,7 @@ from .config import (
     BOT_COLLECTION,
     BOT_TEMPLATE_COLLECTION,
     BOT_VERSION_COLLECTION,
+    CALL_EVENT_COLLECTION,
     CAMPAIGN_COLLECTION,
     MONGO_DB,
     MONGO_URI,
@@ -45,6 +46,12 @@ def ensure_indexes() -> None:
             [("campaign_id", ASCENDING), ("created_at", DESCENDING)]
         )
         db[TRANSCRIPT_COLLECTION].create_index([("lead_id", ASCENDING), ("call_id", ASCENDING)])
+        db[CALL_EVENT_COLLECTION].create_index([("call_id", ASCENDING), ("created_at", ASCENDING)])
+        db[CALL_EVENT_COLLECTION].create_index([("room_name", ASCENDING), ("created_at", ASCENDING)])
+        db[CALL_EVENT_COLLECTION].create_index([("bot_id", ASCENDING), ("created_at", DESCENDING)])
+        db[CALL_EVENT_COLLECTION].create_index([("campaign_id", ASCENDING), ("created_at", DESCENDING)])
+        db[CALL_EVENT_COLLECTION].create_index([("event_type", ASCENDING), ("created_at", DESCENDING)])
+        db[CALL_EVENT_COLLECTION].create_index([("severity", ASCENDING), ("created_at", DESCENDING)])
         db["tbl_ai_vb_phrase_library"].create_index(
             [("category", ASCENDING), ("text", ASCENDING)], unique=True
         )

@@ -44,6 +44,7 @@ import {
   Bot as BotType,
   BotVersion,
   Campaign,
+  CallEvent,
   LangfuseSettings,
   LanguageOption,
   LanguageSettings,
@@ -131,6 +132,7 @@ function App() {
   const [languageSettings, setLanguageSettings] = useState<LanguageSettings[]>([]);
   const [configText, setConfigText] = useState(JSON.stringify(defaultConfig, null, 2));
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
+  const [callEvents, setCallEvents] = useState<CallEvent[]>([]);
   const [selectedTranscriptId, setSelectedTranscriptId] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
@@ -308,6 +310,22 @@ function App() {
       })
       .catch((error) => reportDiagnostic('Bot Versions API', error, 'Keep editing cached config or retry refresh'));
   }, [selectedBot?._id]);
+
+  useEffect(() => {
+    if (!selectedTranscriptId) {
+      setCallEvents([]);
+      return;
+    }
+    api.transcriptEvents(selectedTranscriptId)
+      .then((events) => {
+        setCallEvents(events);
+        clearDiagnostic('Call Events API');
+      })
+      .catch((error) => {
+        setCallEvents([]);
+        reportDiagnostic('Call Events API', error, 'Refresh after the call ends or inspect worker logs');
+      });
+  }, [selectedTranscriptId]);
 
   async function runAction(actionKey: string, label: string, task: () => Promise<void>) {
     setActionState((current) => ({ ...current, [actionKey]: 'running' }));
@@ -694,6 +712,7 @@ function App() {
             <TranscriptsView
               transcripts={filteredTranscripts}
               selectedTranscript={selectedTranscript}
+              callEvents={callEvents}
               searchText={searchText}
               onSearchText={setSearchText}
               onSelect={setSelectedTranscriptId}
@@ -1214,12 +1233,14 @@ function TestCallPanel({
 function TranscriptsView({
   transcripts,
   selectedTranscript,
+  callEvents,
   searchText,
   onSearchText,
   onSelect
 }: {
   transcripts: Transcript[];
   selectedTranscript?: Transcript;
+  callEvents: CallEvent[];
   searchText: string;
   onSearchText: (value: string) => void;
   onSelect: (id: string) => void;
@@ -1271,6 +1292,27 @@ function TranscriptsView({
                 </div>
               ))}
               {!selectedTranscript.transcript?.length && <p className="muted">No transcript turns saved for this call yet.</p>}
+            </div>
+            <div className="timeline-section">
+              <div className="section-heading">
+                <h3>Call timeline</h3>
+                <span>{callEvents.length} events</span>
+              </div>
+              <div className="event-timeline">
+                {callEvents.map((event) => (
+                  <div className={`call-event ${event.severity || 'info'}`} key={event._id}>
+                    <div className="event-time">{formatTime(event.created_at)}</div>
+                    <div>
+                      <strong>{event.event_type}</strong>
+                      <p>{event.message}</p>
+                      {event.details && Object.keys(event.details).length > 0 && (
+                        <small>{summarizeDetails(event.details)}</small>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {!callEvents.length && <p className="muted">No technical timeline events have been stored for this call yet.</p>}
+              </div>
             </div>
           </>
         ) : <p className="muted">Select a transcript to inspect details.</p>}
@@ -2102,6 +2144,20 @@ function formatDate(value?: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function formatTime(value?: string) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function summarizeDetails(details: Record<string, unknown>) {
+  return Object.entries(details)
+    .slice(0, 4)
+    .map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : String(value)}`)
+    .join(' | ');
 }
 
 function average(values: number[]) {

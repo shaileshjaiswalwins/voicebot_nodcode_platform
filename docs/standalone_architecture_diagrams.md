@@ -159,6 +159,7 @@ erDiagram
     BOT_DEFINITIONS ||--o{ CAMPAIGNS : runs
     BOT_VERSIONS ||--o{ CALL_TRANSCRIPTS : snapshots
     CAMPAIGNS ||--o{ CALL_TRANSCRIPTS : produces
+    CALL_TRANSCRIPTS ||--o{ CALL_EVENTS : explains
 
     BOT_DEFINITIONS {
         objectId _id
@@ -197,12 +198,24 @@ erDiagram
         object config_snapshot
         array transcript
     }
+
+    CALL_EVENTS {
+        objectId _id
+        string call_id
+        string room_name
+        string event_type
+        string severity
+        string message
+        object details
+        date created_at
+    }
 ```
 
 Important implementation note:
 
 - `bot_versions.config` is the editable/publishable runtime config.
 - `tbl_ai_vb_call_transcripts.config_snapshot` is immutable evidence of what the bot used during that call.
+- `tbl_ai_vb_call_events` stores the technical call timeline for debugging Gemini, Sarvam, LiveKit, transcript-save, and callback issues.
 
 ## Frontend Handoff
 

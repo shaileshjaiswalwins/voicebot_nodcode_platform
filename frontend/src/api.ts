@@ -95,6 +95,22 @@ export type Transcript = {
   updated_at?: string;
 };
 
+export type CallEvent = {
+  _id: string;
+  call_id?: string;
+  room_name?: string;
+  assistant_id?: string;
+  bot_id?: string;
+  bot_version_id?: string;
+  campaign_id?: string;
+  lead_id?: string;
+  event_type: string;
+  severity: 'info' | 'warning' | 'error' | 'success';
+  message: string;
+  details?: Record<string, unknown>;
+  created_at?: string;
+};
+
 export type Campaign = {
   _id: string;
   campaign_key: string;
@@ -232,6 +248,9 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   transcripts: () => request<Transcript[]>('/api/transcripts'),
+  callEvents: (query = '') => request<CallEvent[]>(`/api/call-events${query}`),
+  transcriptEvents: (transcriptId: string) =>
+    request<CallEvent[]>(`/api/transcripts/${encodeURIComponent(transcriptId)}/events`),
   campaigns: () => request<Campaign[]>('/api/campaigns'),
   voices: () => request<VoiceOption[]>('/api/options/voices'),
   languages: () => request<LanguageOption[]>('/api/options/languages'),

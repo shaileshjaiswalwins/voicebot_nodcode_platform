@@ -10,6 +10,7 @@ from pymongo import ASCENDING
 
 from voicebot_platform.mongo import get_client
 from voicebot_platform.observability import recorder as _observability
+from voicebot_platform.call_events import record_call_event
 
 from .analysis import fallback_analysis, generate_b2b_score, generate_call_analysis
 from .callback import CALLBACK_API_URL, build_callback_payload, send_callback
@@ -27,6 +28,15 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
     lead_id = doc.get("lead_id")
     doc_id = doc["_id"]
     loop = asyncio.get_running_loop()
+    event_context = {
+        "call_id": doc.get("call_id", ""),
+        "room_name": doc.get("room_name", ""),
+        "assistant_id": doc.get("assistant_id", ""),
+        "bot_id": doc.get("bot_id", ""),
+        "bot_version_id": doc.get("bot_version_id", ""),
+        "campaign_id": doc.get("campaign_id", ""),
+        "lead_id": lead_id,
+    }
 
     if not lead_id:
         logger.warning(f"[WORKER] Skipping doc {doc_id} — no lead_id")
@@ -49,17 +59,38 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
 
     transcript = doc.get("transcript") or []
     try:
+        record_call_event(
+            "analysis_started",
+            "info",
+            "Post-call analysis started",
+            event_context,
+            {"doc_id": str(doc_id), "transcript_count": len(transcript)},
+        )
         analysis, b2b_score = await asyncio.gather(
             generate_call_analysis(transcript, status, schema, http_session),
             generate_b2b_score(transcript, http_session),
         )
+        record_call_event(
+            "analysis_succeeded",
+            "success",
+            "Post-call analysis succeeded",
+            event_context,
+            {"doc_id": str(doc_id), "outcome": analysis.get("call_outcome", "")},
+        )
     except Exception as e:
         logger.warning(f"[WORKER] Analysis failed for doc {doc_id}: {e} — using fallback")
+        record_call_event(
+            "analysis_failed",
+            "error",
+            "Post-call analysis failed; fallback analysis used",
+            event_context,
+            {"doc_id": str(doc_id), "error_type": type(e).__name__, "error": str(e)},
+        )
         analysis = fallback_analysis(status)
         b2b_score = {"deal_value": "", "lead_intent_score": "", "urgency_flag": "no"}
 
     payload = build_callback_payload(doc, analysis, b2b_score)
-    ok = await send_callback(payload, http_session, CALLBACK_API_URL)
+    ok = await send_callback(payload, http_session, CALLBACK_API_URL, event_context=event_context)
 
     if ok:
         await loop.run_in_executor(None, lambda: collection.update_one(
@@ -67,6 +98,13 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
             {"$set": {"tagged": True, "tagged_at": datetime.utcnow()}},
         ))
         logger.info(f"[WORKER] Tagged doc {doc_id} | lead_id={lead_id!r}")
+        record_call_event(
+            "transcript_tagged",
+            "success",
+            "Transcript tagged after callback delivery",
+            event_context,
+            {"doc_id": str(doc_id)},
+        )
         _observability.event(
             "callback_sent",
             {

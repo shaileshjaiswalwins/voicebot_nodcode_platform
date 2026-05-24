@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from .audit import RequestLoggingMiddleware
+from .call_events import events_for_transcript, search_call_events
 
 from .config import (
     DASHBOARD_ORIGINS,
@@ -446,6 +447,52 @@ def transcripts(
         limit=limit,
         skip=skip,
     )
+
+
+@app.get("/api/call-events")
+def call_events(
+    call_id: str | None = Query(default=None),
+    room_name: str | None = Query(default=None),
+    bot_id: str | None = Query(default=None),
+    campaign_id: str | None = Query(default=None),
+    lead_id: str | None = Query(default=None),
+    event_type: str | None = Query(default=None),
+    severity: str | None = Query(default=None),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    skip: int = Query(default=0, ge=0),
+):
+    try:
+        return search_call_events(
+            {
+                "call_id": call_id,
+                "room_name": room_name,
+                "bot_id": bot_id,
+                "campaign_id": campaign_id,
+                "lead_id": lead_id,
+                "event_type": event_type,
+                "severity": severity,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            limit=limit,
+            skip=skip,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/transcripts/{transcript_id}/events")
+def transcript_events(transcript_id: str, limit: int = Query(default=200, ge=1, le=500)):
+    try:
+        assert_object_id(transcript_id, "transcript_id")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    doc = get_transcript(transcript_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="transcript_not_found")
+    return events_for_transcript(doc, limit=limit)
 
 
 @app.get("/api/transcripts/{transcript_id}")

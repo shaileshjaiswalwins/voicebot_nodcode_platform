@@ -840,6 +840,86 @@ label.full {
   background: #f2f8ff;
 }
 
+.timeline-section {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #edf1f5;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.section-heading h3 {
+  font-size: 15px;
+}
+
+.section-heading span {
+  color: #657284;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.event-timeline {
+  display: grid;
+  gap: 9px;
+  margin-top: 12px;
+}
+
+.call-event {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #e6ecf2;
+  border-left: 4px solid #8aa0b8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.call-event.success {
+  border-left-color: #14804a;
+}
+
+.call-event.warning {
+  border-left-color: #b76e00;
+}
+
+.call-event.error {
+  border-left-color: #c93535;
+  background: #fff8f8;
+}
+
+.event-time {
+  color: #657284;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.call-event strong {
+  display: block;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.call-event p {
+  margin-top: 3px;
+  color: #243244;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.call-event small {
+  display: block;
+  margin-top: 5px;
+  color: #657284;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
 .timeline {
   display: grid;
   gap: 10px;

@@ -6,6 +6,8 @@ import json
 import aiohttp
 from loguru import logger
 
+from voicebot_platform.call_events import record_call_event
+
 from .analysis import DISPOSITION_MAP, fuzzy_match_opt_id, status_to_outcome
 from .config import CALLBACK_API_URL
 
@@ -14,6 +16,7 @@ async def send_callback(
     payload: dict,
     http_session: aiohttp.ClientSession,
     callback_api_url: str = CALLBACK_API_URL,
+    event_context: dict | None = None,
 ) -> bool:
     """Send callback with up to 3 attempts (2s, 4s backoff). Returns True on success."""
     delays = [0, 2, 4]
@@ -21,6 +24,13 @@ async def send_callback(
         if delay:
             await asyncio.sleep(delay)
         try:
+            record_call_event(
+                "callback_attempt_started",
+                "info",
+                "Callback delivery attempt started",
+                event_context or {},
+                {"attempt": attempt, "callback_api_url": callback_api_url},
+            )
             logger.info(
                 f"[CALLBACK] Sending to {callback_api_url} (attempt {attempt}/3) | "
                 f"payload={json.dumps(payload, ensure_ascii=False)}"
@@ -31,12 +41,40 @@ async def send_callback(
                 body = await resp.text()
                 if resp.status not in (200, 201):
                     logger.warning(f"[CALLBACK] attempt {attempt} — {resp.status}: {body[:300]}")
+                    record_call_event(
+                        "callback_attempt_failed",
+                        "warning",
+                        "Callback endpoint returned a non-success status",
+                        event_context or {},
+                        {"attempt": attempt, "status_code": resp.status, "body": body[:300]},
+                    )
                 else:
                     logger.info(f"[CALLBACK] attempt {attempt} — {resp.status} OK: {body[:300]}")
+                    record_call_event(
+                        "callback_delivered",
+                        "success",
+                        "Callback delivered successfully",
+                        event_context or {},
+                        {"attempt": attempt, "status_code": resp.status, "body": body[:300]},
+                    )
                     return True
         except Exception as e:
             logger.error(f"[CALLBACK] attempt {attempt} failed: {type(e).__name__}: {e}")
+            record_call_event(
+                "callback_attempt_failed",
+                "warning",
+                "Callback delivery attempt raised an error",
+                event_context or {},
+                {"attempt": attempt, "error_type": type(e).__name__, "error": str(e)},
+            )
     logger.error("[CALLBACK] All 3 attempts failed — callback not delivered")
+    record_call_event(
+        "callback_exhausted",
+        "error",
+        "All callback delivery attempts failed",
+        event_context or {},
+        {"attempts": len(delays), "callback_api_url": callback_api_url},
+    )
     return False
 
 
