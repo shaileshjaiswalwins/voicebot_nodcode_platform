@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from bson import ObjectId
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 from .config import (
     BOT_COLLECTION,
@@ -191,27 +192,41 @@ def get_bot(bot_id: str) -> dict[str, Any] | None:
     return serialize_doc({"bot": bot, "versions": versions})
 
 
+def _next_version_number(db, bot_obj_id: ObjectId) -> int:
+    latest = db[BOT_VERSION_COLLECTION].find_one({"bot_id": bot_obj_id}, sort=[("version", -1)])
+    return int((latest or {}).get("version", 0)) + 1
+
+
 def save_draft(bot_id: str, payload: dict[str, Any], user: str) -> dict[str, Any]:
     db = get_db()
     bot_obj_id = ObjectId(bot_id)
     bot = db[BOT_COLLECTION].find_one({"_id": bot_obj_id})
     if not bot:
         raise KeyError("bot_not_found")
-    latest = db[BOT_VERSION_COLLECTION].find_one({"bot_id": bot_obj_id}, sort=[("version", -1)])
-    next_version = int((latest or {}).get("version", 0)) + 1
     config = _clean_config(payload.get("config") or {})
     config["assistant_id"] = bot["assistant_id"]
+
+    version_id = None
     now = _now()
-    draft = {
-        "bot_id": bot_obj_id,
-        "version": next_version,
-        "state": "draft",
-        "config": config,
-        "created_by": user,
-        "created_at": now,
-        "notes": payload.get("notes", ""),
-    }
-    version_id = db[BOT_VERSION_COLLECTION].insert_one(draft).inserted_id
+    for attempt in range(3):
+        draft = {
+            "bot_id": bot_obj_id,
+            "version": _next_version_number(db, bot_obj_id),
+            "state": "draft",
+            "config": config,
+            "created_by": user,
+            "created_at": now,
+            "notes": payload.get("notes", ""),
+        }
+        try:
+            version_id = db[BOT_VERSION_COLLECTION].insert_one(draft).inserted_id
+            break
+        except DuplicateKeyError:
+            if attempt == 2:
+                raise
+    if version_id is None:
+        raise RuntimeError("draft_version_insert_failed")
+
     db[BOT_COLLECTION].update_one(
         {"_id": bot_obj_id},
         {"$set": {"draft_version_id": version_id, "status": "draft", "updated_at": now}},

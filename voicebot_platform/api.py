@@ -9,7 +9,14 @@ from loguru import logger
 
 from .audit import RequestLoggingMiddleware
 
-from .config import DASHBOARD_ORIGINS, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL
+from .config import (
+    DASHBOARD_ORIGINS,
+    LIVEKIT_API_KEY,
+    LIVEKIT_API_SECRET,
+    LIVEKIT_URL,
+    VOICEBOT_ENV,
+    validate_startup_config,
+)
 from .config_store import (
     create_bot,
     create_test_session,
@@ -74,6 +81,7 @@ from .platform_settings import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_startup_config(strict=VOICEBOT_ENV == "prod")
     try:
         ensure_indexes()
     except Exception as exc:
@@ -146,6 +154,7 @@ def health_ready():
         "mongo": {"ok": mongo_ok, "error": mongo_error},
         "livekit": {"configured": livekit_configured, "url": LIVEKIT_URL or None},
         "langfuse": recorder.status(),
+        "config_warnings": validate_startup_config(strict=False),
     }
     if not mongo_ok:
         raise HTTPException(status_code=503, detail=body)

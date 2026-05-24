@@ -13,7 +13,7 @@ from voicebot_platform.observability import recorder as _observability
 
 from .analysis import fallback_analysis, generate_b2b_score, generate_call_analysis
 from .callback import CALLBACK_API_URL, build_callback_payload, send_callback
-from .config import BATCH_LIMIT, MONGO_COLLECTION, MONGO_DB, MONGO_URI, POLL_INTERVAL_SEC
+from .config import BATCH_LIMIT, MONGO_COLLECTION, MONGO_DB, POLL_INTERVAL_SEC
 
 _stop = asyncio.Event()
 
@@ -110,7 +110,10 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal)
 
-    logger.info(f"[WORKER] Starting | mongo={MONGO_URI} | db={MONGO_DB} | collection={MONGO_COLLECTION} | poll={POLL_INTERVAL_SEC}s | batch={BATCH_LIMIT}")
+    logger.info(
+        f"[WORKER] Starting | mongo=<configured> | db={MONGO_DB} | "
+        f"collection={MONGO_COLLECTION} | poll={POLL_INTERVAL_SEC}s | batch={BATCH_LIMIT}"
+    )
 
     client = get_client()
     collection = client[MONGO_DB][MONGO_COLLECTION]
