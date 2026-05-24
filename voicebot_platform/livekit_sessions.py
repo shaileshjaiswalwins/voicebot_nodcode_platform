@@ -42,16 +42,30 @@ def _require_livekit_config() -> None:
         )
 
 
-async def create_webrtc_test_room(room_metadata: dict, user: str) -> dict:
+async def create_webrtc_test_room(
+    room_metadata: dict,
+    user: str,
+    *,
+    agent_name_override: str | None = None,
+) -> dict:
     _require_livekit_config()
     loop = asyncio.get_running_loop()
     runtime = await loop.run_in_executor(None, get_runtime_settings)
     livekit_api_url = runtime.get("livekit_api_url") or LIVEKIT_URL
     livekit_browser_url = runtime.get("livekit_browser_url") or LIVEKIT_URL
-    livekit_agent_name = runtime.get("livekit_agent_name") or "voice-bot-justdial"
+    livekit_agent_name = (
+        (agent_name_override or "").strip()
+        or runtime.get("livekit_agent_name")
+        or "voice-bot-justdial"
+    )
 
     room_name = f"test-{room_metadata['assistant_id'][:8]}-{uuid4().hex[:10]}"
-    metadata = {**room_metadata, "room_name": room_name, "test_session": True}
+    metadata = {
+        **room_metadata,
+        "room_name": room_name,
+        "test_session": True,
+        "dispatched_agent_name": livekit_agent_name,
+    }
     metadata_json = json.dumps(metadata, ensure_ascii=False)
 
     livekit = LiveKitAPI(

@@ -97,6 +97,7 @@ type TestForm = {
   srchterm: string;
   buyer_name: string;
   city: string;
+  test_worker_agent_name: string;
 };
 
 const defaultConfig: RuntimeConfig = {
@@ -143,7 +144,8 @@ function App() {
     mobile: '',
     srchterm: 'air conditioner',
     buyer_name: 'Test User',
-    city: 'Mumbai'
+    city: 'Mumbai',
+    test_worker_agent_name: ''
   });
   const [testStatus, setTestStatus] = useState('Idle');
   const [testError, setTestError] = useState('');
@@ -153,6 +155,15 @@ function App() {
   const localTrackRef = useRef<LocalAudioTrack | null>(null);
   const remoteAudioRef = useRef<HTMLDivElement | null>(null);
   const subscribedTracksRef = useRef<Set<RemoteTrack>>(new Set());
+
+  useEffect(() => {
+    if (!runtimeSettings?.livekit_agent_name) return;
+    setTestForm((current) => (
+      current.test_worker_agent_name
+        ? current
+        : { ...current, test_worker_agent_name: runtimeSettings.livekit_agent_name }
+    ));
+  }, [runtimeSettings?.livekit_agent_name]);
 
   const selectedBot = useMemo(
     () => bots.find((bot) => bot._id === selectedBotId) || bots[0],
@@ -660,7 +671,11 @@ function App() {
         {view === 'test' && (
           <ResilientPanel name="WebRTC Test" onDiagnostic={reportDiagnostic}>
             <TestCallPanel
+              bots={bots}
               selectedBot={selectedBot}
+              selectedBotId={selectedBot?._id || ''}
+              onSelectBot={setSelectedBotId}
+              runtimeSettings={runtimeSettings}
               form={testForm}
               setForm={setTestForm}
               status={testStatus}
@@ -1079,7 +1094,11 @@ function CampaignsView({ campaigns, bots }: { campaigns: Campaign[]; bots: BotTy
 }
 
 function TestCallPanel({
+  bots,
   selectedBot,
+  selectedBotId,
+  onSelectBot,
+  runtimeSettings,
   form,
   setForm,
   status,
@@ -1090,7 +1109,11 @@ function TestCallPanel({
   onStart,
   onStop
 }: {
+  bots: BotType[];
   selectedBot?: BotType;
+  selectedBotId: string;
+  onSelectBot: (botId: string) => void;
+  runtimeSettings: RuntimeSettings | null;
   form: TestForm;
   setForm: React.Dispatch<React.SetStateAction<TestForm>>;
   status: string;
@@ -1105,6 +1128,9 @@ function TestCallPanel({
     setForm((current) => ({ ...current, [key]: value }));
   }
 
+  const defaultWorker = runtimeSettings?.livekit_agent_name || 'voice-bot-justdial';
+  const effectiveWorker = form.test_worker_agent_name || defaultWorker;
+
   return (
     <section className="test-grid">
       <div className="panel">
@@ -1115,6 +1141,21 @@ function TestCallPanel({
           </div>
           <PhoneCall size={20} />
         </div>
+        <div className="test-context">
+          <div>
+            <span>Dashboard agent</span>
+            <select value={selectedBotId} onChange={(event) => onSelectBot(event.target.value)}>
+              {bots.map((bot) => <option key={bot._id} value={bot._id}>{bot.name}</option>)}
+            </select>
+            <small>{selectedBot?.assistant_id || 'Select an agent to test'}</small>
+          </div>
+          <ChevronRight size={18} />
+          <div>
+            <span>LiveKit worker for this test</span>
+            <strong>{effectiveWorker}</strong>
+            <small>Override here. No SSH or server restart needed.</small>
+          </div>
+        </div>
         <div className="form-grid">
           <label>Campaign ID<input value={form.campaign_id} onChange={(event) => updateField('campaign_id', event.target.value)} /></label>
           <label>Lead ID<input value={form.lead_id} onChange={(event) => updateField('lead_id', event.target.value)} placeholder="optional for local test" /></label>
@@ -1123,6 +1164,19 @@ function TestCallPanel({
           <label>Product / Search Term<input value={form.srchterm} onChange={(event) => updateField('srchterm', event.target.value)} /></label>
           <label>Buyer Name<input value={form.buyer_name} onChange={(event) => updateField('buyer_name', event.target.value)} /></label>
           <label>City<input value={form.city} onChange={(event) => updateField('city', event.target.value)} /></label>
+          <label>
+            Worker agent name for this test
+            <input
+              value={form.test_worker_agent_name}
+              onChange={(event) => updateField('test_worker_agent_name', event.target.value)}
+              placeholder={defaultWorker}
+            />
+          </label>
+        </div>
+        <div className="quick-actions">
+          <button onClick={() => updateField('test_worker_agent_name', 'voice-bot-justdial-test')}>Use safe test worker</button>
+          <button onClick={() => updateField('test_worker_agent_name', defaultWorker)}>Use saved default</button>
+          <button onClick={() => setForm((current) => ({ ...current, call_id: `TEST-${Date.now()}` }))}>New call ID</button>
         </div>
         <div className="button-row">
           <button className={error ? 'fallback-button' : 'primary'} onClick={onStart} disabled={!selectedBot || status.includes('Creating') || status.includes('Connecting')}>
@@ -1134,6 +1188,7 @@ function TestCallPanel({
       <div className="panel status-panel">
         <h2>Connection checklist</h2>
         <ConnectionLine icon={<Database />} label="Backend room" value={roomName || 'Not created'} done={Boolean(roomName)} />
+        <ConnectionLine icon={<Bot />} label="Dispatched worker" value={effectiveWorker} done={Boolean(effectiveWorker)} />
         <ConnectionLine icon={<Wifi />} label="LiveKit socket" value={status} done={!status.toLowerCase().includes('failed') && status !== 'Idle'} />
         <ConnectionLine icon={<Mic />} label="Microphone" value={status.includes('Microphone') || remoteAudioReady ? 'Requested' : 'Waiting'} done={status.includes('Microphone') || remoteAudioReady} />
         <ConnectionLine icon={<Volume2 />} label="Bot audio" value={remoteAudioReady ? 'Connected' : 'Waiting'} done={remoteAudioReady} />

@@ -388,7 +388,11 @@ async def webrtc_test_session(
         session = create_test_session(
             bot_id, payload.model_dump(exclude_none=True), current_user(x_jd_user)
         )
-        return await create_webrtc_test_room(session["room_metadata"], current_user(x_jd_user))
+        return await create_webrtc_test_room(
+            session["room_metadata"],
+            current_user(x_jd_user),
+            agent_name_override=payload.test_worker_agent_name,
+        )
     except LiveKitConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except KeyError as exc:

@@ -690,6 +690,49 @@ label.full {
   gap: 16px;
 }
 
+.test-context {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid #d9e7f6;
+  border-radius: 8px;
+  background: #f5f9fe;
+}
+
+.test-context span,
+.test-context small {
+  display: block;
+  color: #647285;
+  font-size: 12px;
+}
+
+.test-context strong {
+  display: block;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.test-context small {
+  margin-top: 3px;
+  line-height: 1.35;
+}
+
+.quick-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+.quick-actions button {
+  min-height: 34px;
+  font-size: 12px;
+}
+
 .status-panel {
   display: grid;
   align-content: start;

@@ -347,6 +347,7 @@ def create_test_session(bot_id: str, payload: dict[str, Any], user: str) -> dict
         "srchterm": payload.get("srchterm", ""),
         "buyer_name": payload.get("buyer_name", "Customer"),
         "city": payload.get("city", ""),
+        "test_worker_agent_name": payload.get("test_worker_agent_name", ""),
         "test_session": True,
     }
     return {

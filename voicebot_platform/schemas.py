@@ -191,6 +191,16 @@ class TestSessionPayload(BaseModel):
     srchterm: str | None = Field(default=None, max_length=500)
     buyer_name: str | None = Field(default=None, max_length=200)
     city: str | None = Field(default=None, max_length=200)
+    test_worker_agent_name: str | None = Field(default=None, max_length=80)
+
+    @field_validator("test_worker_agent_name")
+    @classmethod
+    def _test_worker_agent_name(cls, v):
+        if v is None or v == "":
+            return v
+        if not _AGENT_NAME_RE.match(v):
+            raise ValueError("test_worker_agent_name must be alphanumeric (plus . _ -) and 1-80 chars")
+        return v
 
 
 class LangfuseUpdatePayload(BaseModel):
