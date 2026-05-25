@@ -2119,6 +2119,13 @@ function friendlyApiError(error: unknown) {
 
 function friendlyTestError(error: unknown) {
   const raw = error instanceof Error ? error.message : String(error);
+  const apiBase = import.meta.env.VITE_API_BASE || 'the Vite /api proxy';
+  if (raw.toLowerCase().includes('failed to fetch')) {
+    return `Cannot reach the FastAPI backend at ${apiBase}. Start the local API on port 8010 or open the SSH tunnel, then refresh and retry.`;
+  }
+  if (raw.toLowerCase().includes('network timeout')) {
+    return `${raw}. The backend is reachable but too slow; check Mongo/LiveKit connectivity and backend logs before retrying.`;
+  }
   if (raw.includes('LiveKit is not configured')) {
     return 'LiveKit is not configured on the backend. Ask backend/infra to set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET in .env, then restart ./start_api.sh.';
   }
