@@ -11,6 +11,8 @@ from livekit.api import (
     DeleteRoomRequest,
     LiveKitAPI,
     RoomAgentDispatch,
+    TwirpError,
+    TwirpErrorCode,
     VideoGrants,
 )
 from livekit.api.twirp_client import TwirpError, TwirpErrorCode
@@ -153,26 +155,21 @@ async def close_webrtc_test_room(room_name: str) -> dict:
         api_key=LIVEKIT_API_KEY,
         api_secret=LIVEKIT_API_SECRET,
     )
+    already_gone = False
     try:
-        try:
-            await livekit.room.delete_room(DeleteRoomRequest(room=room_name))
-        except Exception as exc:
-            if not _is_livekit_room_not_found(exc):
-                raise
-            return {
-                "room_name": room_name,
-                "status": "already_closed",
-                "next_steps": [
-                    "LiveKit already removed this test room.",
-                    "Refresh transcripts after a few seconds to confirm the worker saved the call.",
-                ],
-            }
+        await livekit.room.delete_room(DeleteRoomRequest(room=room_name))
+    except TwirpError as exc:
+        if exc.code == TwirpErrorCode.NOT_FOUND:
+            # Room was already deleted (expired or closed by another request) — treat as success.
+            already_gone = True
+        else:
+            raise
     finally:
         await livekit.aclose()
 
     return {
         "room_name": room_name,
-        "status": "close_requested",
+        "status": "already_closed" if already_gone else "close_requested",
         "next_steps": [
             "LiveKit disconnects the browser and bot participants.",
             "The bot worker saves the transcript when it receives the room disconnect.",
