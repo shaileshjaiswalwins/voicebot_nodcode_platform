@@ -128,6 +128,8 @@ def build_callback_payload(doc: dict, analysis: dict, b2b_score: dict | None = N
         "call_duration": doc.get("call_duration_sec", 0),
         "call_start_time": _fmt_ts(doc.get("call_start_time")),
         "call_end_time": _fmt_ts(doc.get("call_end_time")),
+        "transcript": doc.get("transcript") or [],
+        "muted_transcript": doc.get("muted_transcript") or [],
     }
     payload["rescheduled_to"] = analysis.get("rescheduled_to", "") or ""
 
