@@ -26,6 +26,11 @@ class LiveKitConfigError(RuntimeError):
     pass
 
 
+def _is_livekit_room_not_found(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "not_found" in message or "requested room does not exist" in message
+
+
 def _require_livekit_config() -> None:
     missing = [
         name
@@ -146,7 +151,19 @@ async def close_webrtc_test_room(room_name: str) -> dict:
         api_secret=LIVEKIT_API_SECRET,
     )
     try:
-        await livekit.room.delete_room(DeleteRoomRequest(room=room_name))
+        try:
+            await livekit.room.delete_room(DeleteRoomRequest(room=room_name))
+        except Exception as exc:
+            if not _is_livekit_room_not_found(exc):
+                raise
+            return {
+                "room_name": room_name,
+                "status": "already_closed",
+                "next_steps": [
+                    "LiveKit already removed this test room.",
+                    "Refresh transcripts after a few seconds to confirm the worker saved the call.",
+                ],
+            }
     finally:
         await livekit.aclose()
 
