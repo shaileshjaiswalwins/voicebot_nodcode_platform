@@ -73,7 +73,9 @@ def fetch_active_bot_config(assistant_id: str) -> dict[str, Any] | None:
     if not assistant_id:
         return None
     db = get_db()
-    bot = db[BOT_COLLECTION].find_one({"assistant_id": assistant_id, "status": {"$ne": "archived"}})
+    bot = db[BOT_COLLECTION].find_one(
+        {"assistant_id": assistant_id, "status": {"$nin": ["archived", "deleted"]}}
+    )
     if not bot or not bot.get("active_version_id"):
         return None
     version = db[BOT_VERSION_COLLECTION].find_one({"_id": bot["active_version_id"], "state": "published"})
@@ -148,7 +150,7 @@ def seed_default_bot(default_config: dict[str, Any], user: str = DEFAULT_USER) -
 
 
 def list_bots() -> list[dict[str, Any]]:
-    docs = list(get_db()[BOT_COLLECTION].find().sort("updated_at", -1))
+    docs = list(get_db()[BOT_COLLECTION].find({"status": {"$ne": "deleted"}}).sort("updated_at", -1))
     return serialize_doc(docs)
 
 
@@ -301,6 +303,31 @@ def duplicate_bot(bot_id: str, user: str) -> dict[str, Any]:
         },
         user,
     )
+
+
+def delete_bot(bot_id: str, user: str) -> dict[str, Any]:
+    db = get_db()
+    bot_obj_id = ObjectId(bot_id)
+    bot = db[BOT_COLLECTION].find_one({"_id": bot_obj_id, "status": {"$ne": "deleted"}})
+    if not bot:
+        raise KeyError("bot_not_found")
+    now = _now()
+    db[BOT_COLLECTION].update_one(
+        {"_id": bot_obj_id},
+        {
+            "$set": {
+                "status": "deleted",
+                "deleted_at": now,
+                "deleted_by": user,
+                "updated_at": now,
+            },
+            "$unset": {
+                "active_version_id": "",
+                "draft_version_id": "",
+            },
+        },
+    )
+    return serialize_doc(db[BOT_COLLECTION].find_one({"_id": bot_obj_id}))
 
 
 def list_templates() -> list[dict[str, Any]]:

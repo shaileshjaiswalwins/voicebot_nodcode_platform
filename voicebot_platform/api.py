@@ -21,6 +21,7 @@ from .config import (
 from .config_store import (
     create_bot,
     create_test_session,
+    delete_bot,
     duplicate_bot,
     fetch_active_bot_config,
     get_bot,
@@ -355,6 +356,16 @@ def duplicate(bot_id: str, x_jd_user: str | None = Header(default=None)):
     _validate_bot_id(bot_id)
     try:
         return duplicate_bot(bot_id, current_user(x_jd_user))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/api/bots/{bot_id}")
+def delete_bot_endpoint(bot_id: str, x_jd_user: str | None = Header(default=None)):
+    _validate_bot_id(bot_id)
+    try:
+        delete_bot(bot_id, current_user(x_jd_user))
+        return {"status": "deleted", "bot_id": bot_id}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

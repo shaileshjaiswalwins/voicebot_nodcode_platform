@@ -60,6 +60,7 @@ import {
 import './styles.css';
 
 type View = 'bots' | 'builder' | 'campaigns' | 'test' | 'transcripts' | 'observability' | 'library' | 'settings';
+type AgentWorkspaceMode = 'list' | 'builder';
 type DiagnosticSeverity = 'info' | 'warning' | 'error';
 
 type Diagnostic = {
@@ -121,6 +122,7 @@ const defaultConfig: RuntimeConfig = {
 
 function App() {
   const [view, setView] = useState<View>('bots');
+  const [agentWorkspaceMode, setAgentWorkspaceMode] = useState<AgentWorkspaceMode>('list');
   const [bots, setBots] = useState<BotType[]>([]);
   const [selectedBotId, setSelectedBotId] = useState('');
   const [versions, setVersions] = useState<BotVersion[]>([]);
@@ -158,6 +160,7 @@ function App() {
   const [testRoomName, setTestRoomName] = useState('');
   const [testChatMessage, setTestChatMessage] = useState('');
   const [micEnabled, setMicEnabled] = useState(false);
+  const [deleteCandidate, setDeleteCandidate] = useState<BotType | null>(null);
   const [remoteAudioReady, setRemoteAudioReady] = useState(false);
   const livekitRoomRef = useRef<Room | null>(null);
   const localTrackRef = useRef<LocalAudioTrack | null>(null);
@@ -365,8 +368,23 @@ function App() {
         config: defaultConfig
       });
       setSelectedBotId(bot._id);
-      setView('builder');
+      setView('bots');
+      setAgentWorkspaceMode('builder');
       setMessage('Draft bot created. Add prompt details, save draft, then publish.');
+      await refresh();
+    });
+  }
+
+  async function deleteAgent(bot: BotType) {
+    await runAction('deleteAgent', 'Delete Agent', async () => {
+      await api.deleteBot(bot._id);
+      setDeleteCandidate(null);
+      setAgentWorkspaceMode('list');
+      if (selectedBotId === bot._id) {
+        const nextBot = bots.find((item) => item._id !== bot._id);
+        setSelectedBotId(nextBot?._id || '');
+      }
+      setMessage(`Deleted ${bot.name}. Historical transcripts remain available for audit.`);
       await refresh();
     });
   }
@@ -654,7 +672,6 @@ function App() {
         </div>
         <div className="nav-group">
           <NavButton icon={<Bot />} label="Agents" active={view === 'bots'} onClick={() => setView('bots')} />
-          <NavButton icon={<Braces />} label="Builder" active={view === 'builder'} onClick={() => setView('builder')} />
           <NavButton icon={<Megaphone />} label="Campaigns" active={view === 'campaigns'} onClick={() => setView('campaigns')} />
           <NavButton icon={<Play />} label="Test Call" active={view === 'test'} onClick={() => setView('test')} />
           <NavButton icon={<FileText />} label="Transcripts" active={view === 'transcripts'} onClick={() => setView('transcripts')} />
@@ -706,35 +723,39 @@ function App() {
 
         {view === 'bots' && (
           <ResilientPanel name="Agents" onDiagnostic={reportDiagnostic}>
-            <BotsView
-              bots={bots}
-              selectedBot={selectedBot}
-              transcripts={transcripts}
-              onSelect={(botId) => { setSelectedBotId(botId); setView('builder'); }}
-            />
-          </ResilientPanel>
-        )}
-
-        {view === 'builder' && (
-          <ResilientPanel name="Builder" onDiagnostic={reportDiagnostic}>
-            <BuilderView
-              selectedBot={selectedBot}
-              versions={versions}
-              activeVersion={activeVersion}
-              latestDraft={latestDraft}
-              publishedCount={publishedCount}
-              config={parsedConfig}
-              configText={configText}
-              voices={voices.length ? voices : cacheGet<VoiceOption[]>('voices', [])}
-              languages={languages.length ? languages : cacheGet<LanguageOption[]>('languages', [])}
-              onConfigTextChange={setConfigText}
-              onUpdateConfig={updateConfig}
-              onUpdateLanguage={updateLanguage}
-              onSaveDraft={saveDraft}
-              onPublish={publishDraft}
-              saveState={actionState.saveDraft}
-              publishState={actionState.publishDraft}
-            />
+            {agentWorkspaceMode === 'builder' ? (
+              <BuilderView
+                selectedBot={selectedBot}
+                versions={versions}
+                activeVersion={activeVersion}
+                latestDraft={latestDraft}
+                publishedCount={publishedCount}
+                config={parsedConfig}
+                configText={configText}
+                voices={voices.length ? voices : cacheGet<VoiceOption[]>('voices', [])}
+                languages={languages.length ? languages : cacheGet<LanguageOption[]>('languages', [])}
+                onConfigTextChange={setConfigText}
+                onUpdateConfig={updateConfig}
+                onUpdateLanguage={updateLanguage}
+                onSaveDraft={saveDraft}
+                onPublish={publishDraft}
+                saveState={actionState.saveDraft}
+                publishState={actionState.publishDraft}
+                onBack={() => setAgentWorkspaceMode('list')}
+              />
+            ) : (
+              <BotsView
+                bots={bots}
+                selectedBot={selectedBot}
+                transcripts={transcripts}
+                onSelect={setSelectedBotId}
+                onEdit={(botId) => {
+                  setSelectedBotId(botId);
+                  setAgentWorkspaceMode('builder');
+                }}
+                onDelete={(bot) => setDeleteCandidate(bot)}
+              />
+            )}
           </ResilientPanel>
         )}
 
@@ -814,6 +835,14 @@ function App() {
           <ResilientPanel name="Settings" onDiagnostic={reportDiagnostic}>
             <SettingsView runtimeSettings={runtimeSettings} onUpdateRuntime={updateRuntime} />
           </ResilientPanel>
+        )}
+        {deleteCandidate && (
+          <DeleteAgentDialog
+            bot={deleteCandidate}
+            busy={actionState.deleteAgent === 'running'}
+            onCancel={() => setDeleteCandidate(null)}
+            onConfirm={() => deleteAgent(deleteCandidate)}
+          />
         )}
       </main>
     </div>
@@ -929,11 +958,13 @@ function Kpi({ icon, label, value, helper }: { icon: React.ReactNode; label: str
   );
 }
 
-function BotsView({ bots, selectedBot, transcripts, onSelect }: {
+function BotsView({ bots, selectedBot, transcripts, onSelect, onEdit, onDelete }: {
   bots: BotType[];
   selectedBot?: BotType;
   transcripts: Transcript[];
   onSelect: (botId: string) => void;
+  onEdit: (botId: string) => void;
+  onDelete: (bot: BotType) => void;
 }) {
   return (
     <section className="content-grid two-col">
@@ -946,7 +977,7 @@ function BotsView({ bots, selectedBot, transcripts, onSelect }: {
         </div>
         <table>
           <thead>
-            <tr><th>Name</th><th>Status</th><th>Assistant</th><th>Updated</th><th /></tr>
+            <tr><th>Name</th><th>Status</th><th>Assistant</th><th>Updated</th><th>Actions</th></tr>
           </thead>
           <tbody>
             {bots.map((bot) => (
@@ -958,7 +989,12 @@ function BotsView({ bots, selectedBot, transcripts, onSelect }: {
                 <td><StatusPill value={bot.status} /></td>
                 <td><code>{shortId(bot.assistant_id)}</code></td>
                 <td>{formatDate(bot.updated_at)}</td>
-                <td><ChevronRight size={16} /></td>
+                <td>
+                  <div className="table-actions">
+                    <button onClick={(event) => { event.stopPropagation(); onEdit(bot._id); }}><Braces size={14} /> Edit</button>
+                    <button className="danger-button" onClick={(event) => { event.stopPropagation(); onDelete(bot); }}><Trash2 size={14} /> Delete</button>
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -983,8 +1019,59 @@ function BotsView({ bots, selectedBot, transcripts, onSelect }: {
           <ShieldCheck size={18} />
           Live calls keep their original published config snapshot. Publishing changes affects only new calls.
         </div>
+        {selectedBot && (
+          <div className="button-row">
+            <button className="primary" onClick={() => onEdit(selectedBot._id)}><Braces size={16} /> Edit agent</button>
+            <button className="danger-button" onClick={() => onDelete(selectedBot)}><Trash2 size={16} /> Delete agent</button>
+          </div>
+        )}
       </div>
     </section>
+  );
+}
+
+function DeleteAgentDialog({
+  bot,
+  busy,
+  onCancel,
+  onConfirm
+}: {
+  bot: BotType;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const [confirmText, setConfirmText] = useState('');
+  const canDelete = confirmText.trim() === bot.name;
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal-panel critical" role="dialog" aria-modal="true" aria-labelledby="delete-agent-title">
+        <div className="modal-icon"><AlertTriangle size={22} /></div>
+        <div>
+          <h2 id="delete-agent-title">Delete agent?</h2>
+          <p>
+            This removes <strong>{bot.name}</strong> from active dashboard use and disables its runtime config lookup.
+            Existing transcripts and historical call records stay available for audit.
+          </p>
+          <label>
+            Type the agent name to confirm
+            <input
+              value={confirmText}
+              onChange={(event) => setConfirmText(event.target.value)}
+              placeholder={bot.name}
+              autoFocus
+            />
+          </label>
+          <div className="button-row">
+            <button onClick={onCancel} disabled={busy}>Cancel</button>
+            <button className="danger-button" onClick={onConfirm} disabled={!canDelete || busy}>
+              <Trash2 size={16} /> {busy ? 'Deleting...' : 'Delete agent'}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1003,6 +1090,7 @@ function BuilderView({
   onUpdateLanguage,
   onSaveDraft,
   onPublish,
+  onBack,
   saveState,
   publishState
 }: {
@@ -1020,6 +1108,7 @@ function BuilderView({
   onUpdateLanguage: (value: string) => void;
   onSaveDraft: () => void;
   onPublish: () => void;
+  onBack?: () => void;
   saveState?: 'idle' | 'running' | 'failed';
   publishState?: 'idle' | 'running' | 'failed';
 }) {
@@ -1034,6 +1123,7 @@ function BuilderView({
               <p>PMs edit the spoken behavior here. Developers can use the JSON panel for advanced runtime settings.</p>
             </div>
             <div className="button-row">
+              {onBack && <button onClick={onBack}><ChevronRight className="rotate-180" size={16} /> Back to agents</button>}
               <button disabled={!config.ok || saveState === 'running'} onClick={onSaveDraft}>
                 <Save size={16} /> {saveState === 'failed' ? 'Retry save draft' : saveState === 'running' ? 'Saving...' : 'Save draft'}
               </button>
@@ -2285,7 +2375,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 function titleFor(view: View) {
   return {
     bots: 'Agents',
-    builder: 'Agent Builder',
+    builder: 'Agents',
     campaigns: 'Campaigns',
     test: 'WebRTC Test Call',
     transcripts: 'Transcripts',
@@ -2297,8 +2387,8 @@ function titleFor(view: View) {
 
 function subtitleFor(view: View) {
   return {
-    bots: 'Manage outbound-first voice agents and active published versions.',
-    builder: 'Edit prompts, voice, language, and runtime settings safely.',
+    bots: 'Manage, edit, publish, and safely delete voice agents.',
+    builder: 'Manage, edit, publish, and safely delete voice agents.',
     campaigns: 'Connect one bot to one campaign and its lead/callback APIs.',
     test: 'Start a controlled browser call with helpful connection diagnostics.',
     transcripts: 'Inspect raw call transcripts, outcomes, and config snapshots.',

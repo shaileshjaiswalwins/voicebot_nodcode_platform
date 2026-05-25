@@ -127,3 +127,18 @@ def test_duplicate_bot_clones_published_config():
     assert dup["name"] == "Original Copy"
     dup_bundle = config_store.get_bot(dup["_id"])
     assert dup_bundle["versions"][0]["config"]["model"] == "gemini-3.1-flash-live-preview"
+
+
+def test_delete_bot_hides_bot_and_disables_active_runtime_config():
+    bot = config_store.create_bot({"name": "DeleteMe", "assistant_id": "asst-delete", "config": _minimal_config()}, "alice")
+    bot_id = bot["_id"]
+    draft_id = config_store.get_bot(bot_id)["versions"][0]["_id"]
+    config_store.publish_version(bot_id, draft_id, "alice")
+    assert config_store.fetch_active_bot_config("asst-delete") is not None
+
+    deleted = config_store.delete_bot(bot_id, "admin")
+
+    assert deleted["status"] == "deleted"
+    assert deleted["deleted_by"] == "admin"
+    assert bot_id not in {item["_id"] for item in config_store.list_bots()}
+    assert config_store.fetch_active_bot_config("asst-delete") is None

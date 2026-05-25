@@ -75,6 +75,18 @@ button.fallback-button:hover:not(:disabled) {
   background: #ffefd1;
 }
 
+button.danger-button,
+.danger-button {
+  border-color: #efc8c8;
+  background: #fff6f6;
+  color: #922828;
+}
+
+button.danger-button:hover:not(:disabled) {
+  border-color: #dc9f9f;
+  background: #ffecec;
+}
+
 select,
 input,
 textarea {
@@ -497,6 +509,22 @@ tbody tr:hover,
   background: #f2f8ff;
 }
 
+.table-actions {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.table-actions button {
+  min-height: 32px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.rotate-180 {
+  transform: rotate(180deg);
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -592,6 +620,49 @@ tbody tr:hover,
   border-color: #c6e8d7;
   background: #f0fbf5;
   color: #24573c;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(12, 23, 36, 0.48);
+}
+
+.modal-panel {
+  width: min(520px, 100%);
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 13px;
+  padding: 18px;
+  border: 1px solid #dfe8f2;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 80px rgba(17, 34, 51, 0.24);
+}
+
+.modal-panel.critical {
+  border-color: #efc8c8;
+}
+
+.modal-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: #922828;
+  background: #fff0f0;
+}
+
+.modal-panel p {
+  margin: 6px 0 14px;
+  color: #4e5f73;
+  font-size: 13px;
+  line-height: 1.48;
 }
 
 .crash-panel {
