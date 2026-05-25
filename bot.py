@@ -2298,6 +2298,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _live_transcript[-1] = _user_entry
             else:
                 _live_transcript.append(_user_entry)
+            # Start watchdog: if Gemini doesn't begin speaking within 8 s, re-inject.
+            nonlocal _bot_resp_watchdog_task, _last_user_final_text, _last_user_final_turn
+            _last_user_final_text = transcript_text
+            _last_user_final_turn = _turn_counter
+            if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
+                _bot_resp_watchdog_task.cancel()
+            _bot_resp_watchdog_task = asyncio.create_task(
+                _bot_response_watchdog(transcript_text, _turn_counter)
+            )
         else:
             # Partial — keep the latest chunk in _pending_user_text; also put a
             # placeholder in _live_transcript so save_call_data sees it even if
@@ -2319,6 +2328,31 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _mic_enabled: bool = False  # mirrors the last value passed to set_audio_enabled
     _speaking_start_time: float | None = None  # wall-clock when current speaking turn started
     _barge_in_fired: bool = False  # True once the 2s unmute task fires for this bot turn
+    _bot_resp_watchdog_task: asyncio.Task | None = None  # cancelled when bot starts speaking
+    _last_user_final_text: str = ""      # text of the most recent user FINAL turn
+    _last_user_final_turn: int = 0       # _turn_counter value when watchdog was started
+
+    async def _bot_response_watchdog(user_text: str, turn: int) -> None:
+        """Re-inject the user's last turn if Gemini doesn't start speaking within 8 s.
+        Handles silent Gemini failures where the model transcribed audio but produced
+        no output — observed as 12+ second silences before user disconnects."""
+        await asyncio.sleep(8.0)
+        if _call_ended or _closing_triggered or _last_user_final_turn != turn:
+            return
+        if _rt is None or getattr(_rt, "_active_session", None) is None:
+            return
+        _log.warning(
+            f"[GEMINI-WATCHDOG] No response to {user_text!r} in 8s — re-injecting (turn={turn})"
+        )
+        try:
+            _rt._send_client_event(
+                types.LiveClientContent(
+                    turns=[types.Content(parts=[types.Part(text=user_text)], role="user")],
+                    turn_complete=True,
+                )
+            )
+        except Exception as e:
+            _log.warning(f"[GEMINI-WATCHDOG] re-inject failed: {e}")
 
     def _set_mic(enabled: bool, reason: str = "") -> None:
         nonlocal _mic_enabled
@@ -2334,7 +2368,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _speaking_start_time, _barge_in_fired, _bot_stop_time, _pending_e2e_user_stop
+        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _speaking_start_time, _barge_in_fired, _bot_stop_time, _pending_e2e_user_stop, _bot_resp_watchdog_task
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
@@ -2351,6 +2385,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _speaking_start_time = time.time()
             _pending_e2e_user_stop = _partial_first_time  # snapshot before FINAL clears it
             _cancel_inactivity()
+            # Gemini started speaking — cancel the response watchdog.
+            if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
+                _bot_resp_watchdog_task.cancel()
+                _bot_resp_watchdog_task = None
             # Cancel any in-flight hold task and any pending muted injection.
             if _echo_guard_task and not _echo_guard_task.done():
                 _echo_guard_task.cancel()
@@ -2367,7 +2405,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _muted_inject["text"] = ""
             # Mute mic at the start of every bot speaking turn.
             # For mid-call turns: unmute after 4 s so the user can interrupt.
-            # Greeting turn: unmute after 7 s so Gemini warms up to the audio
+            # Greeting turn: unmute after 5 s so Gemini warms up to the audio
             # stream before the greeting ends, reducing post-greeting input latency.
             # Closing turn stays muted for the full turn.
             # Caller audio continues to flow into _buffer_user_audio (raw track is
@@ -2389,14 +2427,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 # Greeting turn early unmute: re-enable Gemini audio input at 7 s so
                 # it is already processing the stream when the greeting finishes.
                 async def _greeting_early_unmute() -> None:
-                    await asyncio.sleep(7.0)
+                    await asyncio.sleep(5.0)
                     if not _greeting_done and not _call_ended:
-                        _set_mic(True, reason="greeting-7s-early-unmute")
+                        _set_mic(True, reason="greeting-5s-early-unmute")
                 _speaking_unmute_task = asyncio.create_task(_greeting_early_unmute())
 
         elif state_str in ("listening", "idle"):
             if _bot_has_spoken and not _greeting_done:
                 _greeting_done = True
+                _speaking_start_time = None  # reset so Turn 1 latency calc isn't negative
                 # Transcribe any audio captured during the greeting window via Sarvam
                 # so it lands in _muted_transcript_log (and hence Mongo).
                 # Covers voicemail prompts, IVR menus, ambient speech that played
@@ -2413,6 +2452,29 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     asyncio.create_task(
                         _transcribe_muted_period(_greeting_captured_frames, _greeting_captured_ms)
                     )
+                    async def _post_greeting_inject() -> None:
+                        # Wait for Sarvam to finish + buffer for live speech to arrive first.
+                        # If the user already responded live, _turn_counter > 0 and we skip.
+                        await asyncio.sleep(2.5)
+                        if _call_ended or _closing_triggered or _turn_counter > 0:
+                            return
+                        text = _muted_inject.get("text", "")
+                        if not text:
+                            return
+                        if _rt is None or getattr(_rt, "_active_session", None) is None:
+                            return
+                        _muted_inject["text"] = ""
+                        _log.info(f"[MUTED-CAPTURE] post-greeting inject → Gemini: {text!r}")
+                        try:
+                            _rt._send_client_event(
+                                types.LiveClientContent(
+                                    turns=[types.Content(parts=[types.Part(text=text)], role="user")],
+                                    turn_complete=True,
+                                )
+                            )
+                        except Exception as e:
+                            _log.warning(f"[MUTED-CAPTURE] post-greeting inject failed: {e}")
+                    asyncio.create_task(_post_greeting_inject())
                 if not _call_ended:
                     _bot_stop_time = time.time()
                     _log.info(f"[LATENCY] Turn {_turn_counter} | greeting ended")
