@@ -6,17 +6,14 @@ import json
 import aiohttp
 from loguru import logger
 
-from voicebot_platform.call_events import record_call_event
-
 from .analysis import DISPOSITION_MAP, fuzzy_match_opt_id, status_to_outcome
-from .config import CALLBACK_API_URL
+from .config import CALLBACK_API_URL, CALLBACK_UPDATE_API_URL
 
 
 async def send_callback(
     payload: dict,
     http_session: aiohttp.ClientSession,
     callback_api_url: str = CALLBACK_API_URL,
-    event_context: dict | None = None,
 ) -> bool:
     """Send callback with up to 3 attempts (2s, 4s backoff). Returns True on success."""
     delays = [0, 2, 4]
@@ -24,13 +21,6 @@ async def send_callback(
         if delay:
             await asyncio.sleep(delay)
         try:
-            record_call_event(
-                "callback_attempt_started",
-                "info",
-                "Callback delivery attempt started",
-                event_context or {},
-                {"attempt": attempt, "callback_api_url": callback_api_url},
-            )
             logger.info(
                 f"[CALLBACK] Sending to {callback_api_url} (attempt {attempt}/3) | "
                 f"payload={json.dumps(payload, ensure_ascii=False)}"
@@ -41,40 +31,59 @@ async def send_callback(
                 body = await resp.text()
                 if resp.status not in (200, 201):
                     logger.warning(f"[CALLBACK] attempt {attempt} — {resp.status}: {body[:300]}")
-                    record_call_event(
-                        "callback_attempt_failed",
-                        "warning",
-                        "Callback endpoint returned a non-success status",
-                        event_context or {},
-                        {"attempt": attempt, "status_code": resp.status, "body": body[:300]},
-                    )
                 else:
                     logger.info(f"[CALLBACK] attempt {attempt} — {resp.status} OK: {body[:300]}")
-                    record_call_event(
-                        "callback_delivered",
-                        "success",
-                        "Callback delivered successfully",
-                        event_context or {},
-                        {"attempt": attempt, "status_code": resp.status, "body": body[:300]},
-                    )
                     return True
         except Exception as e:
             logger.error(f"[CALLBACK] attempt {attempt} failed: {type(e).__name__}: {e}")
-            record_call_event(
-                "callback_attempt_failed",
-                "warning",
-                "Callback delivery attempt raised an error",
-                event_context or {},
-                {"attempt": attempt, "error_type": type(e).__name__, "error": str(e)},
-            )
     logger.error("[CALLBACK] All 3 attempts failed — callback not delivered")
-    record_call_event(
-        "callback_exhausted",
-        "error",
-        "All callback delivery attempts failed",
-        event_context or {},
-        {"attempts": len(delays), "callback_api_url": callback_api_url},
-    )
+    return False
+
+
+async def send_callback_update(
+    call_id: str,
+    lead_id: str,
+    updates: dict,
+    http_session: aiohttp.ClientSession,
+    callback_update_api_url: str = CALLBACK_UPDATE_API_URL,
+) -> bool:
+    """Patch specific fields on an already-sent callback. Only pass fields you want to change —
+    the API overwrites any field you include, so never spread the full payload here."""
+    payload = {
+        "call_id": call_id,
+        "lead_id": str(lead_id),
+        "ai_partner": "inh-suny-bot",
+        **updates,
+    }
+    delays = [0, 2, 4]
+    for attempt, delay in enumerate(delays, 1):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            logger.info(
+                f"[CALLBACK-UPDATE] Sending to {callback_update_api_url} (attempt {attempt}/3) | "
+                f"payload={json.dumps(payload, ensure_ascii=False)}"
+            )
+            async with http_session.post(
+                callback_update_api_url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                body = await resp.text()
+                if resp.status not in (200, 201):
+                    logger.warning(f"[CALLBACK-UPDATE] attempt {attempt} — {resp.status}: {body[:300]}")
+                    continue
+                # API returns 200 even on failure — check the body
+                try:
+                    parsed = json.loads(body)
+                    if parsed.get("error", {}).get("code", 0) != 0:
+                        logger.warning(f"[CALLBACK-UPDATE] attempt {attempt} — API error: {body[:300]}")
+                        continue
+                except Exception:
+                    pass
+                logger.info(f"[CALLBACK-UPDATE] attempt {attempt} — {resp.status} OK: {body[:300]}")
+                return True
+        except Exception as e:
+            logger.error(f"[CALLBACK-UPDATE] attempt {attempt} failed: {type(e).__name__}: {e}")
+    logger.error("[CALLBACK-UPDATE] All 3 attempts failed — update not delivered")
     return False
 
 
@@ -89,7 +98,7 @@ def build_callback_payload(doc: dict, analysis: dict, b2b_score: dict | None = N
 
     _b2b = b2b_score or {}
     payload: dict = {
-        "call_id": doc.get("call_id", ""),
+        "call_id": str(doc.get("_id", "")),
         "lead_id": doc.get("lead_id"),
         "is_business": analysis.get("is_business", ""),
         "business_name": analysis.get("business_name", ""),
@@ -163,5 +172,18 @@ def build_callback_payload(doc: dict, analysis: dict, b2b_score: dict | None = N
     for i, entry in enumerate(final_entries, 1):
         spec_ques[f"spec_ques_{i}"] = entry
     payload.update(spec_ques)
+
+    pc = payload.get("product_change") or {}
+    if pc.get("product_name"):
+        type_by_qid = {q.get("id"): q.get("type", "") for q in schema_qs}
+        pro_ques: dict = {}
+        for i, entry in enumerate(final_entries, 1):
+            pro_ques[f"pro_ques_{i}"] = {
+                "Quest": entry["Quest"],
+                "Answ": entry["Answ"],
+                "Qid": entry["Qid"],
+                "type": type_by_qid.get(entry["Qid"], ""),
+            }
+        payload["product_change"] = {**pc, **pro_ques}
 
     return payload
