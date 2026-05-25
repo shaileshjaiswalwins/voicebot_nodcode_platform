@@ -2,9 +2,23 @@
 
 import asyncio
 import json
+from datetime import datetime, timezone, timedelta
 
 import aiohttp
 from loguru import logger
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _fmt_ts(ts) -> str:
+    """Convert a Unix timestamp (int/float) or datetime to 'YYYY-MM-DD HH:MM:SS' in IST."""
+    if ts is None:
+        return ""
+    if isinstance(ts, datetime):
+        dt = ts.astimezone(_IST) if ts.tzinfo else ts.replace(tzinfo=timezone.utc).astimezone(_IST)
+    else:
+        dt = datetime.fromtimestamp(float(ts), tz=_IST)
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 from .analysis import DISPOSITION_MAP, fuzzy_match_opt_id, status_to_outcome
 from .config import CALLBACK_API_URL, CALLBACK_UPDATE_API_URL
@@ -112,6 +126,8 @@ def build_callback_payload(doc: dict, analysis: dict, b2b_score: dict | None = N
         "call_summary": analysis.get("call_summary", ""),
         "product_change": doc.get("product_change") or analysis.get("product_change") or {},
         "call_duration": doc.get("call_duration_sec", 0),
+        "call_start_time": _fmt_ts(doc.get("call_start_time")),
+        "call_end_time": _fmt_ts(doc.get("call_end_time")),
     }
     payload["rescheduled_to"] = analysis.get("rescheduled_to", "") or ""
 
