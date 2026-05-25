@@ -162,32 +162,26 @@ async def generate_call_analysis(
     # Hard IVR signals — checked across ALL turns and muted_transcript, position doesn't matter.
     # These phrases never appear in genuine human speech, so any occurrence means IVR answered.
     _HARD_IVR_SIGNALS = [
-        "reason for calling",
-        "रीज़न फॉर कॉलिंग",
-        "please press",
-        "press 1", "press 2", "press 3", "press 4",
-        "दबाएं", "के लिए दबाएं",          # Hindi "press X for Y" IVR
-        "please state your",
-        "your call is important",
-        "all our agents are",
-        "all agents are busy",
-        "our representatives are",
+        # DTMF prompts
+        "press 1", "press 2", "press 3", "press 4", "press 5",
+        "press 6", "press 7", "press 8", "press 9", "press 0",
+        "dial 1", "dial 2", "dial 3",
+        "for english press", "hindi ke liye", "हिंदी के लिए दबाएं",
+        "please press", "kindly press",
+        # Automated queuing / unavailability
+        "all our representatives are busy", "all agents are busy",
+        "our executives are busy", "all our executives are busy",
+        "currently busy", "please hold the line",
+        "your call is important to us",
         "estimated wait time",
-        "for english press",
-        "hindi ke liye",
-        "currently unavailable",
-        "not available at the moment",
-        "आईवीआर", "ivr system",
-        # Carrier / voicemail system messages — never uttered by a live person
-        "you may hang up", "may hang up now",
-        "यू मे हैंग अप",
-        "the person you are trying to",
-        "the person you are calling",
-        "the number you are trying to",
-        "पर्सन यू आर ट्राइंग", "पर्सन यू आर कॉलिंग",
-        "after the beep", "leave your message after",
-        "do you have recording",
+        "you are number", "in the queue",
+        # Automated connection notices
+        "your call is being connected", "apka call connect",
+        "connecting your call",
+        "this call may be recorded for quality",
+        "this call is being recorded for training",
     ]
+
     _all_text = " ".join(
         (t.get("text") or "").lower() for t in transcript
     )
