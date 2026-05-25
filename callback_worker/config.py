@@ -14,6 +14,7 @@ CALLBACK_API_URL = os.getenv(
     "CALLBACK_API_URL",
     "http://192.168.8.67:8000/leads/ai-lead-qualify/callback",
 )
+CALLBACK_UPDATE_API_URL = os.getenv("CALLBACK_UPDATE_API_URL", CALLBACK_API_URL)
 
 GEMINI_API_KEY = os.getenv("GEMINI_LIVE_API_KEY", "")
 

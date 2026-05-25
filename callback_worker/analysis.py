@@ -8,11 +8,14 @@ from datetime import datetime, timedelta, timezone
 import aiohttp
 from loguru import logger
 
+from voicebot_platform.outcome_catalog import get_disposition_map
+from voicebot_platform.phrase_library import get_phrase_texts
+
 from .config import GEMINI_API_KEY
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-DISPOSITION_MAP: dict[str, str] = {
+_FALLBACK_DISPOSITION_MAP: dict[str, str] = {
     "Short Hangup":                      "The call ended with no product discussion — the customer said nothing at all, OR gave only a bare call-acknowledgment (e.g. hello, haan, hold on, ek second) and disconnected before any product topic was raised.",
     "Voicemail":                        "The call went to the recipient's voicemail instead of connecting directly.",
     "Wrong Number":                     "The number dialed does not belong to the intended customer.",
@@ -33,10 +36,50 @@ DISPOSITION_MAP: dict[str, str] = {
     "Language Issue":                   "Communication was not possible due to a language mismatch.",
 }
 
-_VALID_OUTCOMES = set(DISPOSITION_MAP.keys())
+def _current_disposition_map() -> dict[str, str]:
+    """Resolve the editable outcome catalog with a hardcoded fallback."""
+    try:
+        mapping = get_disposition_map()
+        if mapping:
+            return mapping
+    except Exception:
+        pass
+    return _FALLBACK_DISPOSITION_MAP
+
+
+class _LazyDispositionMap(dict):
+    def __getitem__(self, key):
+        return _current_disposition_map()[key]
+
+    def get(self, key, default=None):
+        return _current_disposition_map().get(key, default)
+
+    def keys(self):  # type: ignore[override]
+        return _current_disposition_map().keys()
+
+    def items(self):  # type: ignore[override]
+        return _current_disposition_map().items()
+
+    def __iter__(self):
+        return iter(_current_disposition_map())
+
+    def __contains__(self, key):  # type: ignore[override]
+        return key in _current_disposition_map()
+
+
+DISPOSITION_MAP: dict[str, str] = _LazyDispositionMap()
+
+
+def _valid_outcomes() -> set[str]:
+    return set(_current_disposition_map().keys())
 
 
 def status_to_outcome(status: str) -> str:
+    normalized = (status or "").strip().lower()
+    if normalized in {"timeout", "inactivity_timeout", "max_duration", "failed", "error"}:
+        return "Technical Issue - Call Connected"
+    if normalized in {"short_hangup", "no_response"}:
+        return "Short Hangup"
     return "Could Not Confirm"
 
 
@@ -193,6 +236,15 @@ async def generate_call_analysis(
     )
     _muted_text = " ".join((m or "").lower() for m in (muted_transcript or []))
     _full_text = f"{_all_text} {_muted_text}"
+    _DNC_SIGNALS_PRE = get_phrase_texts("dnc_trigger")
+    if any(sig in _full_text for sig in _DNC_SIGNALS_PRE):
+        return {
+            "call_outcome": "DNC Client : Don't Call Further",
+            "call_outcome_description": DISPOSITION_MAP["DNC Client : Don't Call Further"],
+            "call_summary": "Customer explicitly requested not to be called again.",
+            "is_business": "", "business_city": "", "business_name": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
     if any(sig in _full_text for sig in _HARD_IVR_SIGNALS):
         return {
             "call_outcome": "Voicemail",
@@ -202,7 +254,7 @@ async def generate_call_analysis(
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
-    _VOICEMAIL_SIGNALS_PRE = [
+    _VOICEMAIL_SIGNALS_PRE = get_phrase_texts("voicemail") or [
         "leave a message", "leave your message", "please leave a message",
         "after the tone", "at the beep",
         "you have reached", "you've reached",
@@ -213,7 +265,7 @@ async def generate_call_analysis(
         "voice mail recording", "voicemail recording",
         "finished recording hang up", "when you have finished recording",
     ]
-    _HOLD_MUSIC_SIGNALS_PRE = [
+    _HOLD_MUSIC_SIGNALS_PRE = get_phrase_texts("hold_music") or [
         "put your call on hold",
         "placed your call on hold",
         "has put your call on hold",
@@ -838,7 +890,7 @@ STRICT OUTPUT RULES:
             raw = data["candidates"][0]["content"]["parts"][0]["text"]
             result = json.loads(raw)
             outcome = result.get("call_outcome", "")
-            if outcome not in _VALID_OUTCOMES:
+            if outcome not in _valid_outcomes():
                 outcome = status_to_outcome(base_status)
                 result["call_outcome"] = outcome
             result["call_outcome_description"] = DISPOSITION_MAP.get(outcome, "")

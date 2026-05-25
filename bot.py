@@ -29,6 +29,7 @@ import sys
 import time
 import unicodedata
 import wave
+from copy import deepcopy
 from datetime import date as _date
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -57,13 +58,20 @@ except ImportError:
 from livekit.plugins import google
 from google.genai import types
 
+from voicebot_platform.call_events import record_call_event
+from voicebot_platform.config_store import fetch_active_bot_config
+from voicebot_platform.language_settings import get_language_settings
+from voicebot_platform.observability import recorder as _observability
 
-load_dotenv(override=True)
+# Let one-off worker launches override .env, e.g.
+# LIVEKIT_AGENT_NAME=voice-bot-justdial-test WORKER_PORT=8091 uv run python bot.py start.
+load_dotenv(override=False)
 
 # ---------------------------------------------------------------------------
 # File logging — rotate daily, keep 30 days, write to LOG_DIR (default /var/log/voicebot)
 # ---------------------------------------------------------------------------
 _BOT_PORT = os.environ.get("BOT_PORT", "8081")
+_WORKER_PORT = int(os.environ.get("WORKER_PORT", _BOT_PORT))
 _LOG_DIR = os.path.join(os.environ.get("BOT_LOG_DIR", "/home/yogeshv_10011835/voicebot_nodcode_platform/logs/"), _BOT_PORT)
 os.makedirs(_LOG_DIR, exist_ok=True)
 
@@ -217,8 +225,8 @@ CATEGORY_CHANGE_API = f"{MIS_API_BASE}/leads/ai-lead-qualify/search"
 IST = timezone(timedelta(hours=5, minutes=30))
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://192.168.13.65:27017")
-MONGO_DB = "ai_lead_qualify"
-MONGO_COLLECTION = "call_transcripts"
+MONGO_DB = os.getenv("VOICEBOT_PLATFORM_DB") or os.getenv("MONGO_DB", "ai_voice_bot_management")
+MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "tbl_ai_vb_call_transcripts")
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
@@ -551,8 +559,13 @@ _HARDCODED_BOT_CONFIG: dict = {
 
 
 async def fetch_bot_config(assistant_id: str) -> dict | None:
-    """Return hardcoded bot config (no HTTP call)."""
-    return _HARDCODED_BOT_CONFIG
+    """Fetch the active published bot config from MongoDB without blocking the event loop."""
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, fetch_active_bot_config, assistant_id)
+    except Exception as e:
+        logger.warning(f"[CONFIG] active config lookup failed for assistant_id={assistant_id!r}: {e}")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1168,20 +1181,70 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # 2. Resolve bot config and settings
     _assistant_id = _room_meta_raw.get("assistant_id", "")
     _bc = await fetch_bot_config(_assistant_id) if _assistant_id else None
+    _config_source = "mongo_active_version"
+    if not _bc:
+        _config_source = "hardcoded_fallback" if _assistant_id else "no_assistant_id"
+        _log.error(
+            f"[CONFIG] Falling back to hardcoded config — assistant_id={_assistant_id!r}, "
+            f"reason={_config_source!r}. Live config lookup did not return an active version."
+        )
+        _observability.event(
+            "config_fetch_failed",
+            {
+                "room_name": room_name,
+                "assistant_id": _assistant_id,
+                "status": "error",
+            },
+        )
     _bot_config: dict = _bc or _HARDCODED_BOT_CONFIG
+    _config_snapshot = deepcopy(_bot_config)
+    _config_snapshot["__config_source"] = _config_source
+    _bot_id = _bot_config.get("bot_id", "")
+    _bot_version_id = _bot_config.get("bot_version_id", "")
+    _bot_version = _bot_config.get("bot_version")
+    _campaign_id = _room_meta_raw.get("campaign_id", "")
+
+    def _event_context() -> dict:
+        try:
+            call_id = call_state.get("call_id")
+            lead_id = call_state.get("record_id") or _lead_id_meta
+        except NameError:
+            call_id = room_name
+            lead_id = _lead_id_meta
+        return {
+            "room_name": room_name,
+            "call_id": call_id,
+            "assistant_id": _assistant_id,
+            "bot_id": _bot_id,
+            "bot_version_id": _bot_version_id,
+            "campaign_id": _campaign_id,
+            "lead_id": lead_id,
+        }
+
+    record_call_event(
+        "config_loaded",
+        "success" if _config_source == "mongo_active_version" else "warning",
+        "Bot runtime config loaded",
+        _event_context(),
+        {"config_source": _config_source, "bot_version": _bot_version},
+    )
 
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
 
     _api_urls = _bot_config.get("api_urls") or {}
     _mis_api_base        = _api_urls.get("mis_api_base") or MIS_API_BASE
     _category_change_api = _api_urls.get("category_change_api") or CATEGORY_CHANGE_API
-    _language           = "hindi"
+    _model              = _bot_config.get("model") or "gemini-3.1-flash-live-preview"
+    _voice              = _bot_config.get("voice") or "Aoede"
+    _language           = _bot_config.get("language") or "hindi"
+    _livekit_language   = _bot_config.get("livekit_language") or "hi-IN"
+    _sarvam_language    = _bot_config.get("sarvam_language") or _livekit_language
     _temperature        = float(_bot_config.get("temperature") or 0.4)
     _vad_start          = _bot_config.get("gemini_start_sensitivity") or "START_SENSITIVITY_HIGH"
     _vad_end            = _bot_config.get("gemini_end_sensitivity")   or "END_SENSITIVITY_HIGH"
     _vad_silence_ms     = int(_bot_config.get("gemini_silence_duration_ms") or 1500)
     _vad_prefix_ms      = int(_bot_config.get("gemini_prefix_padding_ms")   or 100)
-    _max_call_duration  = 300
+    _max_call_duration  = int(_bot_config.get("max_call_duration") or 300)
     _sarvam_min_rms                  = int(_bot_config.get("sarvam_min_rms") or 600)
     _sarvam_min_speech_ms            = int(_bot_config.get("sarvam_min_speech_ms") or 500)
     _sarvam_min_speech_ms_singleword = int(_bot_config.get("sarvam_min_speech_ms_singleword") or 1500)
@@ -1191,7 +1254,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _post_speech_hold_ms             = int(_bot_config.get("post_speech_hold_ms") or 800)
     _functions: list[dict] = _bot_config.get("functions") or []
     _function_calling   = bool(_bot_config.get("function_calling", False)) and bool(_functions)
-    _lang_cfg           = HINDI_LANG_CONFIG
+    try:
+        loop = asyncio.get_running_loop()
+        _lang_cfg = await loop.run_in_executor(None, get_language_settings, _language)
+    except Exception as exc:
+        _log.warning(f"[LANGUAGE] settings lookup failed for {_language!r}: {exc}")
+        _lang_cfg = None
+    _lang_cfg = _lang_cfg or HINDI_LANG_CONFIG
+    _config_snapshot["language_settings"] = deepcopy(_lang_cfg)
 
     # 3. Per-call state
     call_state = {
@@ -1228,11 +1298,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         f"inflight={_KEY_INFLIGHT.get(_selected_key, 1)})"
     )
     llm = google.realtime.RealtimeModel(
-        model="gemini-3.1-flash-live-preview",
-        voice="Aoede",
+        model=_model,
+        voice=_voice,
         instructions=system_instruction,
         temperature=_temperature,
-        language="hi-IN",
+        language=_livekit_language,
         api_key=_selected_key,
         realtime_input_config=types.RealtimeInputConfig(
             automatic_activity_detection=types.AutomaticActivityDetection(
@@ -1332,11 +1402,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "lead_id": lead_id,
             "call_id": call_state.get("call_id"),
             "assistant_id": _assistant_id,
+            "bot_id": _bot_id,
+            "bot_version_id": _bot_version_id,
+            "bot_version": _bot_version,
+            "campaign_id": _campaign_id,
+            "config_snapshot": _config_snapshot,
             "room_name": room_name,
             "status": status,
             "ended_naturally": call_state.get("ended_naturally"),
             "product_change": call_state.get("product_change"),
             "transcript": transcript,
+            "transcript_count": len(transcript),
             "muted_transcript": _muted_transcript_log,
             "lead_record": call_state.get("lead_record"),
             "sip_info": sip_info,
@@ -1353,8 +1429,22 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, lambda: _get_mongo_collection().insert_one(_mongo_doc))
             _log.info(f"[MONGO] Transcript saved | lead_id={lead_id!r} | call_id={call_state.get('call_id')!r}")
+            record_call_event(
+                "transcript_save_succeeded",
+                "success",
+                "Transcript saved to Mongo",
+                _event_context(),
+                {"status": status, "transcript_count": len(transcript), "call_duration_sec": _duration},
+            )
         except Exception as e:
             _log.error(f"[MONGO] insert failed: {e}")
+            record_call_event(
+                "transcript_save_failed",
+                "error",
+                "Transcript save failed",
+                _event_context(),
+                {"error_type": type(e).__name__, "error": str(e)},
+            )
 
         _lead = call_state.get("lead_record") or {}
         _search_ctx = _lead.get("search_context") or {}
@@ -2750,7 +2840,8 @@ if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
-            agent_name="voice-bot-justdial",
+            agent_name=os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial"),
             num_idle_processes=3,
+            port=_WORKER_PORT,
         )
     )
