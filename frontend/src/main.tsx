@@ -1507,7 +1507,21 @@ function TranscriptsView({
               <Detail label="Call ID" value={selectedTranscript.call_id || '-'} />
               <Detail label="Bot version" value={selectedTranscript.bot_version_id ? shortId(selectedTranscript.bot_version_id) : '-'} />
               <Detail label="Callback" value={selectedTranscript.callback_status || '-'} />
+              <Detail label="Transcript source" value={transcriptSourceLabel(selectedTranscript)} />
+              <Detail label="Verification" value={selectedTranscript.verified_transcript_status || 'legacy'} />
+              <Detail label="Max response delay" value={maxResponseDelayLabel(selectedTranscript)} />
               <Detail label="Recording" value={selectedTranscript.recording_url || 'Dialer link not saved'} />
+            </div>
+            <div className="source-strip">
+              <span className={`source-badge ${selectedTranscript.verified_transcript_status || 'legacy'}`}>
+                {transcriptSourceLabel(selectedTranscript)}
+              </span>
+              {(selectedTranscript.transcript_quality_flags || []).map((flag) => (
+                <span className="quality-flag" key={flag}>{titleCase(flag)}</span>
+              ))}
+              {selectedTranscript.verified_transcript_error && (
+                <span className="quality-flag error">{selectedTranscript.verified_transcript_error}</span>
+              )}
             </div>
             <div className="chat-transcript">
               {conversationItems.map((item) => (
@@ -1522,7 +1536,7 @@ function TranscriptsView({
                     <div className="chat-avatar">{item.role === 'assistant' ? <Bot size={15} /> : <Mic size={15} />}</div>
                     <div className="chat-bubble">
                       <div className="chat-meta">
-                        <strong>{item.role === 'assistant' ? 'Tanya / Assistant' : item.role === 'user' ? 'User' : titleCase(item.role)}</strong>
+                        <strong>{item.role === 'assistant' ? 'Tanya / Assistant' : item.role === 'user' ? 'User' : item.role === 'recording' ? 'Verified recording' : titleCase(item.role)}</strong>
                         <span>{item.time}</span>
                       </div>
                       <p>{item.text}</p>
@@ -2490,7 +2504,10 @@ const END_EVENT_TYPES = new Set(['transcript_save_succeeded', 'transcript_save_f
 function buildConversationItems(transcript?: Transcript, events: CallEvent[] = []): ConversationItem[] {
   if (!transcript) return [];
   const inlineEvents = events.filter((event) => INLINE_EVENT_TYPES.has(event.event_type));
-  const turnItems: ConversationItem[] = (transcript.transcript || []).map((turn, index) => ({
+  const selectedTurns = transcript.verified_transcript_status === 'succeeded' && transcript.verified_transcript?.length
+    ? transcript.verified_transcript
+    : transcript.transcript || transcript.live_transcript || [];
+  const turnItems: ConversationItem[] = selectedTurns.map((turn, index) => ({
     kind: 'turn',
     id: `turn-${index}`,
     role: normalizeTranscriptRole(turn.role),
@@ -2500,7 +2517,7 @@ function buildConversationItems(transcript?: Transcript, events: CallEvent[] = [
     interrupted: Boolean(turn.interrupted || turn.event_type?.toLowerCase().includes('interrupt'))
   }));
   const eventItems = inlineEvents.map((event) => eventToConversationItem(event));
-  const hasTurnTimes = (transcript.transcript || []).some((turn) => Boolean(turn.created_at));
+  const hasTurnTimes = selectedTurns.some((turn) => Boolean(turn.created_at));
   if (hasTurnTimes) {
     return [...eventItems, ...turnItems].sort((a, b) => a.sortAt - b.sortAt);
   }
@@ -2534,7 +2551,23 @@ function normalizeTranscriptRole(role: string) {
   const value = (role || '').toLowerCase();
   if (['assistant', 'agent', 'bot', 'model'].includes(value)) return 'assistant';
   if (['user', 'customer', 'caller', 'human'].includes(value)) return 'user';
+  if (['recording', 'verified_recording'].includes(value)) return 'recording';
   return value || 'system';
+}
+
+function transcriptSourceLabel(transcript: Transcript) {
+  if (transcript.verified_transcript_status === 'succeeded') return 'Verified recording';
+  if (transcript.verified_transcript_status === 'pending') return 'Live transcript, verification pending';
+  if (transcript.verified_transcript_status === 'failed') return 'Live transcript, verification failed';
+  if (transcript.verified_transcript_status === 'unavailable') return 'Live transcript, recording unavailable';
+  return titleCase(transcript.analysis_transcript_source || transcript.transcript_source || 'gemini live');
+}
+
+function maxResponseDelayLabel(transcript: Transcript) {
+  const metrics = transcript.latency_metrics || {};
+  const delay = Number(metrics.max_response_delay_ms || metrics.first_response_delay_ms || 0);
+  if (!delay) return '-';
+  return delay >= 8000 ? `${delay}ms high` : delay >= 3000 ? `${delay}ms slow` : `${delay}ms`;
 }
 
 function titleCase(value: string) {

@@ -121,6 +121,7 @@ async def generate_call_analysis(
     muted_transcript: list[str] | None = None,
     gemini_connect_failed: bool = False,
     duration_secs: float | None = None,
+    transcript_source: str = "gemini_live",
 ) -> dict:
     if gemini_connect_failed:
         return {
@@ -135,7 +136,8 @@ async def generate_call_analysis(
 
     # --- Deterministic pre-LLM guards (saves cost + prevents model misclassification) ---
 
-    user_turns = [t for t in transcript if t.get("role") == "user"]
+    user_roles = {"user", "buyer", "recording"}
+    user_turns = [t for t in transcript if str(t.get("role", "")).lower() in user_roles]
     non_empty_user_turns = [t for t in user_turns if (t.get("text") or "").strip()]
 
     # Tokens that count as product confirmation when they appear as the buyer's
@@ -169,6 +171,11 @@ async def generate_call_analysis(
                 "call_summary": "No user response recorded — call ended after agent greeting only.",
                 "is_business": "", "business_city": "", "business_name": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
+                "confidence": 0.9,
+                "evidence_quotes": [],
+                "disqualifiers": ["zero_user_signal"],
+                "needs_review": False,
+                "analysis_transcript_source": transcript_source,
             }
         # Muted transcript has content — check if it's only greetings/acknowledgements.
         # A bare "hello" / "haan bolo" / "haan" during the bot's opening turn is not
@@ -198,6 +205,11 @@ async def generate_call_analysis(
                 "call_summary": "User responded with a greeting or acknowledgement only — no product confirmation or engagement obtained.",
                 "is_business": "", "business_city": "", "business_name": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
+                "confidence": 0.85,
+                "evidence_quotes": muted_transcript or [],
+                "disqualifiers": ["greeting_only"],
+                "needs_review": False,
+                "analysis_transcript_source": transcript_source,
             }
         # Muted transcript has substantive content but no live user turns — STT failed on live mic
         # but user did speak during muted window. Fall through to LLM with context.
@@ -282,7 +294,7 @@ async def generate_call_analysis(
     seen_substantive_user_turn = False
     for turn in transcript:
         text_lower = (turn.get("text") or "").lower()
-        if turn.get("role") in ("user", "buyer"):
+        if str(turn.get("role", "")).lower() in user_roles:
             words = {w.strip(".,!? ").lower() for w in (turn.get("text") or "").split() if w.strip()}
             if words - _GREETING_TOKENS:
                 seen_substantive_user_turn = True
@@ -318,6 +330,11 @@ async def generate_call_analysis(
             "call_summary": "No product engagement — buyer responded only with a greeting.",
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
+            "confidence": 0.9,
+            "evidence_quotes": [(t.get("text") or "") for t in non_empty_user_turns[:3]],
+            "disqualifiers": ["greeting_only"],
+            "needs_review": False,
+            "analysis_transcript_source": transcript_source,
         }
 
     # --- End pre-LLM guards ---
@@ -358,10 +375,11 @@ async def generate_call_analysis(
         (i for i, t in enumerate(_non_empty_turns) if t.get("role") == "assistant"),
         default=-1,
     )
-    _has_user_after_last_agent = any(
-        t.get("role") == "user"
-        for t in _non_empty_turns[_last_agent_idx + 1:]
-    ) if _last_agent_idx >= 0 else False
+    _has_user_after_last_agent = (
+        any(str(t.get("role", "")).lower() in user_roles for t in _non_empty_turns[_last_agent_idx + 1:])
+        if _last_agent_idx >= 0
+        else False
+    )
     _ends_on_agent_no_response = _last_agent_idx >= 0 and not _has_user_after_last_agent
     _trailing_agent_note = (
         "\n⚠ TRANSCRIPT ENDS ON AGENT QUESTION: The last turn in the transcript is from "
@@ -994,7 +1012,7 @@ STRICT OUTPUT RULES:
                     _bare_ack_nfc = {unicodedata.normalize("NFC", w) for w in _BARE_ACK_SET}
                     _all_user_words: set[str] = set()
                     for _t in transcript:
-                        if _t.get("role") == "user":
+                        if str(_t.get("role", "")).lower() in user_roles:
                             for _w in (_t.get("text") or "").split():
                                 _clean = unicodedata.normalize("NFC", re.sub(r"[^\w]", "", _w.lower()))
                                 if _clean:
@@ -1016,6 +1034,26 @@ STRICT OUTPUT RULES:
                         result["qna"] = []
 
             # ── END POST-PROCESSING ────────────────────────────────────────
+            user_quotes = [
+                (t.get("text") or "").strip()
+                for t in transcript
+                if str(t.get("role", "")).lower() in user_roles and (t.get("text") or "").strip()
+            ]
+            result.setdefault("confidence", 0.75)
+            result.setdefault("evidence_quotes", user_quotes[:3])
+            result.setdefault("disqualifiers", [])
+            result.setdefault("needs_review", False)
+            result["analysis_transcript_source"] = transcript_source
+            if result.get("call_outcome") == "Interested" and not user_quotes:
+                result["call_outcome"] = "Short Hangup"
+                result["call_outcome_description"] = DISPOSITION_MAP["Short Hangup"]
+                result["call_summary"] = (
+                    "No buyer-side evidence was available after transcript verification; "
+                    "downgraded from Interested to Short Hangup."
+                )
+                result["confidence"] = 0.9
+                result["disqualifiers"] = ["no_buyer_evidence"]
+                result["needs_review"] = False
 
             return result
     except Exception as e:

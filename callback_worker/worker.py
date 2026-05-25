@@ -15,6 +15,7 @@ from voicebot_platform.call_events import record_call_event
 from .analysis import fallback_analysis, generate_b2b_score, generate_call_analysis
 from .callback import CALLBACK_API_URL, build_callback_payload, send_callback
 from .config import BATCH_LIMIT, MONGO_COLLECTION, MONGO_DB, POLL_INTERVAL_SEC
+from .recording import quality_flags, verify_transcript_from_recording
 
 _stop = asyncio.Event()
 
@@ -57,25 +58,54 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
     schema = (doc.get("lead_record") or {}).get("qualification_schema", {}) or {}
     status = doc.get("status", "completed")
 
-    transcript = doc.get("transcript") or []
+    doc = await verify_transcript_from_recording(doc, collection, http_session, event_context)
+    transcript = doc.get("verified_transcript") or doc.get("transcript") or []
+    analysis_transcript_source = doc.get("analysis_transcript_source") or (
+        "recording_verified" if doc.get("verified_transcript") else "gemini_live"
+    )
+    muted_transcript = doc.get("muted_transcript") or []
+    duration_secs = doc.get("call_duration_sec")
     try:
         record_call_event(
             "analysis_started",
             "info",
             "Post-call analysis started",
             event_context,
-            {"doc_id": str(doc_id), "transcript_count": len(transcript)},
+            {
+                "doc_id": str(doc_id),
+                "transcript_count": len(transcript),
+                "analysis_transcript_source": analysis_transcript_source,
+            },
         )
         analysis, b2b_score = await asyncio.gather(
-            generate_call_analysis(transcript, status, schema, http_session),
+            generate_call_analysis(
+                transcript,
+                status,
+                schema,
+                http_session,
+                muted_transcript=muted_transcript,
+                gemini_connect_failed=bool(doc.get("gemini_connect_failed")),
+                duration_secs=duration_secs,
+                transcript_source=analysis_transcript_source,
+            ),
             generate_b2b_score(transcript, http_session),
         )
+        analysis["analysis_transcript_source"] = analysis_transcript_source
+        flags = quality_flags(doc, transcript)
+        if flags:
+            analysis["quality_flags"] = flags
         record_call_event(
             "analysis_succeeded",
             "success",
             "Post-call analysis succeeded",
             event_context,
-            {"doc_id": str(doc_id), "outcome": analysis.get("call_outcome", "")},
+            {
+                "doc_id": str(doc_id),
+                "outcome": analysis.get("call_outcome", ""),
+                "confidence": analysis.get("confidence", ""),
+                "quality_flags": analysis.get("quality_flags", []),
+                "analysis_transcript_source": analysis_transcript_source,
+            },
         )
     except Exception as e:
         logger.warning(f"[WORKER] Analysis failed for doc {doc_id}: {e} — using fallback")
@@ -95,7 +125,14 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
     if ok:
         await loop.run_in_executor(None, lambda: collection.update_one(
             {"_id": doc_id},
-            {"$set": {"tagged": True, "tagged_at": datetime.utcnow()}},
+            {"$set": {
+                "tagged": True,
+                "tagged_at": datetime.utcnow(),
+                "analysis_result": analysis,
+                "b2b_score": b2b_score,
+                "transcript_quality_flags": analysis.get("quality_flags", quality_flags(doc, transcript)),
+                "analysis_transcript_source": analysis_transcript_source,
+            }},
         ))
         logger.info(f"[WORKER] Tagged doc {doc_id} | lead_id={lead_id!r}")
         record_call_event(

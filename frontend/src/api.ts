@@ -88,6 +88,15 @@ export type Transcript = {
   status?: string;
   call_duration_sec?: number;
   transcript?: TranscriptTurn[];
+  live_transcript?: TranscriptTurn[];
+  verified_transcript?: TranscriptTurn[];
+  verified_transcript_status?: 'pending' | 'succeeded' | 'failed' | 'unavailable';
+  verified_transcript_error?: string;
+  analysis_transcript_source?: string;
+  transcript_source?: string;
+  collection_source?: string;
+  transcript_quality_flags?: string[];
+  latency_metrics?: Record<string, number | string>;
   transcript_count?: number;
   config_snapshot?: Record<string, unknown>;
   lead_record?: Record<string, unknown>;

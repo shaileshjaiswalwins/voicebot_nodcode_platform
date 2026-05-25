@@ -19,6 +19,7 @@ class LangfuseRecorder:
     def __init__(self) -> None:
         self._client = None
         self._import_error: str | None = None
+        self._last_success_at: float | None = None
         self._settings_cache: tuple[float, dict[str, Any]] | None = None
         self._settings_lock = threading.Lock()
         # Bounded background pool so emitting events never blocks an async caller.
@@ -54,6 +55,7 @@ class LangfuseRecorder:
             "send_transcripts": bool(settings.get("send_transcripts", True)),
             "send_prompts": bool(settings.get("send_prompts", True)),
             "last_error": self._import_error,
+            "last_success_at": self._last_success_at,
         }
 
     def event(self, name: str, metadata: dict[str, Any], *, input: Any = None, output: Any = None) -> None:
@@ -109,6 +111,7 @@ class LangfuseRecorder:
                 version=str(metadata.get("bot_version") or metadata.get("bot_version_id") or ""),
                 level="ERROR" if str(metadata.get("status", "")).lower() in {"failed", "error"} else "DEFAULT",
             )
+            self._last_success_at = time.time()
             if name in {"transcript_saved", "callback_sent", "call_ended"}:
                 client.flush()
         except Exception as exc:

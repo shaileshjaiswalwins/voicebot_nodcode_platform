@@ -142,3 +142,23 @@ def test_delete_bot_hides_bot_and_disables_active_runtime_config():
     assert deleted["deleted_by"] == "admin"
     assert bot_id not in {item["_id"] for item in config_store.list_bots()}
     assert config_store.fetch_active_bot_config("asst-delete") is None
+
+
+def test_transcript_source_is_not_overwritten_by_collection_source():
+    from voicebot_platform.config import TRANSCRIPT_COLLECTION
+    from voicebot_platform.mongo import get_db
+
+    inserted_id = get_db()[TRANSCRIPT_COLLECTION].insert_one(
+        {
+            "call_id": "CALL-SOURCE",
+            "transcript": [],
+            "transcript_source": "recording_verified",
+            "created_at": config_store._now(),
+        }
+    ).inserted_id
+
+    doc = config_store.get_transcript(str(inserted_id))
+
+    assert doc is not None
+    assert doc["transcript_source"] == "recording_verified"
+    assert doc["collection_source"] == "platform"

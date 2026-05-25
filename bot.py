@@ -1228,6 +1228,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _event_context(),
         {"config_source": _config_source, "bot_version": _bot_version},
     )
+    _observability.event(
+        "config_loaded",
+        {
+            **_event_context(),
+            "config_source": _config_source,
+            "bot_version": _bot_version,
+            "model": _bot_config.get("model"),
+        },
+    )
 
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
 
@@ -1273,6 +1282,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         "save_done": False,
         "call_start_time": None,
     }
+    latency_metrics: dict = {}
+    event_flags: set[str] = set()
     sip_info = {"caller_number": "", "dialed_number": ""}
 
     if _prefetched_lead:
@@ -1396,6 +1407,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _start = call_state.get("call_start_time")
         _end_time = time.time()
         _duration = round(_end_time - _start, 1) if _start else 0.0
+        quality_flags = []
+        if _duration and _duration < 15:
+            quality_flags.append("short_call")
+        if not any((t.get("role") == "user" and (t.get("text") or "").strip()) for t in transcript):
+            quality_flags.append("missing_user_audio")
+        if latency_metrics.get("max_response_delay_ms", 0) > 3000:
+            quality_flags.append("high_latency")
 
         # Persist transcript + metadata to MongoDB; callback worker will pick it up
         _mongo_doc = {
@@ -1412,7 +1430,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "ended_naturally": call_state.get("ended_naturally"),
             "product_change": call_state.get("product_change"),
             "transcript": transcript,
+            "live_transcript": transcript,
+            "transcript_source": "gemini_live",
             "transcript_count": len(transcript),
+            "verified_transcript_status": "pending",
+            "verified_transcript": [],
+            "analysis_transcript_source": "gemini_live",
+            "transcript_quality_flags": sorted(set(quality_flags)),
+            "latency_metrics": latency_metrics,
             "muted_transcript": _muted_transcript_log,
             "lead_record": call_state.get("lead_record"),
             "sip_info": sip_info,
@@ -1429,6 +1454,19 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, lambda: _get_mongo_collection().insert_one(_mongo_doc))
             _log.info(f"[MONGO] Transcript saved | lead_id={lead_id!r} | call_id={call_state.get('call_id')!r}")
+            _observability.event(
+                "transcript_saved",
+                {
+                    **_event_context(),
+                    "status": status,
+                    "transcript_count": len(transcript),
+                    "call_duration_sec": _duration,
+                    "transcript_source": "gemini_live",
+                    "transcript": transcript,
+                    "latency_metrics": latency_metrics,
+                    "quality_flags": sorted(set(quality_flags)),
+                },
+            )
             record_call_event(
                 "transcript_save_succeeded",
                 "success",
@@ -1445,6 +1483,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _event_context(),
                 {"error_type": type(e).__name__, "error": str(e)},
             )
+        _observability.event(
+            "call_ended",
+            {
+                **_event_context(),
+                "status": status,
+                "call_duration_sec": _duration,
+                "latency_metrics": latency_metrics,
+                "quality_flags": sorted(set(quality_flags)),
+            },
+        )
 
         _lead = call_state.get("lead_record") or {}
         _search_ctx = _lead.get("search_context") or {}
@@ -1744,6 +1792,20 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     continue
                 if _user_audio["nbytes"] >= _SARVAM_AUDIO_MAX_BYTES:
                     continue
+                if "first_user_audio_received" not in event_flags:
+                    event_flags.add("first_user_audio_received")
+                    latency_metrics["first_user_audio_received_at"] = time.time()
+                    record_call_event(
+                        "first_user_audio_received",
+                        "info",
+                        "First caller audio received",
+                        _event_context(),
+                        {"speech_ms": round(frame_ms, 1)},
+                    )
+                    _observability.event(
+                        "first_user_audio_received",
+                        {**_event_context(), "speech_ms": round(frame_ms, 1)},
+                    )
                 wf.writeframes(chunk)
                 _current_window_pcm += chunk
                 _user_audio["nbytes"] += len(chunk)
@@ -2198,6 +2260,29 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             return
         _closing_buffer += " " + text
         if text:
+            if "first_agent_response" not in event_flags:
+                event_flags.add("first_agent_response")
+                latency_metrics["first_agent_response_at"] = time.time()
+                if latency_metrics.get("first_user_transcript_received_at"):
+                    response_delay_ms = round(
+                        (latency_metrics["first_agent_response_at"] - latency_metrics["first_user_transcript_received_at"]) * 1000
+                    )
+                    latency_metrics["first_response_delay_ms"] = response_delay_ms
+                    latency_metrics["max_response_delay_ms"] = max(
+                        latency_metrics.get("max_response_delay_ms", 0),
+                        response_delay_ms,
+                    )
+                record_call_event(
+                    "first_agent_response",
+                    "info",
+                    "First agent response text committed",
+                    _event_context(),
+                    {"text_preview": text[:120], "latency_metrics": latency_metrics},
+                )
+                _observability.event(
+                    "first_agent_response",
+                    {**_event_context(), "text_preview": text[:120], "latency_metrics": latency_metrics},
+                )
             _log.info(f"[TRANSCRIPT] Turn {_turn_counter} | AGENT: {text!r}")
             # Barge-in cleanup: if the user interrupted this bot turn mid-sentence,
             # _barge_in_fired is still True from that turn (reset to False only when
@@ -2274,6 +2359,24 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if is_final:
             _turn_counter += 1
             speech_ms_now = _user_audio["speech_ms"]
+            if "first_user_transcript_received" not in event_flags:
+                event_flags.add("first_user_transcript_received")
+                latency_metrics["first_user_transcript_received_at"] = time.time()
+                if latency_metrics.get("first_user_audio_received_at"):
+                    latency_metrics["first_audio_to_transcript_ms"] = round(
+                        (latency_metrics["first_user_transcript_received_at"] - latency_metrics["first_user_audio_received_at"]) * 1000
+                    )
+                record_call_event(
+                    "first_user_transcript_received",
+                    "info",
+                    "First user transcript received",
+                    _event_context(),
+                    {"text_preview": transcript_text[:120], "latency_metrics": latency_metrics},
+                )
+                _observability.event(
+                    "first_user_transcript_received",
+                    {**_event_context(), "text_preview": transcript_text[:120], "latency_metrics": latency_metrics},
+                )
             _log.info(
                 f"[TRANSCRIPT] Turn {_turn_counter} | USER (FINAL): {transcript_text!r} | "
                 f"agent_state={_agent_state_now} mic={_mic_enabled} "
@@ -2425,6 +2528,24 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _bot_has_spoken = True
             _barge_in_fired = False  # reset at start of each bot turn
             _speaking_start_time = time.time()
+            if "first_word_spoken" not in event_flags:
+                event_flags.add("first_word_spoken")
+                latency_metrics["first_word_spoken_at"] = _speaking_start_time
+                if latency_metrics.get("first_user_transcript_received_at"):
+                    latency_metrics["first_transcript_to_word_ms"] = round(
+                        (_speaking_start_time - latency_metrics["first_user_transcript_received_at"]) * 1000
+                    )
+                record_call_event(
+                    "first_word_spoken",
+                    "info",
+                    "Agent started speaking",
+                    _event_context(),
+                    {"latency_metrics": latency_metrics},
+                )
+                _observability.event(
+                    "first_word_spoken",
+                    {**_event_context(), "latency_metrics": latency_metrics},
+                )
             _cancel_inactivity()
             # Cancel any in-flight hold task and any pending muted injection.
             if _echo_guard_task and not _echo_guard_task.done():
@@ -2596,6 +2717,25 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # Record call start immediately after session connects — before any lead
     # fetch awaits — so _save_and_close always computes a real duration.
     call_state["call_start_time"] = time.time()
+    latency_metrics["livekit_room_joined_at"] = call_state["call_start_time"]
+    record_call_event(
+        "livekit_room_joined",
+        "success",
+        "LiveKit agent joined the room",
+        _event_context(),
+        {"model": _model, "voice": _voice, "language": _language},
+    )
+    record_call_event(
+        "call_started",
+        "info",
+        "Call started",
+        _event_context(),
+        {"model": _model, "voice": _voice, "language": _language},
+    )
+    _observability.event(
+        "call_started",
+        {**_event_context(), "model": _model, "voice": _voice, "language": _language},
+    )
 
     # Force Gemini to speak the greeting immediately on connect by sending a
     # LiveClientContent with a placeholder user turn and turn_complete=True.
@@ -2762,6 +2902,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         call_state["call_id"] = record["call_id"]
         call_state["lead_record"] = record
         _log.info(f"[CALL SETUP] Using fallback lead for mobile={caller_mobile!r}")
+    record_call_event(
+        "lead_loaded",
+        "success" if record else "warning",
+        "Lead context loaded",
+        _event_context(),
+        {
+            "lead_id": call_state.get("record_id"),
+            "source": "fallback" if str(call_state.get("record_id") or "").startswith("fallback_") else "lead_api_or_metadata",
+        },
+    )
 
     # 16. 5-minute hard call timeout
     _DEFAULT_TIMEOUT_MSG = (

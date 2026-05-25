@@ -428,6 +428,11 @@ _TRANSCRIPT_LIST_PROJECTION = {
     "tags": 1,
     "callback_status": 1,
     "recording_url": 1,
+    "transcript_source": 1,
+    "verified_transcript_status": 1,
+    "analysis_transcript_source": 1,
+    "transcript_quality_flags": 1,
+    "latency_metrics": 1,
     "created_at": 1,
     "updated_at": 1,
     "transcript_count": 1,
@@ -436,7 +441,8 @@ _TRANSCRIPT_LIST_PROJECTION = {
 
 def _normalize_transcript_doc(doc: dict[str, Any], source: str) -> dict[str, Any]:
     doc = deepcopy(doc)
-    doc["transcript_source"] = source
+    doc["collection_source"] = source
+    doc.setdefault("transcript_source", "gemini_live")
     doc.setdefault("campaign_id", "")
     doc.setdefault("bot_id", "")
     doc.setdefault("bot_version_id", "")
