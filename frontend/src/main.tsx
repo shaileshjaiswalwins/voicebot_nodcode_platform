@@ -24,6 +24,7 @@ import {
   Gauge,
   Headphones,
   Megaphone,
+  MessageSquareText,
   Mic,
   PhoneCall,
   Play,
@@ -32,6 +33,7 @@ import {
   Rocket,
   Save,
   Search,
+  SendHorizontal,
   ShieldCheck,
   Square,
   Trash2,
@@ -154,6 +156,8 @@ function App() {
   const [testError, setTestError] = useState('');
   const [testCloseNote, setTestCloseNote] = useState('');
   const [testRoomName, setTestRoomName] = useState('');
+  const [testChatMessage, setTestChatMessage] = useState('');
+  const [micEnabled, setMicEnabled] = useState(false);
   const [remoteAudioReady, setRemoteAudioReady] = useState(false);
   const livekitRoomRef = useRef<Room | null>(null);
   const localTrackRef = useRef<LocalAudioTrack | null>(null);
@@ -509,7 +513,7 @@ function App() {
       room.on(RoomEvent.Reconnecting, () => setTestStatus('Reconnecting to LiveKit...'));
       room.on(RoomEvent.Reconnected, () => setTestStatus('Reconnected. Continue testing.'));
       room.on(RoomEvent.ParticipantConnected, (participant) => {
-        setTestStatus(`Participant joined: ${participant.identity}`);
+        setTestStatus(`Thinking. Agent joined: ${participant.identity}`);
       });
       room.on(RoomEvent.TrackSubscribed, (track) => {
         if (track.kind !== Track.Kind.Audio) return;
@@ -526,11 +530,12 @@ function App() {
         container.appendChild(element);
         subscribedTracksRef.current.add(track);
         setRemoteAudioReady(true);
-        setTestStatus('Bot audio connected. Speak into your microphone.');
+        setTestStatus('Speaking. Bot audio connected.');
       });
       room.on(RoomEvent.TrackUnsubscribed, (track) => {
         for (const element of track.detach()) element.remove();
         subscribedTracksRef.current.delete(track);
+        setTestStatus('Listening. Speak into your microphone.');
       });
       room.on(RoomEvent.MediaDevicesError, (error) => {
         setTestError(`Microphone permission/device error: ${error.message}`);
@@ -545,7 +550,8 @@ function App() {
       });
       localTrackRef.current = micTrack;
       await room.localParticipant.publishTrack(micTrack);
-      setTestStatus('Microphone is live. Waiting for the bot to respond...');
+      setMicEnabled(true);
+      setTestStatus('Listening. Microphone is live.');
     } catch (error) {
       await stopWebRtcTest();
       const message = friendlyTestError(error);
@@ -559,6 +565,7 @@ function App() {
     const roomName = testRoomName;
     localTrackRef.current?.stop();
     localTrackRef.current = null;
+    setMicEnabled(false);
     // Properly detach every subscribed track so LiveKit releases its element references.
     for (const track of subscribedTracksRef.current) {
       try {
@@ -602,6 +609,37 @@ function App() {
     setRemoteAudioReady(false);
     setTestRoomName('');
     setTestStatus('Idle');
+  }
+
+  async function toggleTestMic() {
+    const nextEnabled = !micEnabled;
+    try {
+      if (localTrackRef.current) {
+        if (nextEnabled) {
+          await localTrackRef.current.unmute();
+        } else {
+          await localTrackRef.current.mute();
+        }
+      } else if (livekitRoomRef.current) {
+        await livekitRoomRef.current.localParticipant.setMicrophoneEnabled(nextEnabled);
+      }
+      setMicEnabled(nextEnabled);
+      setTestStatus(nextEnabled ? 'Listening. Microphone is live.' : 'Listening. Microphone muted.');
+    } catch (error) {
+      reportDiagnostic('WebRTC Mic Control', error, 'Check microphone permission and retry the control');
+    }
+  }
+
+  async function sendTestChatMessage(messageText: string) {
+    const trimmed = messageText.trim();
+    if (!trimmed || !livekitRoomRef.current) return;
+    try {
+      await livekitRoomRef.current.localParticipant.sendText(trimmed, { topic: 'dashboard-test-chat' });
+      setTestChatMessage('');
+      setTestStatus('Thinking. Chat message sent to the LiveKit room.');
+    } catch (error) {
+      reportDiagnostic('WebRTC Chat', error, 'The agent may not consume text chat yet; voice testing still works');
+    }
   }
 
   return (
@@ -719,11 +757,16 @@ function App() {
               status={testStatus}
               error={testError}
               closeNote={testCloseNote}
+              chatMessage={testChatMessage}
+              setChatMessage={setTestChatMessage}
+              micEnabled={micEnabled}
               roomName={testRoomName}
               remoteAudioReady={remoteAudioReady}
               remoteAudioRef={remoteAudioRef}
               onStart={startWebRtcTest}
               onStop={stopWebRtcTest}
+              onToggleMic={toggleTestMic}
+              onSendChat={sendTestChatMessage}
             />
           </ResilientPanel>
         )}
@@ -1144,11 +1187,16 @@ function TestCallPanel({
   status,
   error,
   closeNote,
+  chatMessage,
+  setChatMessage,
+  micEnabled,
   roomName,
   remoteAudioReady,
   remoteAudioRef,
   onStart,
-  onStop
+  onStop,
+  onToggleMic,
+  onSendChat
 }: {
   bots: BotType[];
   selectedBot?: BotType;
@@ -1160,11 +1208,16 @@ function TestCallPanel({
   status: string;
   error: string;
   closeNote: string;
+  chatMessage: string;
+  setChatMessage: (value: string) => void;
+  micEnabled: boolean;
   roomName: string;
   remoteAudioReady: boolean;
   remoteAudioRef: React.RefObject<HTMLDivElement>;
   onStart: () => void;
   onStop: () => void;
+  onToggleMic: () => void;
+  onSendChat: (messageText: string) => void;
 }) {
   function updateField(key: keyof TestForm, value: string) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -1172,6 +1225,8 @@ function TestCallPanel({
 
   const defaultWorker = runtimeSettings?.livekit_agent_name || 'voice-bot-justdial';
   const effectiveWorker = form.test_worker_agent_name || defaultWorker;
+  const agentState = deriveAgentState(status, remoteAudioReady, Boolean(roomName));
+  const connected = Boolean(roomName) && status !== 'Idle' && !status.toLowerCase().includes('failed');
 
   return (
     <section className="test-grid">
@@ -1230,27 +1285,28 @@ function TestCallPanel({
       <div className="panel status-panel">
         <div className="live-session-card">
           <div className="live-session-header">
-            <span className={status === 'Idle' ? 'session-dot' : 'session-dot active'} />
+            <span className={`session-dot ${agentState}`} />
             <div>
               <h2>Live session</h2>
-              <p>{status}</p>
+              <p>{titleCase(agentState)} · {status}</p>
             </div>
           </div>
-          <div className="audio-visualizer" aria-hidden="true">
-            {Array.from({ length: 18 }).map((_, index) => (
-              <span
-                className={remoteAudioReady ? 'active' : ''}
-                key={index}
-                style={{ animationDelay: `${index * 55}ms` }}
-              />
-            ))}
-          </div>
+          <AgentAudioVisualizerWave state={agentState} />
           <div className="session-meta-grid">
             <Metric label="Room" value={roomName ? shortId(roomName) : 'not created'} />
             <Metric label="Worker" value={effectiveWorker} />
-            <Metric label="Mic" value={status.includes('Microphone') || remoteAudioReady ? 'live' : 'waiting'} />
+            <Metric label="Mic" value={micEnabled ? 'live' : 'muted'} />
             <Metric label="Bot audio" value={remoteAudioReady ? 'connected' : 'waiting'} />
           </div>
+          <AgentControlBar
+            connected={connected}
+            micEnabled={micEnabled}
+            chatMessage={chatMessage}
+            onChatMessageChange={setChatMessage}
+            onToggleMic={onToggleMic}
+            onSendChat={onSendChat}
+            onDisconnect={onStop}
+          />
           {closeNote && <p className="session-close-note">{closeNote}</p>}
         </div>
         <h2>Connection checklist</h2>
@@ -2158,6 +2214,66 @@ function ConnectionLine({ icon, label, value, done }: {
   );
 }
 
+type AgentUiState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking';
+
+function AgentControlBar({
+  connected,
+  micEnabled,
+  chatMessage,
+  onChatMessageChange,
+  onToggleMic,
+  onSendChat,
+  onDisconnect
+}: {
+  connected: boolean;
+  micEnabled: boolean;
+  chatMessage: string;
+  onChatMessageChange: (value: string) => void;
+  onToggleMic: () => void;
+  onSendChat: (messageText: string) => void;
+  onDisconnect: () => void;
+}) {
+  function submitChat(event: React.FormEvent) {
+    event.preventDefault();
+    onSendChat(chatMessage);
+  }
+
+  return (
+    <div className="agent-control-bar" aria-label="Agent session controls">
+      <button className={micEnabled ? 'control-button active' : 'control-button'} onClick={onToggleMic} disabled={!connected}>
+        <Mic size={15} /> {micEnabled ? 'Mute' : 'Unmute'}
+      </button>
+      <form className="agent-chat-input" onSubmit={submitChat}>
+        <MessageSquareText size={15} />
+        <input
+          value={chatMessage}
+          onChange={(event) => onChatMessageChange(event.target.value)}
+          placeholder="Send chat message"
+          disabled={!connected}
+        />
+        <button className="control-button send" type="submit" disabled={!connected || !chatMessage.trim()}>
+          <SendHorizontal size={15} />
+        </button>
+      </form>
+      <button className="control-button danger" onClick={onDisconnect} disabled={!connected}>
+        <Square size={15} /> End
+      </button>
+    </div>
+  );
+}
+
+function AgentAudioVisualizerWave({ state }: { state: AgentUiState }) {
+  return (
+    <div className={`agent-wave ${state}`} aria-label={`Agent is ${state}`}>
+      <div className="wave-line">
+        {Array.from({ length: 34 }).map((_, index) => (
+          <span key={index} style={{ animationDelay: `${index * 38}ms` }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Step({ title, text }: { title: string; text: string }) {
   return <div className="step"><strong>{title}</strong><p>{text}</p></div>;
 }
@@ -2233,6 +2349,15 @@ function friendlyTestError(error: unknown) {
     return 'Browser could not connect to LiveKit. Check LIVEKIT_URL is reachable from your browser and uses ws/wss correctly.';
   }
   return raw || 'Unknown test call error. Check backend logs and LiveKit server status.';
+}
+
+function deriveAgentState(status: string, remoteAudioReady: boolean, hasRoom: boolean): AgentUiState {
+  const value = status.toLowerCase();
+  if (!hasRoom || value === 'idle' || value.includes('disconnected')) return 'idle';
+  if (value.includes('creating') || value.includes('connecting') || value.includes('requesting') || value.includes('reconnecting')) return 'connecting';
+  if (value.includes('speaking') || value.includes('bot audio connected') || remoteAudioReady) return 'speaking';
+  if (value.includes('thinking') || value.includes('waiting for bot') || value.includes('participant joined')) return 'thinking';
+  return 'listening';
 }
 
 function shortId(value: string) {

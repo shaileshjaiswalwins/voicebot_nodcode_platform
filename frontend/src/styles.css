@@ -773,29 +773,102 @@ label.full {
   background: #9aa9bb;
 }
 
-.session-dot.active {
+.session-dot.connecting {
+  background: #b76e00;
+  box-shadow: 0 0 0 5px rgba(183, 110, 0, 0.12);
+}
+
+.session-dot.listening {
   background: #14804a;
   box-shadow: 0 0 0 5px rgba(20, 128, 74, 0.12);
 }
 
-.audio-visualizer {
+.session-dot.thinking {
+  background: #105cab;
+  box-shadow: 0 0 0 5px rgba(16, 92, 171, 0.12);
+}
+
+.session-dot.speaking {
+  background: #7a4fdb;
+  box-shadow: 0 0 0 5px rgba(122, 79, 219, 0.12);
+}
+
+.agent-wave {
+  height: 54px;
+  display: grid;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #e1ebf5;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.wave-line {
   height: 42px;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 2px;
+  justify-content: center;
+  gap: 2px;
+  padding: 0 10px;
 }
 
-.audio-visualizer span {
+.wave-line span {
   width: 5px;
-  height: 10px;
+  height: 4px;
   border-radius: 999px;
   background: #c8d6e6;
 }
 
-.audio-visualizer span.active {
+.agent-wave.connecting .wave-line span {
+  background: #d99a2b;
+  animation: waveConnecting 1050ms ease-in-out infinite alternate;
+}
+
+.agent-wave.listening .wave-line span {
+  background: #36a66a;
+  animation: waveListening 1600ms ease-in-out infinite alternate;
+}
+
+.agent-wave.thinking .wave-line span {
   background: #105cab;
-  animation: audioPulse 900ms ease-in-out infinite alternate;
+  animation: waveThinking 850ms ease-in-out infinite alternate;
+}
+
+.agent-wave.speaking .wave-line span {
+  background: #7a4fdb;
+  animation: waveSpeaking 620ms ease-in-out infinite alternate;
+}
+
+.wave-line span:nth-child(3n) {
+  animation-delay: 90ms;
+}
+
+.wave-line span:nth-child(4n) {
+  animation-delay: 180ms;
+}
+
+.wave-line span:nth-child(5n) {
+  animation-delay: 270ms;
+}
+
+@keyframes waveConnecting {
+  from { height: 5px; opacity: 0.45; }
+  to { height: 18px; opacity: 0.95; }
+}
+
+@keyframes waveListening {
+  from { height: 4px; opacity: 0.35; }
+  to { height: 10px; opacity: 0.75; }
+}
+
+@keyframes waveThinking {
+  from { height: 6px; transform: translateY(5px); }
+  to { height: 24px; transform: translateY(-5px); }
+}
+
+@keyframes waveSpeaking {
+  from { height: 7px; }
+  to { height: 36px; }
 }
 
 .session-meta-grid {
@@ -817,20 +890,61 @@ label.full {
   font-size: 12px;
 }
 
+.agent-control-bar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.control-button {
+  min-height: 36px;
+  padding: 0 10px;
+  border-color: #cfd9e4;
+  font-size: 12px;
+}
+
+.control-button.active {
+  border-color: #c6e8d7;
+  background: #f0fbf5;
+  color: #17633c;
+}
+
+.control-button.danger {
+  border-color: #efc8c8;
+  background: #fff6f6;
+  color: #922828;
+}
+
+.control-button.send {
+  width: 34px;
+  padding: 0;
+}
+
+.agent-chat-input {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 0 9px;
+  border: 1px solid #cfd9e4;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.agent-chat-input input {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+}
+
 .session-close-note {
   margin: 0;
   color: #506176;
   font-size: 12px;
   line-height: 1.4;
-}
-
-@keyframes audioPulse {
-  from {
-    height: 8px;
-  }
-  to {
-    height: 34px;
-  }
 }
 
 .connection-line {
