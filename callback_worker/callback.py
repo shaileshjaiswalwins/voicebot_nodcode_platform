@@ -110,6 +110,7 @@ def build_callback_payload(doc: dict, analysis: dict, b2b_score: dict | None = N
     if status == "disconnected" and outcome in ("Approved", "Enriched"):
         status = "completed"
 
+
     _b2b = b2b_score or {}
     payload: dict = {
         "call_id": str(doc.get("_id", "")),
