@@ -146,7 +146,7 @@ async def generate_call_analysis(
             for m in (muted_transcript or [])
             for w in (_nfc(m or "")).split()
             if w.strip(".,!? ।")
-        }
+        } 
         _greeting_set_nfc = {_nfc(g) for g in _GREETING_SET}
         if _muted_words and not (_muted_words - _greeting_set_nfc):
             return {
