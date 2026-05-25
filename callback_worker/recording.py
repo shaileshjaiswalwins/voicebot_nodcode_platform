@@ -38,6 +38,8 @@ _RECORDING_URL_KEYS = {
     "audioUrl",
     "file_url",
     "fileUrl",
+    "media_path",
+    "mediaPath",
     "url",
 }
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -124,22 +126,53 @@ def _iter_values(payload: Any):
 
 
 def extract_recording_url(payload: Any) -> str:
-    for obj in _iter_values(payload):
-        if not isinstance(obj, dict):
-            continue
-        for key, value in obj.items():
-            if key in _RECORDING_URL_KEYS and isinstance(value, str):
-                candidate = value.strip()
-                if candidate.startswith(("http://", "https://")):
-                    return candidate
+    row = select_recording_row(payload)
+    if row:
+        return _recording_url_from_row(row)
     return ""
 
 
 def extract_recording_row(payload: Any) -> dict[str, Any]:
+    return select_recording_row(payload)
+
+
+def _recording_url_from_row(row: dict[str, Any]) -> str:
+    for key, value in row.items():
+        if key in _RECORDING_URL_KEYS and isinstance(value, str):
+            candidate = value.strip()
+            if candidate.startswith(("http://", "https://")):
+                return candidate
+    return ""
+
+
+def _parse_api_call_time(row: dict[str, Any]) -> datetime | None:
+    return _coerce_datetime(row.get("call_start_time") or row.get("entry_date"))
+
+
+def select_recording_row(payload: Any, call_start_time: Any = None) -> dict[str, Any]:
+    anchor = _coerce_datetime(call_start_time)
+    candidates: list[dict[str, Any]] = []
     for obj in _iter_values(payload):
-        if isinstance(obj, dict) and extract_recording_url(obj):
-            return obj
-    return {}
+        if not isinstance(obj, dict):
+            continue
+        if not _recording_url_from_row(obj):
+            continue
+        candidates.append(obj)
+    if not candidates:
+        return {}
+
+    def score(row: dict[str, Any]) -> tuple[int, float, int]:
+        disposition = str(row.get("call_disposition") or "").upper()
+        answered_rank = 0 if disposition == "ANSWERED" else 1
+        row_time = _parse_api_call_time(row)
+        if anchor and row_time:
+            distance = abs((row_time - anchor).total_seconds())
+        else:
+            distance = float("inf")
+        duration = int(row.get("call_duration") or row.get("trunk_duration") or 0)
+        return (answered_rank, distance, -duration)
+
+    return sorted(candidates, key=score)[0]
 
 
 async def fetch_recording_metadata(
@@ -185,7 +218,8 @@ async def fetch_recording_metadata(
                 "body": body[:300],
                 "request": payload,
             }
-    recording_url = extract_recording_url(data)
+    selected_row = select_recording_row(data, doc.get("call_start_time") or doc.get("created_at"))
+    recording_url = _recording_url_from_row(selected_row)
     if not recording_url:
         return {
             "status": "unavailable",
@@ -196,7 +230,7 @@ async def fetch_recording_metadata(
     return {
         "status": "found",
         "recording_url": recording_url,
-        "recording_row": extract_recording_row(data),
+        "recording_row": selected_row,
         "request": payload,
     }
 

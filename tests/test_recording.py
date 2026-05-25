@@ -31,6 +31,43 @@ def test_extract_recording_url_from_nested_payload():
     assert recording.extract_recording_url(payload) == "http://recordings.example/call.mp3"
 
 
+def test_extract_recording_url_supports_media_path_sample_shape():
+    payload = {
+        "errorCode": 0,
+        "data": [
+            {"call_disposition": "NO ANSWER", "media_path": ""},
+            {
+                "call_disposition": "ANSWERED",
+                "call_duration": 24,
+                "media_path": "http://172.29.26.148/Recordings/2026/May/21May2026/293/call.mp3",
+            },
+        ],
+    }
+
+    assert recording.extract_recording_url(payload).endswith("/call.mp3")
+
+
+def test_select_recording_row_picks_closest_answered_media_path():
+    payload = {
+        "data": [
+            {
+                "call_disposition": "ANSWERED",
+                "call_start_time": "2026-05-21T05:52:01.000Z",
+                "media_path": "http://recordings.example/old.mp3",
+            },
+            {
+                "call_disposition": "ANSWERED",
+                "call_start_time": "2026-05-21T08:54:47.000Z",
+                "media_path": "http://recordings.example/close.mp3",
+            },
+        ],
+    }
+
+    row = recording.select_recording_row(payload, "2026-05-21T08:55:00.000Z")
+
+    assert row["media_path"].endswith("close.mp3")
+
+
 def test_recording_window_uses_call_start_time():
     doc = {"call_start_time": datetime(2026, 3, 5, 12, 0, tzinfo=timezone.utc)}
 

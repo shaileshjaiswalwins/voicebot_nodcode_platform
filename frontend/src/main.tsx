@@ -88,6 +88,10 @@ type RuntimeConfig = {
   gemini_silence_duration_ms?: number;
   gemini_prefix_padding_ms?: number;
   post_speech_hold_ms?: number;
+  recording?: {
+    service_id?: number | string;
+    dialer_city?: string;
+  };
   prompt_config?: Record<string, unknown>;
   functions?: unknown[];
   [key: string]: unknown;
@@ -117,7 +121,11 @@ const defaultConfig: RuntimeConfig = {
   function_calling: true,
   gemini_silence_duration_ms: 1800,
   gemini_prefix_padding_ms: 300,
-  post_speech_hold_ms: 800
+  post_speech_hold_ms: 800,
+  recording: {
+    service_id: 293,
+    dialer_city: 'bangalore'
+  }
 };
 
 function App() {
@@ -1178,6 +1186,27 @@ function BuilderView({
               <label>
                 Silence duration ms
                 <input type="number" value={Number(value.gemini_silence_duration_ms || 1800)} onChange={(event) => onUpdateConfig('gemini_silence_duration_ms', Number(event.target.value))} />
+              </label>
+              <label>
+                Dialer service ID
+                <input
+                  type="number"
+                  value={Number((value.recording as RuntimeConfig['recording'] | undefined)?.service_id || 293)}
+                  onChange={(event) => onUpdateConfig('recording', {
+                    ...(typeof value.recording === 'object' && value.recording ? value.recording : {}),
+                    service_id: Number(event.target.value)
+                  })}
+                />
+              </label>
+              <label>
+                Dialer city
+                <input
+                  value={String((value.recording as RuntimeConfig['recording'] | undefined)?.dialer_city || 'bangalore')}
+                  onChange={(event) => onUpdateConfig('recording', {
+                    ...(typeof value.recording === 'object' && value.recording ? value.recording : {}),
+                    dialer_city: event.target.value
+                  })}
+                />
               </label>
             </div>
           </div>
