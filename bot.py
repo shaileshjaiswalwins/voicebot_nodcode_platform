@@ -1533,7 +1533,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # Turn-wise transcript + latency tracking
     _turn_counter = 0
-    _partial_first_time: float | None = None  # wall-clock when first partial for current turn arrived
+    _partial_first_time: float | None = None   # wall-clock of most-recent partial — approximates user end-of-speech
+    _pending_e2e_user_stop: float | None = None  # snapshot of _partial_first_time at speaking-start, for e2e calc
+    _bot_stop_time: float | None = None         # wall-clock when bot last left "speaking" state
     _live_transcript: list = []  # real-time capture; avoids missing turns on abrupt disconnect
     _pending_user_text: str = ""     # last partial user transcription (may never get a final)
     _pending_assistant_text: str = ""  # last partial assistant turn being streamed (may be cut mid-sentence)
@@ -2118,7 +2120,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if _is_incomplete:
                 _log.info(f"[BARGE-IN] Skipping interrupted partial bot turn: {text!r}")
             elif not _live_transcript or _live_transcript[-1] != {"role": "assistant", "text": text}:
-                _live_transcript.append({"role": "assistant", "text": text})
+                _asst_entry: dict = {"role": "assistant", "text": text}
+                # e2e: started_speaking_at (first audio frame pushed to room) minus last
+                # user partial (≈ end-of-speech). Gemini Live doesn't populate e2e_latency
+                # on ChatMessage.metrics, so we compute it from the framework timestamp + our snapshot.
+                _item_metrics = getattr(item, "metrics", None) or {}
+                _started_speaking_at = _item_metrics.get("started_speaking_at")
+                if _started_speaking_at is not None and _pending_e2e_user_stop is not None:
+                    _e2e_ms = round((_started_speaking_at - _pending_e2e_user_stop) * 1000)
+                    _log.info(f"[LATENCY] Turn {_turn_counter} | e2e: {_e2e_ms}ms")
+                    _asst_entry["e2e_ms"] = _e2e_ms
+                _live_transcript.append(_asst_entry)
         # Sniffer partial is superseded by the officially committed item — clear it.
         _pending_assistant_text = ""
         # Early mute: partial closing phrases are unique to the wrap-up line — mute
@@ -2160,8 +2172,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         ).strip()
         if not transcript_text:
             return
-        if not is_final and _partial_first_time is None:
-            _partial_first_time = time.time()
+        if not is_final:
+            _partial_first_time = time.time()  # updated every partial — last partial ≈ user end-of-speech
         # Snapshot agent state at the moment user speech arrives (for interruption diagnosis).
         _agent_state_now = ""
         try:
@@ -2189,12 +2201,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 f"agent_state={_agent_state_now} mic={_mic_enabled} "
                 f"speech_ms={speech_ms_now:.0f}"
             )
-            if _partial_first_time is not None and _speaking_start_time is not None:
-                _gemini_ms = round((_speaking_start_time - _partial_first_time) * 1000)
-                _log.info(
-                    f"[LATENCY] Turn {_turn_counter} | gemini: {_gemini_ms}ms "
-                    f"| user_speech: {speech_ms_now:.0f}ms"
-                )
+            _bot_to_user_ms: int | None = None
+            if _partial_first_time is not None and _bot_stop_time is not None:
+                _bot_to_user_ms = round((_partial_first_time - _bot_stop_time) * 1000)
+                _log.info(f"[LATENCY] Turn {_turn_counter} | bot→user: {_bot_to_user_ms}ms")
+            _log.info(f"[LATENCY] Turn {_turn_counter} | user_speech: {speech_ms_now:.0f}ms")
             _partial_first_time = None
             _pending_user_text = ""
             # Gemini confirmed this turn — rotate WAV segment so next turn starts fresh
@@ -2280,10 +2291,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     asyncio.create_task(_save_and_close("ivr_detected"))
                 return
             # Replace the last entry if it was a partial for this same turn
+            _user_entry: dict = {"role": "user", "text": transcript_text}
+            if _bot_to_user_ms is not None:
+                _user_entry["bot_to_user_ms"] = _bot_to_user_ms
             if _live_transcript and _live_transcript[-1]["role"] == "user":
-                _live_transcript[-1]["text"] = transcript_text
+                _live_transcript[-1] = _user_entry
             else:
-                _live_transcript.append({"role": "user", "text": transcript_text})
+                _live_transcript.append(_user_entry)
         else:
             # Partial — keep the latest chunk in _pending_user_text; also put a
             # placeholder in _live_transcript so save_call_data sees it even if
@@ -2320,7 +2334,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _speaking_start_time, _barge_in_fired
+        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _speaking_start_time, _barge_in_fired, _bot_stop_time, _pending_e2e_user_stop
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
@@ -2335,6 +2349,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _bot_has_spoken = True
             _barge_in_fired = False  # reset at start of each bot turn
             _speaking_start_time = time.time()
+            _pending_e2e_user_stop = _partial_first_time  # snapshot before FINAL clears it
             _cancel_inactivity()
             # Cancel any in-flight hold task and any pending muted injection.
             if _echo_guard_task and not _echo_guard_task.done():
@@ -2399,12 +2414,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         _transcribe_muted_period(_greeting_captured_frames, _greeting_captured_ms)
                     )
                 if not _call_ended:
+                    _bot_stop_time = time.time()
+                    _log.info(f"[LATENCY] Turn {_turn_counter} | greeting ended")
                     _set_mic(True, reason="greeting-complete")
                     _log.info("[MIC] Greeting complete — mic enabled")
             elif _greeting_done and _bot_has_spoken and not _call_ended and not _closing_triggered:
                 # Post-speech hold: brief window after each bot turn to absorb TTS tail.
                 # If the 2 s unmute already fired, mic is ON here — re-mute for the hold
                 # so the WAV rotation and muted-capture flush still happen cleanly.
+                _bot_stop_time = time.time()
+                _log.info(f"[LATENCY] Turn {_turn_counter} | bot speaking ended")
                 _speaking_start_time = None
                 # Bot finished speaking — cancel 2 s unmute timer if it hasn't fired yet.
                 if _speaking_unmute_task and not _speaking_unmute_task.done():
