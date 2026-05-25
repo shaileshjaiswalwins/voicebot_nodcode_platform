@@ -173,4 +173,17 @@ def build_callback_payload(doc: dict, analysis: dict, b2b_score: dict | None = N
         spec_ques[f"spec_ques_{i}"] = entry
     payload.update(spec_ques)
 
+    pc = payload.get("product_change") or {}
+    if pc.get("product_name"):
+        type_by_qid = {q.get("id"): q.get("type", "") for q in schema_qs}
+        pro_ques: dict = {}
+        for i, entry in enumerate(final_entries, 1):
+            pro_ques[f"pro_ques_{i}"] = {
+                "Quest": entry["Quest"],
+                "Answ": entry["Answ"],
+                "Qid": entry["Qid"],
+                "type": type_by_qid.get(entry["Qid"], ""),
+            }
+        payload["product_change"] = {**pc, **pro_ques}
+
     return payload
