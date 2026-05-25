@@ -132,6 +132,7 @@ function App() {
   const [languageSettings, setLanguageSettings] = useState<LanguageSettings[]>([]);
   const [configText, setConfigText] = useState(JSON.stringify(defaultConfig, null, 2));
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
+  const [selectedTranscriptDetail, setSelectedTranscriptDetail] = useState<Transcript | null>(null);
   const [callEvents, setCallEvents] = useState<CallEvent[]>([]);
   const [selectedTranscriptId, setSelectedTranscriptId] = useState('');
   const [message, setMessage] = useState('');
@@ -151,6 +152,7 @@ function App() {
   });
   const [testStatus, setTestStatus] = useState('Idle');
   const [testError, setTestError] = useState('');
+  const [testCloseNote, setTestCloseNote] = useState('');
   const [testRoomName, setTestRoomName] = useState('');
   const [remoteAudioReady, setRemoteAudioReady] = useState(false);
   const livekitRoomRef = useRef<Room | null>(null);
@@ -173,8 +175,8 @@ function App() {
   );
 
   const selectedTranscript = useMemo(
-    () => transcripts.find((item) => item._id === selectedTranscriptId) || transcripts[0],
-    [transcripts, selectedTranscriptId]
+    () => selectedTranscriptDetail || transcripts.find((item) => item._id === selectedTranscriptId) || transcripts[0],
+    [selectedTranscriptDetail, transcripts, selectedTranscriptId]
   );
 
   const parsedConfig = useMemo(() => parseConfig(configText), [configText]);
@@ -313,9 +315,20 @@ function App() {
 
   useEffect(() => {
     if (!selectedTranscriptId) {
+      setSelectedTranscriptDetail(null);
       setCallEvents([]);
       return;
     }
+    setSelectedTranscriptDetail(null);
+    api.transcript(selectedTranscriptId)
+      .then((transcript) => {
+        setSelectedTranscriptDetail(transcript);
+        clearDiagnostic('Transcript Detail API');
+      })
+      .catch((error) => {
+        setSelectedTranscriptDetail(null);
+        reportDiagnostic('Transcript Detail API', error, 'Use the transcript list data, then retry refresh after the call ends');
+      });
     api.transcriptEvents(selectedTranscriptId)
       .then((events) => {
         setCallEvents(events);
@@ -479,6 +492,7 @@ function App() {
       return;
     }
     setTestError('');
+    setTestCloseNote('');
     setRemoteAudioReady(false);
     setTestStatus('Creating LiveKit room...');
     try {
@@ -570,13 +584,19 @@ function App() {
     if (roomName) {
       try {
         setTestStatus('Closing LiveKit test room...');
-        await api.closeWebRtcTestSession(roomName);
+        const closeResult = await api.closeWebRtcTestSession(roomName);
+        setTestCloseNote(
+          closeResult.status === 'already_closed'
+            ? 'LiveKit room was already closed. Refresh transcripts after a few seconds.'
+            : 'LiveKit close requested. Refresh transcripts after a few seconds.'
+        );
       } catch (error) {
         reportDiagnostic(
           'WebRTC Test Call',
           friendlyTestError(error),
           'The browser disconnected locally. Retry Stop once, then check worker logs if the transcript is missing.'
         );
+        setTestCloseNote('Browser disconnected locally, but the backend could not confirm LiveKit room closure.');
       }
     }
     setRemoteAudioReady(false);
@@ -698,6 +718,7 @@ function App() {
               setForm={setTestForm}
               status={testStatus}
               error={testError}
+              closeNote={testCloseNote}
               roomName={testRoomName}
               remoteAudioReady={remoteAudioReady}
               remoteAudioRef={remoteAudioRef}
@@ -1122,6 +1143,7 @@ function TestCallPanel({
   setForm,
   status,
   error,
+  closeNote,
   roomName,
   remoteAudioReady,
   remoteAudioRef,
@@ -1137,6 +1159,7 @@ function TestCallPanel({
   setForm: React.Dispatch<React.SetStateAction<TestForm>>;
   status: string;
   error: string;
+  closeNote: string;
   roomName: string;
   remoteAudioReady: boolean;
   remoteAudioRef: React.RefObject<HTMLDivElement>;
@@ -1205,6 +1228,31 @@ function TestCallPanel({
         </div>
       </div>
       <div className="panel status-panel">
+        <div className="live-session-card">
+          <div className="live-session-header">
+            <span className={status === 'Idle' ? 'session-dot' : 'session-dot active'} />
+            <div>
+              <h2>Live session</h2>
+              <p>{status}</p>
+            </div>
+          </div>
+          <div className="audio-visualizer" aria-hidden="true">
+            {Array.from({ length: 18 }).map((_, index) => (
+              <span
+                className={remoteAudioReady ? 'active' : ''}
+                key={index}
+                style={{ animationDelay: `${index * 55}ms` }}
+              />
+            ))}
+          </div>
+          <div className="session-meta-grid">
+            <Metric label="Room" value={roomName ? shortId(roomName) : 'not created'} />
+            <Metric label="Worker" value={effectiveWorker} />
+            <Metric label="Mic" value={status.includes('Microphone') || remoteAudioReady ? 'live' : 'waiting'} />
+            <Metric label="Bot audio" value={remoteAudioReady ? 'connected' : 'waiting'} />
+          </div>
+          {closeNote && <p className="session-close-note">{closeNote}</p>}
+        </div>
         <h2>Connection checklist</h2>
         <ConnectionLine icon={<Database />} label="Backend room" value={roomName || 'Not created'} done={Boolean(roomName)} />
         <ConnectionLine icon={<Bot />} label="Dispatched worker" value={effectiveWorker} done={Boolean(effectiveWorker)} />
@@ -1230,6 +1278,26 @@ function TestCallPanel({
   );
 }
 
+type ConversationItem =
+  | {
+      kind: 'turn';
+      id: string;
+      role: string;
+      text: string;
+      time: string;
+      sortAt: number;
+      interrupted: boolean;
+    }
+  | {
+      kind: 'event';
+      id: string;
+      title: string;
+      text: string;
+      time: string;
+      sortAt: number;
+      severity: CallEvent['severity'];
+    };
+
 function TranscriptsView({
   transcripts,
   selectedTranscript,
@@ -1245,6 +1313,11 @@ function TranscriptsView({
   onSearchText: (value: string) => void;
   onSelect: (id: string) => void;
 }) {
+  const conversationItems = useMemo(
+    () => buildConversationItems(selectedTranscript, callEvents),
+    [selectedTranscript, callEvents]
+  );
+
   return (
     <section className="content-grid transcripts-grid">
       <div className="table-panel">
@@ -1275,7 +1348,13 @@ function TranscriptsView({
         </table>
       </div>
       <div className="panel transcript-detail">
-        <h2>Transcript detail</h2>
+        <div className="conversation-header">
+          <div>
+            <h2>Transcript detail</h2>
+            <p>{selectedTranscript?.call_id || 'Select a call'} · {selectedTranscript?.status || 'unknown'}</p>
+          </div>
+          {selectedTranscript && <StatusPill value={selectedTranscript.status || 'unknown'} />}
+        </div>
         {selectedTranscript ? (
           <>
             <div className="detail-list">
@@ -1284,14 +1363,29 @@ function TranscriptsView({
               <Detail label="Callback" value={selectedTranscript.callback_status || '-'} />
               <Detail label="Recording" value={selectedTranscript.recording_url || 'Dialer link not saved'} />
             </div>
-            <div className="turn-list">
-              {(selectedTranscript.transcript || []).slice(0, 14).map((turn, index) => (
-                <div className={`turn ${turn.role}`} key={`${turn.role}-${index}`}>
-                  <span>{turn.role}</span>
-                  <p>{turn.text}</p>
-                </div>
+            <div className="chat-transcript">
+              {conversationItems.map((item) => (
+                item.kind === 'event' ? (
+                  <div className={`chat-event ${item.severity}`} key={item.id}>
+                    <span>{item.time}</span>
+                    <strong>{item.title}</strong>
+                    <p>{item.text}</p>
+                  </div>
+                ) : (
+                  <div className={`chat-turn ${item.role}`} key={item.id}>
+                    <div className="chat-avatar">{item.role === 'assistant' ? <Bot size={15} /> : <Mic size={15} />}</div>
+                    <div className="chat-bubble">
+                      <div className="chat-meta">
+                        <strong>{item.role === 'assistant' ? 'Tanya / Assistant' : item.role === 'user' ? 'User' : titleCase(item.role)}</strong>
+                        <span>{item.time}</span>
+                      </div>
+                      <p>{item.text}</p>
+                      {item.interrupted && <small>Interrupted during this turn</small>}
+                    </div>
+                  </div>
+                )
               ))}
-              {!selectedTranscript.transcript?.length && <p className="muted">No transcript turns saved for this call yet.</p>}
+              {!conversationItems.length && <p className="muted">No transcript turns saved for this call yet.</p>}
             </div>
             <div className="timeline-section">
               <div className="section-heading">
@@ -2158,6 +2252,82 @@ function formatTime(value?: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+const INLINE_EVENT_TYPES = new Set([
+  'call_started',
+  'first_user_audio_received',
+  'first_user_transcript_received',
+  'first_agent_response',
+  'first_word_spoken',
+  'user_interrupted',
+  'interruption',
+  'transcript_save_succeeded',
+  'transcript_save_failed',
+  'callback_failed',
+  'callback_succeeded',
+  'call_ended'
+]);
+
+const START_EVENT_TYPES = new Set(['call_started', 'first_user_audio_received', 'first_user_transcript_received']);
+const END_EVENT_TYPES = new Set(['transcript_save_succeeded', 'transcript_save_failed', 'callback_failed', 'callback_succeeded', 'call_ended']);
+
+function buildConversationItems(transcript?: Transcript, events: CallEvent[] = []): ConversationItem[] {
+  if (!transcript) return [];
+  const inlineEvents = events.filter((event) => INLINE_EVENT_TYPES.has(event.event_type));
+  const turnItems: ConversationItem[] = (transcript.transcript || []).map((turn, index) => ({
+    kind: 'turn',
+    id: `turn-${index}`,
+    role: normalizeTranscriptRole(turn.role),
+    text: turn.text || '',
+    time: formatTime(turn.created_at),
+    sortAt: timestampValue(turn.created_at),
+    interrupted: Boolean(turn.interrupted || turn.event_type?.toLowerCase().includes('interrupt'))
+  }));
+  const eventItems = inlineEvents.map((event) => eventToConversationItem(event));
+  const hasTurnTimes = (transcript.transcript || []).some((turn) => Boolean(turn.created_at));
+  if (hasTurnTimes) {
+    return [...eventItems, ...turnItems].sort((a, b) => a.sortAt - b.sortAt);
+  }
+  return [
+    ...eventItems.filter((event) => START_EVENT_TYPES.has(event.title)),
+    ...turnItems,
+    ...eventItems.filter((event) => !START_EVENT_TYPES.has(event.title) && !END_EVENT_TYPES.has(event.title)),
+    ...eventItems.filter((event) => END_EVENT_TYPES.has(event.title))
+  ];
+}
+
+function eventToConversationItem(event: CallEvent): ConversationItem {
+  return {
+    kind: 'event',
+    id: event._id,
+    title: event.event_type,
+    text: event.message || titleCase(event.event_type.replaceAll('_', ' ')),
+    time: formatTime(event.created_at),
+    sortAt: timestampValue(event.created_at),
+    severity: event.severity || 'info'
+  };
+}
+
+function timestampValue(value?: string) {
+  if (!value) return Number.MAX_SAFE_INTEGER;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
+}
+
+function normalizeTranscriptRole(role: string) {
+  const value = (role || '').toLowerCase();
+  if (['assistant', 'agent', 'bot', 'model'].includes(value)) return 'assistant';
+  if (['user', 'customer', 'caller', 'human'].includes(value)) return 'user';
+  return value || 'system';
+}
+
+function titleCase(value: string) {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 function summarizeDetails(details: Record<string, unknown>) {

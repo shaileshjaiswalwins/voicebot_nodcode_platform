@@ -72,6 +72,9 @@ export type BotVersion = {
 export type TranscriptTurn = {
   role: string;
   text: string;
+  created_at?: string;
+  interrupted?: boolean;
+  event_type?: string;
 };
 
 export type Transcript = {
@@ -248,6 +251,8 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   transcripts: () => request<Transcript[]>('/api/transcripts'),
+  transcript: (transcriptId: string) =>
+    request<Transcript>(`/api/transcripts/${encodeURIComponent(transcriptId)}`),
   callEvents: (query = '') => request<CallEvent[]>(`/api/call-events${query}`),
   transcriptEvents: (transcriptId: string) =>
     request<CallEvent[]>(`/api/transcripts/${encodeURIComponent(transcriptId)}/events`),
