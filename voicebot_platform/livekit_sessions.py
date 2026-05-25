@@ -13,6 +13,7 @@ from livekit.api import (
     RoomAgentDispatch,
     VideoGrants,
 )
+from livekit.api.twirp_client import TwirpError, TwirpErrorCode
 
 from .config import (
     LIVEKIT_API_KEY,
@@ -27,6 +28,8 @@ class LiveKitConfigError(RuntimeError):
 
 
 def _is_livekit_room_not_found(exc: Exception) -> bool:
+    if isinstance(exc, TwirpError):
+        return exc.code == TwirpErrorCode.NOT_FOUND
     message = str(exc).lower()
     return "not_found" in message or "requested room does not exist" in message
 
