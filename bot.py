@@ -128,8 +128,6 @@ def _console_format(record: dict) -> str:
         c, e = "<yellow>", "</yellow>"
     elif "[STATE]" in msg or "[MIC]" in msg:
         c, e = "<magenta>", "</magenta>"
-    elif "[LATENCY]" in msg:
-        c, e = "<white>", "</white>"
     else:
         c, e = "", ""
 
@@ -1582,11 +1580,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _echo_guard_task: asyncio.Task | None = None
     _speaking_unmute_task: asyncio.Task | None = None  # 2 s delayed unmute for mid-turn interruptions
 
-    # Turn-wise transcript + latency tracking
+    # Turn-wise transcript tracking
     _turn_counter = 0
-    _partial_first_time: float | None = None   # wall-clock of most-recent partial — approximates user end-of-speech
-    _pending_e2e_user_stop: float | None = None  # snapshot of _partial_first_time at speaking-start, for e2e calc
-    _bot_stop_time: float | None = None         # wall-clock when bot last left "speaking" state
     _live_transcript: list = []  # real-time capture; avoids missing turns on abrupt disconnect
     _pending_user_text: str = ""     # last partial user transcription (may never get a final)
     _pending_assistant_text: str = ""  # last partial assistant turn being streamed (may be cut mid-sentence)
@@ -2041,6 +2036,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         # IVR / voicemail check — captured during muted window (greeting)
         if _is_ivr_message(text):
             _log.info(f"[IVR] busy-line in muted-capture — ending call: {text!r}")
+            _live_transcript.append({"role": "ivr", "text": text})
             if not _call_ended:
                 _call_ended = True
                 call_state["ended_naturally"] = True
@@ -2172,14 +2168,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _log.info(f"[BARGE-IN] Skipping interrupted partial bot turn: {text!r}")
             elif not _live_transcript or _live_transcript[-1] != {"role": "assistant", "text": text}:
                 _asst_entry: dict = {"role": "assistant", "text": text}
-                # e2e: started_speaking_at (first audio frame pushed to room) minus last
-                # user partial (≈ end-of-speech). Gemini Live doesn't populate e2e_latency
-                # on ChatMessage.metrics, so we compute it from the framework timestamp + our snapshot.
-                _item_metrics = getattr(item, "metrics", None) or {}
-                _started_speaking_at = _item_metrics.get("started_speaking_at")
-                if _started_speaking_at is not None and _pending_e2e_user_stop is not None:
-                    _e2e_ms = round((_started_speaking_at - _pending_e2e_user_stop) * 1000)
-                    _asst_entry["e2e_ms"] = _e2e_ms
                 _live_transcript.append(_asst_entry)
         # Sniffer partial is superseded by the officially committed item — clear it.
         _pending_assistant_text = ""
@@ -2210,7 +2198,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("user_input_transcribed")
     def _on_user_spoke(ev) -> None:
-        nonlocal _turn_counter, _partial_first_time, _live_transcript, _pending_user_text, _wav_reset_flag, _call_ended
+        nonlocal _turn_counter, _live_transcript, _pending_user_text, _wav_reset_flag, _call_ended
         # User spoke — reset inactivity timer (pass from_user_speech=True so nudge count clears)
         if not _call_ended:
             _reset_inactivity(from_user_speech=True)
@@ -2222,8 +2210,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         ).strip()
         if not transcript_text:
             return
-        if not is_final:
-            _partial_first_time = time.time()  # updated every partial — last partial ≈ user end-of-speech
         # Snapshot agent state at the moment user speech arrives (for interruption diagnosis).
         _agent_state_now = ""
         try:
@@ -2251,12 +2237,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 f"agent_state={_agent_state_now} mic={_mic_enabled} "
                 f"speech_ms={speech_ms_now:.0f}"
             )
-            _bot_to_user_ms: int | None = None
-            if _partial_first_time is not None and _bot_stop_time is not None:
-                _bot_to_user_ms = round((_partial_first_time - _bot_stop_time) * 1000)
-                _log.info(f"[LATENCY] Turn {_turn_counter} | bot→user: {_bot_to_user_ms}ms")
-            _log.info(f"[LATENCY] Turn {_turn_counter} | user_speech: {speech_ms_now:.0f}ms")
-            _partial_first_time = None
             _pending_user_text = ""
             # Gemini confirmed this turn — rotate WAV segment so next turn starts fresh
             _wav_reset_flag = True
@@ -2333,6 +2313,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _log.info(f"[IVR] busy-line/voicemail detected — ending call: {transcript_text!r}")
                 if _live_transcript and _live_transcript[-1]["role"] == "user":
                     _live_transcript.pop()
+                _live_transcript.append({"role": "ivr", "text": transcript_text})
                 _silero_rejected_turns.add(transcript_text)
                 if not _call_ended:
                     _call_ended = True  # set immediately — prevents closing-phrase from winning the race
@@ -2342,8 +2323,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 return
             # Replace the last entry if it was a partial for this same turn
             _user_entry: dict = {"role": "user", "text": transcript_text}
-            if _bot_to_user_ms is not None:
-                _user_entry["bot_to_user_ms"] = _bot_to_user_ms
             if _live_transcript and _live_transcript[-1]["role"] == "user":
                 _live_transcript[-1] = _user_entry
             else:
@@ -2365,6 +2344,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 f"[TRANSCRIPT] PARTIAL | USER: {transcript_text!r} | "
                 f"agent_state={_agent_state_now} mic={_mic_enabled}"
             )
+            # IVR check on PARTIAL: Gemini responds to partials in ~10ms, so by the
+            # time the FINAL arrives the bot is already speaking. Catch it here instead.
+            if _is_ivr_message(transcript_text) and not _call_ended:
+                _log.info(f"[IVR] busy-line/voicemail detected in PARTIAL — ending call: {transcript_text!r}")
+                _live_transcript.append({"role": "ivr", "text": transcript_text})
+                _call_ended = True
+                call_state["ended_naturally"] = True
+                asyncio.create_task(_kick_caller_safe())
+                asyncio.create_task(_save_and_close("ivr_detected"))
+                return
             _pending_user_text = transcript_text
             if _live_transcript and _live_transcript[-1]["role"] == "user":
                 _live_transcript[-1]["text"] = transcript_text
@@ -2376,7 +2365,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _greeting_retry_triggered = False
     _gemini_connect_failed = False  # True when Gemini WebSocket never connected within 5 s
     _mic_enabled: bool = False  # mirrors the last value passed to set_audio_enabled
-    _speaking_start_time: float | None = None  # wall-clock when current speaking turn started
     _barge_in_fired: bool = False  # True once the 2s unmute task fires for this bot turn
     _bot_resp_watchdog_task: asyncio.Task | None = None  # cancelled when bot starts speaking
     _last_user_final_text: str = ""      # text of the most recent user FINAL turn
@@ -2418,7 +2406,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _speaking_start_time, _barge_in_fired, _bot_stop_time, _pending_e2e_user_stop, _bot_resp_watchdog_task
+        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _barge_in_fired, _bot_resp_watchdog_task
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
@@ -2432,11 +2420,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if state_str == "speaking":
             _bot_has_spoken = True
             _barge_in_fired = False  # reset at start of each bot turn
-            _speaking_start_time = time.time()
-            _pending_e2e_user_stop = _partial_first_time  # snapshot before FINAL clears it
-            if old_str == "listening" and _partial_first_time is not None:
-                _user_to_bot_ms = round((_speaking_start_time - _partial_first_time) * 1000)
-                _log.info(f"[LATENCY] Turn {_turn_counter + 1} | user→bot: {_user_to_bot_ms}ms")
             _cancel_inactivity()
             # Gemini started speaking — cancel the response watchdog.
             if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
@@ -2488,7 +2471,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         elif state_str in ("listening", "idle"):
             if _bot_has_spoken and not _greeting_done:
                 _greeting_done = True
-                _speaking_start_time = None  # reset so Turn 1 latency calc isn't negative
                 # Transcribe any audio captured during the greeting window via Sarvam
                 # so it lands in _muted_transcript_log (and hence Mongo).
                 # Covers voicemail prompts, IVR menus, ambient speech that played
@@ -2529,17 +2511,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             _log.warning(f"[MUTED-CAPTURE] post-greeting inject failed: {e}")
                     asyncio.create_task(_post_greeting_inject())
                 if not _call_ended:
-                    _bot_stop_time = time.time()
-                    _log.info(f"[LATENCY] Turn {_turn_counter} | greeting ended")
                     _set_mic(True, reason="greeting-complete")
                     _log.info("[MIC] Greeting complete — mic enabled")
             elif _greeting_done and _bot_has_spoken and not _call_ended and not _closing_triggered:
                 # Post-speech hold: brief window after each bot turn to absorb TTS tail.
                 # If the 2 s unmute already fired, mic is ON here — re-mute for the hold
                 # so the WAV rotation and muted-capture flush still happen cleanly.
-                _bot_stop_time = time.time()
-                _log.info(f"[LATENCY] Turn {_turn_counter} | bot speaking ended")
-                _speaking_start_time = None
                 # Bot finished speaking — cancel 2 s unmute timer if it hasn't fired yet.
                 if _speaking_unmute_task and not _speaking_unmute_task.done():
                     _speaking_unmute_task.cancel()
