@@ -1149,6 +1149,39 @@ label.full {
   background: #fff4f4;
 }
 
+.recording-player {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #d8e2ec;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.recording-player strong,
+.recording-player span {
+  display: block;
+}
+
+.recording-player strong {
+  color: #243244;
+  font-size: 13px;
+}
+
+.recording-player span {
+  margin-top: 3px;
+  color: #657284;
+  font-size: 12px;
+}
+
+.recording-player audio {
+  width: 100%;
+  min-width: 0;
+}
+
 .chat-turn {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);

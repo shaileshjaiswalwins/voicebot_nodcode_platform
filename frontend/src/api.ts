@@ -1,14 +1,16 @@
 const API_BASE = import.meta.env.VITE_API_BASE || '';
+const TEST_RECORDING_API_BASE = import.meta.env.VITE_TEST_RECORDING_API_BASE
+  || (import.meta.env.DEV ? `${window.location.protocol}//${window.location.hostname}:8000` : API_BASE);
 const READ_TIMEOUT_MS = 8000;
 const WRITE_TIMEOUT_MS = 20000;
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, baseUrl = API_BASE): Promise<T> {
   const method = (options.method || 'GET').toUpperCase();
   const timeoutMs = method === 'GET' ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS;
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${API_BASE}${path}`, {
+    const response = await fetch(`${baseUrl}${path}`, {
       ...options,
       signal: controller.signal,
       headers: {
@@ -32,6 +34,48 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error(`Network timeout after ${timeoutMs / 1000}s for ${path}`);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+export function apiUrl(path?: string) {
+  if (!path) return '';
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  if (path.startsWith('/api/test-recordings/')) return `${TEST_RECORDING_API_BASE}${path}`;
+  return `${API_BASE}${path}`;
+}
+
+async function uploadBlob<T>(path: string, blob: Blob, baseUrl = API_BASE): Promise<T> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), WRITE_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method: 'POST',
+      body: blob,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': blob.type || 'audio/webm',
+        'X-JD-User': 'local-dev'
+      }
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let message = text || `${response.status} ${response.statusText}`;
+      try {
+        const parsed = JSON.parse(text) as { detail?: string };
+        message = parsed.detail || message;
+      } catch {
+        // Keep the plain response text when the backend does not return JSON.
+      }
+      throw new Error(message);
+    }
+    return response.json();
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`Network timeout after ${WRITE_TIMEOUT_MS / 1000}s for ${path}`);
     }
     throw error;
   } finally {
@@ -80,6 +124,7 @@ export type TranscriptTurn = {
 export type Transcript = {
   _id: string;
   call_id?: string;
+  room_name?: string;
   lead_id?: string;
   bot_id?: string;
   bot_version_id?: string;
@@ -103,8 +148,17 @@ export type Transcript = {
   callback_status?: string;
   analysis_result?: Record<string, unknown>;
   recording_url?: string;
+  recording_source?: string;
+  recording_saved_at?: string;
   created_at?: string;
   updated_at?: string;
+};
+
+export type TestRecordingLookup = {
+  room_name: string;
+  recording_url: string;
+  recording_path?: string;
+  recording_source?: string;
 };
 
 export type CallEvent = {
@@ -248,6 +302,19 @@ export const api = {
     request<{ room_name: string; status: string }>(
       `/api/webrtc-test-sessions/${encodeURIComponent(roomName)}/close`,
       { method: 'POST' }
+    ),
+  uploadTestRecording: (roomName: string, blob: Blob) =>
+    uploadBlob<{
+      room_name: string;
+      recording_url: string;
+      recording_path: string;
+      transcripts_updated: number;
+    }>(`/api/test-recordings/${encodeURIComponent(roomName)}`, blob, TEST_RECORDING_API_BASE),
+  testRecording: (roomName: string) =>
+    request<TestRecordingLookup>(
+      `/api/test-recordings/by-room/${encodeURIComponent(roomName)}`,
+      {},
+      TEST_RECORDING_API_BASE
     ),
   langfuseSettings: () => request<LangfuseSettings>('/api/observability/langfuse'),
   updateLangfuseSettings: (payload: Partial<LangfuseSettings>) =>

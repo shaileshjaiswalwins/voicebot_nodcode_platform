@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 import {
   api,
+  apiUrl,
   Bot as BotType,
   BotVersion,
   Campaign,
@@ -54,6 +55,7 @@ import {
   OutcomeEntry,
   PhraseCategory,
   RuntimeSettings,
+  TestRecordingLookup,
   Transcript,
   VoiceOption
 } from './api';
@@ -145,6 +147,7 @@ function App() {
   const [configText, setConfigText] = useState(JSON.stringify(defaultConfig, null, 2));
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [selectedTranscriptDetail, setSelectedTranscriptDetail] = useState<Transcript | null>(null);
+  const [localRecordingByRoom, setLocalRecordingByRoom] = useState<Record<string, TestRecordingLookup>>({});
   const [callEvents, setCallEvents] = useState<CallEvent[]>([]);
   const [selectedTranscriptId, setSelectedTranscriptId] = useState('');
   const [message, setMessage] = useState('');
@@ -174,6 +177,12 @@ function App() {
   const localTrackRef = useRef<LocalAudioTrack | null>(null);
   const remoteAudioRef = useRef<HTMLDivElement | null>(null);
   const subscribedTracksRef = useRef<Set<RemoteTrack>>(new Set());
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingAudioContextRef = useRef<AudioContext | null>(null);
+  const recordingDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const recordingSourceNodesRef = useRef<MediaStreamAudioSourceNode[]>([]);
+  const recordingFinalizedRoomsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!runtimeSettings?.livekit_agent_name) return;
@@ -339,6 +348,20 @@ function App() {
       .then((transcript) => {
         setSelectedTranscriptDetail(transcript);
         clearDiagnostic('Transcript Detail API');
+        if (!transcript.recording_url && transcript.room_name) {
+          api.testRecording(transcript.room_name)
+            .then((recording) => {
+              setLocalRecordingByRoom((current) => ({ ...current, [transcript.room_name || '']: recording }));
+            })
+            .catch(() => {
+              setLocalRecordingByRoom((current) => {
+                if (!transcript.room_name || !current[transcript.room_name]) return current;
+                const next = { ...current };
+                delete next[transcript.room_name];
+                return next;
+              });
+            });
+        }
       })
       .catch((error) => {
         setSelectedTranscriptDetail(null);
@@ -535,7 +558,12 @@ function App() {
       livekitRoomRef.current = room;
 
       room.on(RoomEvent.Connected, () => setTestStatus('Connected. Waiting for bot audio...'));
-      room.on(RoomEvent.Disconnected, () => setTestStatus('Disconnected'));
+      room.on(RoomEvent.Disconnected, () => {
+        setTestStatus('Disconnected');
+        finalizeTestRecording(session.room_name, 'LiveKit disconnected.').catch((error) => {
+          reportDiagnostic('Test Recording', friendlyTestError(error), 'The call ended before manual stop; recording finalization failed.');
+        });
+      });
       room.on(RoomEvent.Reconnecting, () => setTestStatus('Reconnecting to LiveKit...'));
       room.on(RoomEvent.Reconnected, () => setTestStatus('Reconnected. Continue testing.'));
       room.on(RoomEvent.ParticipantConnected, (participant) => {
@@ -554,6 +582,8 @@ function App() {
         }
         element.autoplay = true;
         container.appendChild(element);
+        const mediaStream = element.srcObject instanceof MediaStream ? element.srcObject : null;
+        mediaStream?.getAudioTracks().forEach((audioTrack) => addTrackToTestRecording(audioTrack));
         subscribedTracksRef.current.add(track);
         setRemoteAudioReady(true);
         setTestStatus('Speaking. Bot audio connected.');
@@ -575,6 +605,7 @@ function App() {
         autoGainControl: true
       });
       localTrackRef.current = micTrack;
+      await startTestRecording(session.room_name, micTrack.mediaStreamTrack);
       await room.localParticipant.publishTrack(micTrack);
       setMicEnabled(true);
       setTestStatus('Listening. Microphone is live.');
@@ -587,8 +618,104 @@ function App() {
     }
   }
 
+  async function startTestRecording(roomName: string, micTrack: MediaStreamTrack) {
+    await stopTestRecording().catch(() => null);
+    if (!window.MediaRecorder) {
+      reportDiagnostic('Test Recording', 'This browser does not support MediaRecorder.', 'Use a Chromium-based browser for local test-call recordings.');
+      return;
+    }
+    recordingChunksRef.current = [];
+    const preferredType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : 'audio/webm';
+    try {
+      const audioContext = new AudioContext();
+      const destination = audioContext.createMediaStreamDestination();
+      recordingAudioContextRef.current = audioContext;
+      recordingDestinationRef.current = destination;
+      recordingSourceNodesRef.current = [];
+      addTrackToTestRecording(micTrack);
+      await audioContext.resume();
+      const recorder = new MediaRecorder(destination.stream, { mimeType: preferredType });
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) recordingChunksRef.current.push(event.data);
+      };
+      recorder.onerror = (event) => {
+        const recorderError = 'error' in event && event.error instanceof Error ? `: ${event.error.message}` : '';
+        reportDiagnostic('Test Recording', `Browser recording failed during the test call${recorderError}.`, 'The call can continue, but this test may not have a playable local recording.');
+      };
+      recorder.onstart = () => {
+        clearDiagnostic('Test Recording');
+      };
+      recorderRef.current = recorder;
+      recorder.start(1000);
+      setTestCloseNote(`Recording locally for ${shortId(roomName)}.`);
+    } catch (error) {
+      reportDiagnostic('Test Recording', friendlyTestError(error), 'The call can continue, but this test may not have a playable local recording.');
+    }
+  }
+
+  function addTrackToTestRecording(track: MediaStreamTrack) {
+    const audioContext = recordingAudioContextRef.current;
+    const destination = recordingDestinationRef.current;
+    if (!audioContext || !destination || track.kind !== 'audio') return;
+    try {
+      const source = audioContext.createMediaStreamSource(new MediaStream([track]));
+      source.connect(destination);
+      recordingSourceNodesRef.current.push(source);
+    } catch (error) {
+      reportDiagnostic('Test Recording', friendlyTestError(error), 'Recording will continue with the audio tracks that were already available.');
+    }
+  }
+
+  async function stopTestRecording(): Promise<Blob | null> {
+    const recorder = recorderRef.current;
+    recorderRef.current = null;
+    if (!recorder) return null;
+    if (recorder.state !== 'inactive') {
+      const stopped = new Promise<void>((resolve) => {
+        recorder.onstop = () => resolve();
+      });
+      try { recorder.requestData(); } catch { /* not supported in every recorder state */ }
+      recorder.stop();
+      await stopped;
+    }
+    const chunks = recordingChunksRef.current;
+    recordingChunksRef.current = [];
+    for (const source of recordingSourceNodesRef.current) {
+      try { source.disconnect(); } catch { /* best-effort cleanup */ }
+    }
+    recordingSourceNodesRef.current = [];
+    recordingDestinationRef.current = null;
+    if (recordingAudioContextRef.current) {
+      try { await recordingAudioContextRef.current.close(); } catch { /* best-effort cleanup */ }
+      recordingAudioContextRef.current = null;
+    }
+    if (!chunks.length) {
+      reportDiagnostic('Test Recording', 'No recording data was captured by the browser.', 'Retry after a hard refresh. If this repeats, use Chrome and keep the tab active during the call.');
+      return null;
+    }
+    return new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+  }
+
+  async function finalizeTestRecording(roomName: string, prefix: string) {
+    if (!roomName || recordingFinalizedRoomsRef.current.has(roomName)) return null;
+    recordingFinalizedRoomsRef.current.add(roomName);
+    const recordingBlob = await stopTestRecording();
+    if (!recordingBlob) return null;
+    const upload = await api.uploadTestRecording(roomName, recordingBlob);
+    const attachNote = upload.transcripts_updated
+      ? 'Recording saved and attached to transcript.'
+      : 'Recording saved locally; refresh transcripts after the bot finishes saving.';
+    setTestCloseNote(`${prefix} ${attachNote}`);
+    return upload;
+  }
+
   async function stopWebRtcTest() {
     const roomName = testRoomName;
+    const recordingUpload = roomName
+      ? await finalizeTestRecording(roomName, 'Manual stop.')
+      : null;
     localTrackRef.current?.stop();
     localTrackRef.current = null;
     setMicEnabled(false);
@@ -618,11 +745,18 @@ function App() {
       try {
         setTestStatus('Closing LiveKit test room...');
         const closeResult = await api.closeWebRtcTestSession(roomName);
-        setTestCloseNote(
-          closeResult.status === 'already_closed'
-            ? 'LiveKit room was already closed. Refresh transcripts after a few seconds.'
-            : 'LiveKit close requested. Refresh transcripts after a few seconds.'
-        );
+        if (recordingUpload) {
+          const closeNote = closeResult.status === 'already_closed'
+            ? 'LiveKit room was already closed.'
+            : 'LiveKit close requested.';
+          setTestCloseNote(`${closeNote} Recording saved locally.`);
+        } else {
+          setTestCloseNote(
+            closeResult.status === 'already_closed'
+              ? 'LiveKit room was already closed. Refresh transcripts after a few seconds.'
+              : 'LiveKit close requested. Refresh transcripts after a few seconds.'
+          );
+        }
       } catch (error) {
         reportDiagnostic(
           'WebRTC Test Call',
@@ -805,6 +939,7 @@ function App() {
             <TranscriptsView
               transcripts={filteredTranscripts}
               selectedTranscript={selectedTranscript}
+              localRecordingByRoom={localRecordingByRoom}
               callEvents={callEvents}
               searchText={searchText}
               onSearchText={setSearchText}
@@ -1121,6 +1256,7 @@ function BuilderView({
   publishState?: 'idle' | 'running' | 'failed';
 }) {
   const value = config.ok ? config.value : defaultConfig;
+
   return (
     <section className="builder-layout">
       <div className="builder-main">
@@ -1476,6 +1612,7 @@ type ConversationItem =
 function TranscriptsView({
   transcripts,
   selectedTranscript,
+  localRecordingByRoom,
   callEvents,
   searchText,
   onSearchText,
@@ -1483,6 +1620,7 @@ function TranscriptsView({
 }: {
   transcripts: Transcript[];
   selectedTranscript?: Transcript;
+  localRecordingByRoom: Record<string, TestRecordingLookup>;
   callEvents: CallEvent[];
   searchText: string;
   onSearchText: (value: string) => void;
@@ -1492,6 +1630,11 @@ function TranscriptsView({
     () => buildConversationItems(selectedTranscript, callEvents),
     [selectedTranscript, callEvents]
   );
+  const localRecording = selectedTranscript?.room_name
+    ? localRecordingByRoom[selectedTranscript.room_name]
+    : undefined;
+  const recordingUrl = selectedTranscript?.recording_url || localRecording?.recording_url || '';
+  const recordingSource = selectedTranscript?.recording_source || localRecording?.recording_source || '';
 
   return (
     <section className="content-grid transcripts-grid">
@@ -1539,7 +1682,7 @@ function TranscriptsView({
               <Detail label="Transcript source" value={transcriptSourceLabel(selectedTranscript)} />
               <Detail label="Verification" value={selectedTranscript.verified_transcript_status || 'legacy'} />
               <Detail label="Max response delay" value={maxResponseDelayLabel(selectedTranscript)} />
-              <Detail label="Recording" value={selectedTranscript.recording_url || 'Dialer link not saved'} />
+              <Detail label="Recording" value={recordingUrl || 'No recording saved'} />
             </div>
             <div className="source-strip">
               <span className={`source-badge ${selectedTranscript.verified_transcript_status || 'legacy'}`}>
@@ -1552,6 +1695,15 @@ function TranscriptsView({
                 <span className="quality-flag error">{selectedTranscript.verified_transcript_error}</span>
               )}
             </div>
+            {recordingUrl && (
+              <div className="recording-player">
+                <div>
+                  <strong>Call recording</strong>
+                  <span>{recordingSource === 'dashboard_test_local' ? 'Local dashboard test recording' : 'Dialer recording'}</span>
+                </div>
+                <audio controls preload="metadata" src={apiUrl(recordingUrl)} />
+              </div>
+            )}
             <div className="chat-transcript">
               {conversationItems.map((item) => (
                 item.kind === 'event' ? (
@@ -2500,16 +2652,30 @@ function shortId(value: string) {
 
 function formatDate(value?: string) {
   if (!value) return '-';
-  const date = new Date(value);
+  const date = parseApiDate(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+  return `${date.toLocaleString('en-IN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: 'Asia/Kolkata'
+  })} IST`;
 }
 
 function formatTime(value?: string) {
   if (!value) return '-';
-  const date = new Date(value);
+  const date = parseApiDate(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return `${date.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'Asia/Kolkata'
+  })} IST`;
+}
+
+function parseApiDate(value: string) {
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value);
+  return new Date(hasTimezone ? value : `${value}Z`);
 }
 
 const INLINE_EVENT_TYPES = new Set([
@@ -2551,10 +2717,10 @@ function buildConversationItems(transcript?: Transcript, events: CallEvent[] = [
     return [...eventItems, ...turnItems].sort((a, b) => a.sortAt - b.sortAt);
   }
   return [
-    ...eventItems.filter((event) => START_EVENT_TYPES.has(event.title)),
+    ...eventItems.filter((event) => event.kind === 'event' && START_EVENT_TYPES.has(event.title)),
     ...turnItems,
-    ...eventItems.filter((event) => !START_EVENT_TYPES.has(event.title) && !END_EVENT_TYPES.has(event.title)),
-    ...eventItems.filter((event) => END_EVENT_TYPES.has(event.title))
+    ...eventItems.filter((event) => event.kind === 'event' && !START_EVENT_TYPES.has(event.title) && !END_EVENT_TYPES.has(event.title)),
+    ...eventItems.filter((event) => event.kind === 'event' && END_EVENT_TYPES.has(event.title))
   ];
 }
 
@@ -2563,7 +2729,7 @@ function eventToConversationItem(event: CallEvent): ConversationItem {
     kind: 'event',
     id: event._id,
     title: event.event_type,
-    text: event.message || titleCase(event.event_type.replaceAll('_', ' ')),
+    text: event.message || titleCase(event.event_type.replace(/_/g, ' ')),
     time: formatTime(event.created_at),
     sortAt: timestampValue(event.created_at),
     severity: event.severity || 'info'
