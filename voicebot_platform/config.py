@@ -24,6 +24,9 @@ PLATFORM_SETTINGS_COLLECTION = os.getenv(
     "VOICEBOT_PLATFORM_SETTINGS_COLLECTION",
     "tbl_ai_vb_platform_settings",
 )
+TEST_RECORDING_DIR = Path(
+    os.getenv("VOICEBOT_TEST_RECORDING_DIR", str(Path.home() / "Documents" / "voicebot_test_recordings"))
+).expanduser()
 
 DEFAULT_USER = os.getenv("VOICEBOT_DEFAULT_USER", "system")
 VOICEBOT_ENV = os.getenv("VOICEBOT_ENV", "local")

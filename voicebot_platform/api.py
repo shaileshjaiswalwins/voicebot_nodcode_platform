@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
+import re
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
@@ -15,10 +20,12 @@ from .config import (
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
     LIVEKIT_URL,
+    TEST_RECORDING_DIR,
     VOICEBOT_ENV,
     validate_startup_config,
 )
 from .config_store import (
+    attach_test_recording,
     create_bot,
     create_test_session,
     delete_bot,
@@ -122,6 +129,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _recording_extension(content_type: str) -> str:
+    if "webm" in content_type:
+        return ".webm"
+    if "ogg" in content_type:
+        return ".ogg"
+    if "mp4" in content_type or "mpeg" in content_type:
+        return ".mp4"
+    return ".webm"
+
+
+def _safe_room_filename(room_name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", room_name).strip(".-")
+    if not cleaned or not cleaned.startswith("test-"):
+        raise HTTPException(status_code=400, detail="Only dashboard test room recordings can be saved.")
+    return cleaned
 
 
 def current_user(x_jd_user: str | None = Header(default=None)) -> str:
@@ -427,6 +451,69 @@ async def webrtc_test_session_close(room_name: str):
             status_code=502,
             detail=f"Could not close LiveKit test room. The browser can still disconnect locally. Raw error: {exc}",
         ) from exc
+
+
+@app.post("/api/test-recordings/{room_name}")
+async def upload_test_recording(room_name: str, request: Request):
+    safe_room = _safe_room_filename(room_name)
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="Recording upload was empty.")
+    content_type = request.headers.get("content-type", "audio/webm")
+    extension = _recording_extension(content_type)
+    TEST_RECORDING_DIR.mkdir(parents=True, exist_ok=True)
+    saved_at = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    path = TEST_RECORDING_DIR / f"{safe_room}-{saved_at}{extension}"
+    path.write_bytes(body)
+    recording_url = f"/api/test-recordings/{path.name}"
+    try:
+        matched = attach_test_recording(room_name, recording_url, str(path))
+        for _attempt in range(8):
+            if matched:
+                break
+            await asyncio.sleep(1)
+            matched = attach_test_recording(room_name, recording_url, str(path))
+    except ValueError as exc:
+        path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "room_name": room_name,
+        "recording_url": recording_url,
+        "recording_path": str(path),
+        "transcripts_updated": matched,
+    }
+
+
+@app.get("/api/test-recordings/{filename}")
+def get_test_recording(filename: str):
+    safe_name = Path(filename).name
+    if safe_name != filename:
+        raise HTTPException(status_code=400, detail="Invalid recording filename.")
+    path = TEST_RECORDING_DIR / safe_name
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="recording_not_found")
+    return FileResponse(path, media_type="audio/webm", filename=safe_name)
+
+
+@app.get("/api/test-recordings/by-room/{room_name}")
+def get_test_recording_by_room(room_name: str):
+    safe_room = _safe_room_filename(room_name)
+    if not TEST_RECORDING_DIR.exists():
+        raise HTTPException(status_code=404, detail="recording_not_found")
+    matches = sorted(
+        TEST_RECORDING_DIR.glob(f"{safe_room}-*"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not matches:
+        raise HTTPException(status_code=404, detail="recording_not_found")
+    path = matches[0]
+    return {
+        "room_name": room_name,
+        "recording_url": f"/api/test-recordings/{path.name}",
+        "recording_path": str(path),
+        "recording_source": "dashboard_test_local",
+    }
 
 
 @app.get("/api/transcripts")

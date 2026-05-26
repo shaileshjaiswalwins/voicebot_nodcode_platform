@@ -18,6 +18,7 @@ from .config import (
     LEGACY_TRANSCRIPT_COLLECTION,
     LEGACY_TRANSCRIPT_DB,
     MONGO_DB,
+    TEST_RECORDING_DIR,
     TRANSCRIPT_COLLECTION,
 )
 from .mongo import get_client, get_db
@@ -428,6 +429,8 @@ _TRANSCRIPT_LIST_PROJECTION = {
     "tags": 1,
     "callback_status": 1,
     "recording_url": 1,
+    "recording_source": 1,
+    "recording_saved_at": 1,
     "transcript_source": 1,
     "verified_transcript_status": 1,
     "analysis_transcript_source": 1,
@@ -448,7 +451,22 @@ def _normalize_transcript_doc(doc: dict[str, Any], source: str) -> dict[str, Any
     doc.setdefault("bot_version_id", "")
     if not doc.get("call_id"):
         doc["call_id"] = doc.get("room_name") or str(doc.get("_id", ""))
+    if not doc.get("recording_url"):
+        local_recording = _local_test_recording_url(doc.get("room_name") or doc.get("call_id"))
+        if local_recording:
+            doc["recording_url"] = local_recording
+            doc["recording_source"] = "dashboard_test_local"
     return doc
+
+
+def _local_test_recording_url(room_name: Any) -> str:
+    if not isinstance(room_name, str) or not room_name.startswith("test-"):
+        return ""
+    if not TEST_RECORDING_DIR.exists():
+        return ""
+    safe_room = "".join(ch if ch.isalnum() or ch in "_.-" else "-" for ch in room_name).strip(".-")
+    matches = sorted(TEST_RECORDING_DIR.glob(f"{safe_room}-*"), key=lambda path: path.stat().st_mtime, reverse=True)
+    return f"/api/test-recordings/{matches[0].name}" if matches else ""
 
 
 def search_transcripts(
@@ -494,3 +512,21 @@ def get_transcript(transcript_id: str) -> dict[str, Any] | None:
         if doc:
             return serialize_doc(_normalize_transcript_doc(doc, source))
     return None
+
+
+def attach_test_recording(room_name: str, recording_url: str, recording_path: str) -> int:
+    if not room_name.startswith("test-"):
+        raise ValueError("Only dashboard test room recordings can be attached here.")
+    matched = 0
+    update = {
+        "$set": {
+            "recording_url": recording_url,
+            "recording_path": recording_path,
+            "recording_source": "dashboard_test_local",
+            "recording_saved_at": datetime.utcnow(),
+        }
+    }
+    for _source, collection in _transcript_sources():
+        result = collection.update_many({"room_name": room_name}, update)
+        matched += int(result.matched_count or 0)
+    return matched
