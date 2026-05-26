@@ -2256,6 +2256,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 f"agent_state={_agent_state_now} mic={_mic_enabled} "
                 f"speech_ms={speech_ms_now:.0f}"
             )
+            _had_partial = bool(_pending_user_text)
             _pending_user_text = ""
             # Gemini confirmed this turn — rotate WAV segment so next turn starts fresh
             _wav_reset_flag = True
@@ -2340,9 +2341,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     asyncio.create_task(_kick_caller_safe())
                     asyncio.create_task(_save_and_close("ivr_detected"))
                 return
-            # Replace the last entry if it was a partial for this same turn
+            # Replace the last entry only if it was a partial for THIS same turn.
+            # After a barge-in the previous agent turn is skipped, leaving a completed
+            # user entry as _live_transcript[-1].  Without the _had_partial guard that
+            # completed entry would be silently overwritten by the new turn's final.
             _user_entry: dict = {"role": "user", "text": transcript_text}
-            if _live_transcript and _live_transcript[-1]["role"] == "user":
+            if _had_partial and _live_transcript and _live_transcript[-1]["role"] == "user":
                 _live_transcript[-1] = _user_entry
             else:
                 _live_transcript.append(_user_entry)
@@ -2373,8 +2377,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 asyncio.create_task(_kick_caller_safe())
                 asyncio.create_task(_save_and_close("ivr_detected"))
                 return
+            _had_partial = bool(_pending_user_text)
             _pending_user_text = transcript_text
-            if _live_transcript and _live_transcript[-1]["role"] == "user":
+            if _had_partial and _live_transcript and _live_transcript[-1]["role"] == "user":
                 _live_transcript[-1]["text"] = transcript_text
             else:
                 _live_transcript.append({"role": "user", "text": transcript_text})

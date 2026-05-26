@@ -12,6 +12,39 @@ from .config import GEMINI_API_KEY
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
+# Individual NFC-normalised lowercase words that indicate a bare call-presence signal
+# rather than product engagement. Derived by tokenising all greeting/acknowledgement
+# phrases. Used in two places:
+#   1. Muted-transcript-only check → if all muted words are in this set → Short Hangup
+#   2. Live-transcript check → if all user turns contain only these tokens AND the agent
+#      never progressed past the greeting → Short Hangup
+_BARE_CALL_SIGNAL_TOKENS: frozenset = frozenset(
+    unicodedata.normalize("NFC", word.lower())
+    for phrase in {
+        # hello / hi variants
+        "hello", "हेलो", "helo", "halo", "हैलो", "hi", "हाय",
+        # haan / ji / yes variants
+        "हाँ", "हां", "haan", "ha", "han", "ji", "jee",
+        # "go ahead / speak" — call-answering phrases, NOT product confirmation
+        "haan bolo", "ha bolo", "हाँ बोलो", "हां बोलो",
+        "bolo", "बोलो", "bol", "बोल",
+        # okay / fine
+        "okay", "ok",
+        # stall / hold phrases
+        "ek second", "एक second", "एक सेकंड",
+        "hold on", "ruko",
+        # identity questions
+        "kaun", "कौन", "kaun hai", "कौन है",
+        # common call-acknowledgement fillers (achha / theek / sahi)
+        "acha", "achha", "accha", "achcha",
+        "theek", "thik",
+        "haan ji", "ji haan",
+        "sahi",
+    }
+    for word in phrase.split()
+    if word.strip()
+)
+
 DISPOSITION_MAP: dict[str, str] = {
     "Short Hangup":                      "The call ended with no product discussion — the customer said nothing at all, OR gave only a bare call-acknowledgment (e.g. hello, haan, hold on, ek second) and disconnected before any product topic was raised.",
     "Voicemail":                        "The call went to the recipient's voicemail instead of connecting directly.",
@@ -114,6 +147,11 @@ async def generate_call_analysis(
     _has_any_user_signal = bool(non_empty_user_turns) or bool(
         muted_transcript and any((m or "").strip() for m in muted_transcript)
     )
+    # Compute early — needed both by the pre-LLM bare-signal guard (below) and by the
+    # _first_turn_is_confirmation check later.  The bot never asks spec questions without
+    # product confirmation, so ≥2 agent turns with at least one live user turn means the
+    # buyer genuinely progressed past the greeting.
+    _agent_progressed = bool(non_empty_user_turns) and len(_agent_turns_with_text) >= 2
     if not non_empty_user_turns:
         if not _has_any_user_signal:
             # Zero user speech from any source — true Short Hangup.
@@ -131,14 +169,6 @@ async def generate_call_analysis(
         # A bare "hello" / "haan bolo" / "haan" during the bot's opening turn is not
         # product confirmation.  Normalise to NFC so Devanagari from different STT
         # engines compares correctly regardless of Unicode composition form.
-        _GREETING_SET = {
-            "hello", "हेलो", "helo", "halo", "हैलो", "hi", "हाय",
-            "हाँ", "हां", "haan", "ha", "han", "ji", "jee",
-            "haan bolo", "ha bolo", "हाँ बोलो", "हां बोलो",
-            "bolo", "बोलो", "bol", "बोल",
-            "okay", "ok", "ek second", "एक second", "एक सेकंड",
-            "hold on", "ruko", "kaun", "कौन", "kaun hai", "कौन है",
-        }
         def _nfc(s: str) -> str:
             return unicodedata.normalize("NFC", s)
         _muted_words = {
@@ -146,9 +176,8 @@ async def generate_call_analysis(
             for m in (muted_transcript or [])
             for w in (_nfc(m or "")).split()
             if w.strip(".,!? ।")
-        } 
-        _greeting_set_nfc = {_nfc(g) for g in _GREETING_SET}
-        if _muted_words and not (_muted_words - _greeting_set_nfc):
+        }
+        if _muted_words and not (_muted_words - _BARE_CALL_SIGNAL_TOKENS):
             return {
                 "call_outcome": "Short Hangup",
                 "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
@@ -247,17 +276,22 @@ async def generate_call_analysis(
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
 
-    # 6. All user turns contain only greeting tokens → no product engagement → Short Hangup.
-    # Strip ASCII non-word chars only (re \w misses Devanagari combining vowel marks like े ो).
-    _HELLO_ONLY = {"hello", "हेलो", "helo", "halo", "हैलो"}
-    if non_empty_user_turns and all(
-        not ({re.sub(r"[^\w-￿]", "", w.lower()) for w in (t.get("text") or "").split() if w.strip()} - _HELLO_ONLY)
+    # All user turns contain only bare call-presence signals (hello, haan bolo, achha, etc.)
+    # and the agent never progressed past the greeting → Short Hangup.
+    # `not _agent_progressed` ensures we never short-circuit when the bot actually asked
+    # spec questions (which structurally proves the buyer engaged with the product).
+    # NFC-normalise each token so Devanagari vowel marks compare correctly.
+    if non_empty_user_turns and not _agent_progressed and all(
+        not ({
+            unicodedata.normalize("NFC", re.sub(r"[^\w-￿]", "", w.lower()))
+            for w in (t.get("text") or "").split() if w.strip()
+        } - _BARE_CALL_SIGNAL_TOKENS)
         for t in non_empty_user_turns
     ):
         return {
             "call_outcome": "Short Hangup",
             "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
-            "call_summary": "No product engagement — buyer responded only with a greeting.",
+            "call_summary": "No product engagement — buyer responded only with bare call-presence signals.",
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
@@ -321,24 +355,23 @@ async def generate_call_analysis(
         if _ends_on_agent_no_response else ""
     )
 
-    # Agent-progression check: the bot is strictly programmed — it NEVER advances to
-    # asking spec questions without first receiving product confirmation. So if the
-    # agent has ≥2 turns with text AND the user has at least one LIVE transcript turn,
-    # the product was confirmed regardless of what STT captured for that turn.
-    # We require live turns (not muted-only) because 2 agent turns can be greeting +
-    # re-ask of the same greeting (user said "haan bolo", bot re-asked) — that is NOT
-    # progression past the greeting.  Muted-only signal is too weak to infer progression.
-    _agent_progressed = bool(non_empty_user_turns) and len(_agent_turns_with_text) >= 2
-
     def _tokens(text: str) -> set[str]:
         import unicodedata as _ud
         t = _ud.normalize("NFC", text)
         return {re.sub(r"[^\w]", "", w.lower()) for w in t.split() if w.strip()}
 
     _first_user_text = (non_empty_user_turns[0].get("text") or "") if non_empty_user_turns else ""
+    _first_user_tokens = _tokens(_first_user_text)
+    # Fix 1 — GP-7 Case A: if the agent progressed but the first user turn is garbled STT
+    # noise (every token is either <2 chars or an all-same-character pattern like "aaaa"),
+    # don't inject the PRODUCT CONFIRMED note — the bot may have mis-advanced on noise.
+    _first_user_has_real_word = any(
+        len(tok) >= 2 and not re.match(r"^(.)\1+$", tok)
+        for tok in _first_user_tokens
+    )
     _first_turn_is_confirmation = (
-        _agent_progressed
-        or bool(_tokens(_first_user_text) & _CONFIRMATION_TOKENS)
+        (_agent_progressed and _first_user_has_real_word)
+        or bool(_first_user_tokens & _CONFIRMATION_TOKENS)
     )
     _product_confirmed_note = (
         f"\n⚠ PRODUCT CONFIRMED: The agent asked specification questions (progressed past "
