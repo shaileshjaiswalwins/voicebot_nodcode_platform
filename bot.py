@@ -627,15 +627,24 @@ async def fetch_lead(lead_id: str = "", mobile: str = "", mis_api_base: str = MI
         session = _get_http_session()
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
             data = await resp.json()
-            records = data.get("results", {}).get("data", [])
+            results_block = data.get("results", {})
+            records = results_block.get("data", [])
+            total = results_block.get("total", results_block.get("count", "?"))
             if records:
                 record = records[0]
+                buyer = record.get("buyer_details", {})
                 logger.info(
-                    f"[API FETCH] {resp.status} OK — "
+                    f"[API FETCH] {resp.status} OK — total={total} | "
                     f"lead_id={record.get('_id')} | catname={record.get('catname')} | "
-                    f"buyer={record.get('buyer_details', {}).get('buyer_name')}"
+                    f"srchterm={record.get('search_context', {}).get('searched_keyword', '')} | "
+                    f"buyer={buyer.get('buyer_name')} | city={buyer.get('buyer_city')} | "
+                    f"mobile={buyer.get('buyer_number')}"
                 )
                 return record
+            else:
+                logger.warning(
+                    f"[API FETCH] {resp.status} — no results (total={total}) | raw={data}"
+                )
     except Exception as e:
         logger.error(f"[API FETCH] fetch_lead failed: {e}")
     return None
@@ -2615,13 +2624,33 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         )
     except Exception as _start_exc:
         _exc_str = str(_start_exc).lower()
-        if "409" in _exc_str or "conflict" in _exc_str:
+        _key_tag = f"key=...{_selected_key[-6:]}"
+        if "409" in _exc_str or "conflict" in _exc_str or "aborted" in _exc_str:
             _mark_key_409(_selected_key)
             _decr_key_inflight(_selected_key)
             _log.error(
-                f"[GEMINI-409] session.start() failed with 409 on key ...{_selected_key[-6:]} — "
-                "key cooled 60s; call will be retried by campaign"
+                f"[GEMINI-ERR-409] concurrent session limit hit — {_key_tag} cooled {_KEY_COOLDOWN_SECS:.0f}s | {_start_exc}"
             )
+        elif "429" in _exc_str or "resource_exhausted" in _exc_str or "quota" in _exc_str or "rate" in _exc_str:
+            _log.error(f"[GEMINI-ERR-429] rate limit / quota exceeded — {_key_tag} | {_start_exc}")
+        elif "401" in _exc_str or "unauthenticated" in _exc_str:
+            _log.error(f"[GEMINI-ERR-401] invalid or missing API key — {_key_tag} | {_start_exc}")
+        elif "403" in _exc_str or "permission_denied" in _exc_str or "permission denied" in _exc_str:
+            _log.error(f"[GEMINI-ERR-403] key lacks permission / Live API not enabled — {_key_tag} | {_start_exc}")
+        elif "404" in _exc_str or "not_found" in _exc_str or "not found" in _exc_str:
+            _log.error(f"[GEMINI-ERR-404] model not found or deprecated — {_key_tag} | {_start_exc}")
+        elif "400" in _exc_str or "invalid_argument" in _exc_str or "bad request" in _exc_str:
+            _log.error(f"[GEMINI-ERR-400] bad request / invalid config — {_key_tag} | {_start_exc}")
+        elif "503" in _exc_str or "unavailable" in _exc_str:
+            _log.error(f"[GEMINI-ERR-503] service unavailable / overloaded — {_key_tag} | {_start_exc}")
+        elif "504" in _exc_str or "deadline_exceeded" in _exc_str or "timed out" in _exc_str:
+            _log.error(f"[GEMINI-ERR-504] connection timed out — {_key_tag} | {_start_exc}")
+        elif "500" in _exc_str or "internal" in _exc_str:
+            _log.error(f"[GEMINI-ERR-500] internal server error — {_key_tag} | {_start_exc}")
+        elif "499" in _exc_str or "cancelled" in _exc_str:
+            _log.error(f"[GEMINI-ERR-499] connection cancelled by client — {_key_tag} | {_start_exc}")
+        else:
+            _log.error(f"[GEMINI-ERR-UNKNOWN] session.start() failed — {_key_tag} | {_start_exc}")
         raise
 
     # Record call start immediately after session connects — before any lead
