@@ -44,6 +44,12 @@ async def send_callback(
             ) as resp:
                 body = await resp.text()
                 if resp.status not in (200, 201):
+                    # 400 "call_id already exists" means the callback was already delivered
+                    # in a prior run but the tagged flag was never written (process crashed).
+                    # Treat it as success so the worker tags the document and stops retrying.
+                    if resp.status == 400 and "call_id already exists" in body:
+                        logger.info(f"[CALLBACK] attempt {attempt} — 400 call_id already exists (prior delivery confirmed) — marking as done")
+                        return True
                     logger.warning(f"[CALLBACK] attempt {attempt} — {resp.status}: {body[:300]}")
                 else:
                     logger.info(f"[CALLBACK] attempt {attempt} — {resp.status} OK: {body[:300]}")
