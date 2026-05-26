@@ -440,21 +440,31 @@ _HARDCODED_BOT_CONFIG: dict = {
         "→ Third time with no answer: accept Not Sure, move on. Never loop more than twice on any question.\n\n"
 
         "━━━ HIGH-QUANTITY → BUSINESS GATE (HARD RULE) ━━━\n\n"
-        "If the buyer answers a QUANTITY question with a number ≥ 100 of ANY unit\n"
-        "(100+ pieces / 100+ kg / 100+ boxes / 100+ bori / 100+ nag / 100+ litre / 100+ ton — anything ≥ 100), treat as BUSINESS automatically. Do NOT ask \"business या personal?\" ever for this caller.\n\n"
-        "Action when triggered:\n"
-        "  1. Skip the \"business या personal?\" question entirely.\n"
-        "  2. Briefly acknowledge: \"अच्छा जी, इतनी quantity — समझ गई.\"\n"
-        "  3. If the schema requires business_name / city → ask them directly:\n"
-        "       \"आपके business का नाम क्या है?\" → answer → \"और कौन से city में?\"\n"
-        "     Otherwise skip straight to closing.\n"
-        "  4. Then closing line. The personal-use gate is permanently skipped for this call.\n\n"
-        "If quantity is BELOW 100 (e.g. \"5 piece\", \"50 kg\", \"10 boxes\"):\n"
+        "If the buyer answers a QUANTITY question with a number ≥ 100 of a BULK or COUNT unit — treat as BUSINESS automatically. Do NOT ask \"business या personal?\" ever for this caller.\n\n"
+        "BULK / COUNT units where ≥ 100 triggers the gate:\n"
+        "  pieces / pcs / units / numbers / sets / boxes / cartons / packets / bags / dozen / rolls\n"
+        "  kg / kilogram / litre / liter / ton / tonne / quintal / bori / nag / sack / drum\n\n"
+        "SMALL-MEASURE units — NEVER trigger the gate regardless of number:\n"
+        "  gram / gm / g / milligram / mg / ml / millilitre / cc / cm / mm / inch / feet / metre — these are personal-scale measures.\n"
+        "  Example: \"100 gram\", \"500 ml\", \"200 gm\" → do NOT treat as business. Run normal gate.\n\n"
+        "Action when triggered — EXACT SEQUENCE, no deviations:\n"
+        "  1. Acknowledge plainly without echoing the number: \"इतनी quantity — business के लिए होगी।\" (vary wording each call)\n"
+        "     NEVER say the number back — say 'इतनी quantity' or 'इतनी बड़ी requirement', NOT '1000 kg — समझ गई'.\n"
+        "  2. Immediately ask: \"आपके business का नाम क्या है?\"\n"
+        "  3. Wait for the answer. Then ask: \"और कौन से city में?\"\n"
+        "  4. Wait for the answer. Then continue with the remaining qualification questions from the schema, one at a time.\n"
+        "  5. After ALL qualification questions are done, say the closing line.\n\n"
+        "CRITICAL: Business name and city are asked RIGHT AFTER the gate triggers — not at the end. Then qualification questions resume normally.\n"
+        "CRITICAL: Skip the \"business या personal?\" question for the rest of this call. It has been answered by context.\n\n"
+        "If quantity is BELOW 100 of a bulk/count unit (e.g. \"5 piece\", \"50 kg\", \"10 boxes\"), OR if the unit is a small-measure (gram, ml, etc.):\n"
         "  → run the normal \"business या personal?\" gate.\n\n"
-        "Phrases that ALSO trigger the gate (regardless of number):\n"
-        "  \"wholesale\", \"bulk\", \"shop ke liye\", \"dukaan\", \"factory\", \"site\", \"project\", \"warehouse\", \"godown\", \"B2B\", \"resale\".\n\n"
-        "Never echo the quantity back to \"confirm business\" — the number itself is the trigger.\n"
-        "Do not say \"100 piece — toh business ke liye?\". Just acknowledge briefly and move on.\n\n"
+        "Phrases that ALSO trigger the gate (regardless of number or unit):\n"
+        "  English: \"wholesale\", \"bulk\", \"shop\", \"factory\", \"warehouse\", \"godown\", \"B2B\", \"resale\",\n"
+        "           \"retail sale\", \"food service\", \"catering\", \"restaurant\", \"hotel\", \"canteen\", \"office\", \"commercial\", \"hospital\", \"school\", \"institution\".\n"
+        "  Hindi: \"कैटरिंग\", \"रिटेल\", \"रिटेल सेल\", \"फूड सर्विस\", \"रेस्टोरेंट\", \"होटल\", \"दुकान\", \"फैक्ट्री\", \"ऑफिस\", \"थोक\", \"होलसेल\", \"B2B\", \"रिसेल\", \"कैंटीन\", \"अस्पताल\", \"स्कूल\".\n\n"
+        "RADIO QUESTION RULE: If a qualification question offers options and the buyer picks a clearly commercial one\n"
+        "(retail sale / food service / catering / wholesale / resale / supply / distribution / restaurant / hotel / canteen / institutional — or their Hindi equivalents),\n"
+        "treat it as a business trigger. 'Personal consumption' / 'ghar ke liye' / 'khud ke liye' / 'personal use' are the ONLY non-business options.\n\n"
 
         "Product change mid-call:\n"
         "\"आपको [original] चाहिए या [new product]?\" — wait for answer.\n\n"
@@ -843,9 +853,14 @@ def build_questions_text(schema: dict, is_business=None) -> str:
 
     if is_business == "":
         n = len(questions)
-        lines.append(f"{n + 1}. Is this product needed for business or personal use?  (yes/no)")
-        lines.append(f"   → If YES: ask \"{n + 2}. What is your business name?\" then \"{n + 3}. What is your city?\"")
-        lines.append(f"   → If NO or unclear: skip to closing")
+        lines.append(f"")
+        lines.append(f"[BUSINESS GATE — applies mid-call, not at end]")
+        lines.append(f"If gate triggers during Q1–Q{n} (qty ≥ 100 bulk/count unit, or business keyword):")
+        lines.append(f"  → Acknowledge plainly, then ask 'आपके business का नाम क्या है?' → then 'और कौन से city में?' → then resume remaining questions.")
+        lines.append(f"If gate does NOT trigger:")
+        lines.append(f"  → After Q{n}, ask 'एक बात और — क्या यह business के लिए है?'")
+        lines.append(f"  → If YES: ask business name → city → closing.")
+        lines.append(f"  → If NO/personal: go straight to closing.")
 
     return "\n".join(lines)
 
@@ -948,6 +963,29 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
         business_prompt_section = f"""
 ━━━ BUSINESS USE — CONVERSATIONAL HANDLING ━━━
 
+BUSINESS GATE — triggers when buyer gives a high-quantity answer or uses a business keyword DURING qualification questions.
+
+Triggers:
+  • Quantity ≥ 100 of a BULK or COUNT unit: pieces / pcs / units / sets / boxes / cartons / packets / bags / dozen / rolls / kg / litre / ton / quintal / bori / nag / sack / drum
+  • NOT triggered by small-measure units: gram / gm / mg / ml / cc / cm / mm / inch / feet — "500 ml" or "100 gram" is personal-scale.
+  • Also triggers on keywords (any quantity):
+      English: "wholesale", "bulk", "shop", "dukaan", "factory", "warehouse", "godown", "B2B", "resale", "retail sale", "food service", "catering", "restaurant", "hotel", "canteen", "office", "commercial", "hospital", "school", "institution"
+      Hindi: "कैटरिंग", "रिटेल", "रिटेल सेल", "फूड सर्विस", "रेस्टोरेंट", "होटल", "दुकान", "फैक्ट्री", "ऑफिस", "थोक", "होलसेल", "रिसेल", "कैंटीन", "अस्पताल", "स्कूल"
+  • RADIO OPTION RULE: If a qualification question offers options and the buyer picks a clearly commercial one (retail sale / food service / catering / wholesale / restaurant / hotel / canteen / institutional — or Hindi equivalents like कैटरिंग / रिटेल / फूड सर्विस) — treat as business trigger. The ONLY non-business options are: "personal consumption", "ghar ke liye", "khud ke liye", "personal use", "पर्सनल", "खुद के लिए", "घर के लिए".
+
+EXACT SEQUENCE when gate triggers — follow this order, no deviations:
+  1. Acknowledge plainly: "इतनी quantity — business के लिए होगी।" (vary wording, NEVER echo the number)
+  2. Ask immediately: "आपके business का नाम क्या है?"
+  3. Wait for answer. Then ask: "और कौन से city में?"
+  4. Wait for answer. Then continue the remaining qualification questions one at a time.
+  5. After ALL qualification questions are answered, say the closing line.
+
+NEVER ask "business या personal?" — the gate has already answered it.
+NEVER put business name/city at the end — they are asked RIGHT WHEN THE GATE TRIGGERS, before continuing other questions.
+
+─────────────────────────────────────────────────
+If the skip condition is NOT triggered (quantity < 100, no business keywords):
+
 After ALL qualification questions are answered, ask naturally:
   "एक बात और — क्या यह {product_name} business के लिए चाहिए आपको?"
 
@@ -967,7 +1005,6 @@ IF the buyer is unclear or doesn't respond properly:
 TONE RULES for this section:
   - Keep it light and quick — these are 2 extra questions, not an interrogation.
   - Do NOT announce "ab main business ke baare mein poochhungi" — just ask naturally after the last qualification question.
-  - If the buyer proactively mentions business/shop earlier in the call, skip this question and directly ask business name and city at that point.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
@@ -1463,20 +1500,34 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     async def _inactivity_timeout() -> None:
         nonlocal _nudge_count, _inactivity_task, _nudge_in_progress
-        # First nudge at 15 s; second check at 20 s after the first nudge
-        sleep_secs = 20.0 if _nudge_count >= 1 else 15.0
+        # Nudge 1 at 10 s, nudge 2 at 10 s after, close 5 s after nudge 2 (25 s total)
+        sleep_secs = 5.0 if _nudge_count >= 2 else 10.0
         await asyncio.sleep(sleep_secs)
         _nudge_count += 1
         if _call_ended:
             return
-        if _nudge_count >= 2:
+        if _nudge_count >= 3:
             _nudge_count = 0
             _inactivity_task = None
             _log.info("[INACTIVITY] extended silence — ending call directly")
             call_state["ended_naturally"] = True
             end_phrase = INACTIVITY_END_PHRASE
             await _speak_via_gemini(end_phrase, reason="inactivity-end")
-            await asyncio.sleep(2)
+            # _speak_via_gemini returns immediately after sending the directive.
+            # Poll agent_state to wait for Gemini to start then fully finish
+            # speaking before kicking, so the closing sentence isn't cut off.
+            try:
+                for _ in range(40):   # up to 4 s for Gemini to start speaking
+                    if getattr(getattr(session, "agent_state", None), "value", "") == "speaking":
+                        break
+                    await asyncio.sleep(0.1)
+                for _ in range(150):  # up to 15 s for speech to finish
+                    if getattr(getattr(session, "agent_state", None), "value", "") != "speaking":
+                        break
+                    await asyncio.sleep(0.1)
+                await asyncio.sleep(0.8)  # small buffer so the last syllable clears
+            except Exception:
+                await asyncio.sleep(4)
             await _kick_caller_safe()
             # No user turns means the caller never engaged — save as disconnected.
             _inactivity_status = "completed" if _turn_counter > 0 else "disconnected"
@@ -1492,7 +1543,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
                 return
             nudge = INACTIVITY_PHRASE
-            _log.info(f"[INACTIVITY] {sleep_secs:.0f}s nudge — saying: {nudge!r}")
+            _log.info(f"[INACTIVITY] {sleep_secs:.0f}s silence — nudge {_nudge_count}: {nudge!r}")
             _nudge_in_progress = True
             await _speak_via_gemini(nudge, reason="inactivity-nudge")
             # _on_agent_state fires _reset_inactivity() after bot finishes speaking.
@@ -2128,7 +2179,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _started_speaking_at = _item_metrics.get("started_speaking_at")
                 if _started_speaking_at is not None and _pending_e2e_user_stop is not None:
                     _e2e_ms = round((_started_speaking_at - _pending_e2e_user_stop) * 1000)
-                    _log.info(f"[LATENCY] Turn {_turn_counter} | e2e: {_e2e_ms}ms")
                     _asst_entry["e2e_ms"] = _e2e_ms
                 _live_transcript.append(_asst_entry)
         # Sniffer partial is superseded by the officially committed item — clear it.
@@ -2384,6 +2434,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _barge_in_fired = False  # reset at start of each bot turn
             _speaking_start_time = time.time()
             _pending_e2e_user_stop = _partial_first_time  # snapshot before FINAL clears it
+            if old_str == "listening" and _partial_first_time is not None:
+                _user_to_bot_ms = round((_speaking_start_time - _partial_first_time) * 1000)
+                _log.info(f"[LATENCY] Turn {_turn_counter + 1} | user→bot: {_user_to_bot_ms}ms")
             _cancel_inactivity()
             # Gemini started speaking — cancel the response watchdog.
             if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
@@ -2769,7 +2822,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         call_state["ended_naturally"] = True
         _cancel_inactivity()
         await _speak_via_gemini(timeout_msg, reason="timeout")
-        await asyncio.sleep(2)
+        try:
+            for _ in range(40):   # up to 4 s for Gemini to start speaking
+                if getattr(getattr(session, "agent_state", None), "value", "") == "speaking":
+                    break
+                await asyncio.sleep(0.1)
+            for _ in range(150):  # up to 15 s for speech to finish
+                if getattr(getattr(session, "agent_state", None), "value", "") != "speaking":
+                    break
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.8)
+        except Exception:
+            await asyncio.sleep(4)
         await _kick_caller_safe()
         asyncio.create_task(_save_and_close("completed"))
 
