@@ -309,7 +309,7 @@ async def generate_call_analysis(
     # NFC-normalise each token so Devanagari vowel marks compare correctly.
     if non_empty_user_turns and not _agent_progressed and all(
         not ({
-            unicodedata.normalize("NFC", re.sub(r"[^\w-￿]", "", w.lower()))
+            unicodedata.normalize("NFC", re.sub(r"[^\w]", "", w.lower()))
             for w in (t.get("text") or "").split() if w.strip()
         } - _BARE_CALL_SIGNAL_TOKENS)
         for t in non_empty_user_turns

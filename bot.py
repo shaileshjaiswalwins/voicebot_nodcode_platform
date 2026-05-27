@@ -1417,8 +1417,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             or _search_ctx.get("searched_keyword", "")
             or _lead.get("catname", "")
         )
-        _end_ts = datetime.now(timezone.utc).isoformat()
-        _start_ts = datetime.fromtimestamp(_start, tz=timezone.utc).isoformat() if _start else None
+        _end_ts = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        _start_ts = (datetime.fromtimestamp(_start, tz=timezone.utc) - timedelta(days=1)).isoformat() if _start else None
         _transcripts = [
             {
                 "id": idx + 1, "call_id": 0,
@@ -1522,6 +1522,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         await asyncio.sleep(sleep_secs)
         _nudge_count += 1
         if _call_ended:
+            return
+        # Don't nudge before the greeting has played — the caller would hear
+        # "क्या आप अभी line पर हैं?" as the very first thing if Gemini is slow
+        # to start the greeting. Reset counter and reschedule; the greeting's
+        # speaking-start event will cancel this task via _cancel_inactivity().
+        if not _greeting_done:
+            _nudge_count = 0
+            _inactivity_task = asyncio.create_task(_inactivity_timeout())
             return
         if _nudge_count >= 3:
             _nudge_count = 0
@@ -2499,12 +2507,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         _set_mic(True, reason="4s-speaking-unmute")
                 _speaking_unmute_task = asyncio.create_task(_delayed_unmute())
             elif not _greeting_done and not _closing_triggered:
-                # Greeting turn early unmute: re-enable Gemini audio input at 7 s so
+                # Greeting turn early unmute: re-enable Gemini audio input at 3 s so
                 # it is already processing the stream when the greeting finishes.
+                # 3 s (was 5 s) — greetings can be as short as ~4.5 s; at 5 s the timer
+                # fired after the greeting ended for short greetings, leaving Gemini with
+                # zero warm-up time and silently dropping the first user turn.
                 async def _greeting_early_unmute() -> None:
-                    await asyncio.sleep(5.0)
+                    await asyncio.sleep(3.0)
                     if not _greeting_done and not _call_ended:
-                        _set_mic(True, reason="greeting-5s-early-unmute")
+                        _set_mic(True, reason="greeting-3s-early-unmute")
                 _speaking_unmute_task = asyncio.create_task(_greeting_early_unmute())
 
         elif state_str in ("listening", "idle"):
@@ -2757,18 +2768,30 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
             # Fallback: if Gemini silently fails to produce the greeting (e.g. "no active
             # generation" race), _on_agent_state never fires → mic stays muted forever.
-            # After 12 s with no greeting, force-unmute immediately — do NOT resend the
-            # "." trigger, as a second generation produces a different greeting phrasing
-            # which looks inconsistent in the transcript.
+            # After 12 s with no greeting, retry once by resending the "." trigger.
+            # If it still hasn't played after another 12 s, force-unmute as last resort.
             # 12 s (not 8 s) — the greeting audio itself takes ~8-9 s; 8 s was firing
             # ~900 ms before the greeting finished, causing false greeting_retry=True.
             await asyncio.sleep(12)
             if not _greeting_done and not _call_ended:
                 _greeting_retry_triggered = True
+                _log.warning("[GREETING] No greeting after 12 s — retrying trigger")
+                try:
+                    _rt._send_client_event(
+                        types.LiveClientContent(
+                            turns=[types.Content(parts=[types.Part(text=".")], role="user")],
+                            turn_complete=True,
+                        )
+                    )
+                    _log.info("[GREETING] Retry trigger sent")
+                except Exception as e:
+                    _log.warning(f"[GREETING] Retry trigger failed: {e}")
+                await asyncio.sleep(12)
+            if not _greeting_done and not _call_ended:
                 _greeting_done = True
                 _bot_has_spoken = True
                 _set_mic(True, reason="greeting-timeout-force-unmute")
-                _log.warning("[MIC] Greeting not complete after 12 s — force-enabling mic")
+                _log.warning("[MIC] Greeting not complete after 24 s — force-enabling mic")
 
         asyncio.create_task(_trigger_greeting())
 
