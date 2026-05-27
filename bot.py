@@ -1399,6 +1399,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "call_duration_sec": _duration,
             "greeting_retry": _greeting_retry_triggered,
             "gemini_connect_failed": _gemini_connect_failed,
+            # Did the bot finish speaking the greeting before the call ended?
+            # False = user hung up during/before greeting; True = greeting completed.
+            "greeting_done": _greeting_done,
+            # How many ms of user speech were detected after the greeting (Silero VAD).
+            # Non-zero but below Sarvam threshold means the user spoke but STT couldn't
+            # transcribe it — useful for analysis to distinguish "user responded briefly"
+            # from "user was completely silent after greeting".
+            "user_speech_ms": round(_user_audio.get("speech_ms", 0.0)),
+            # True when Gemini's first turn was a connection probe ("क्या आप line पर हैं?")
+            # instead of the product greeting — agent progression is unreliable for such calls.
+            "wrong_opener_detected": _wrong_opener_detected,
             "tagged": False,
             "tagged_at": None,
             "created_at": datetime.now(timezone.utc),
@@ -2174,7 +2185,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("conversation_item_added")
     def _on_item_added(ev) -> None:
-        nonlocal _closing_buffer, _closing_triggered, _early_close_muting, _live_transcript, _pending_assistant_text, _close_status
+        nonlocal _closing_buffer, _closing_triggered, _early_close_muting, _live_transcript, _pending_assistant_text, _close_status, _wrong_opener_detected
         item = ev.item if hasattr(ev, "item") else ev
         role = getattr(item, "role", None)
         role_str = role.value if hasattr(role, "value") else str(role) if role else ""
@@ -2200,6 +2211,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _closing_buffer += " " + text
         if text:
             _log.info(f"[TRANSCRIPT] Turn {_turn_counter} | AGENT: {text!r}")
+            # Detect Gemini wrong opener: first agent turn is a connection probe instead of
+            # the product greeting. Log loudly so it's visible in ops monitoring.
+            if not _wrong_opener_detected and not _greeting_done and not _live_transcript:
+                _text_lower = text.lower()
+                _WRONG_OPENER_PHRASES_BOT = (
+                    "क्या आप अभी line पर हैं", "क्या आप अभी लाइन पर हैं",
+                    "kya aap abhi line par", "are you on the line",
+                )
+                if any(p in _text_lower for p in _WRONG_OPENER_PHRASES_BOT):
+                    _wrong_opener_detected = True
+                    _log.warning(f"[GREETING] Wrong opener detected — Gemini said {text!r} instead of product greeting")
             # Barge-in cleanup: if the user interrupted this bot turn mid-sentence,
             # _barge_in_fired is still True from that turn (reset to False only when
             # the NEXT speaking turn starts). A committed item that ends without
@@ -2411,6 +2433,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _bot_has_spoken = False  # True once the agent first transitions to "speaking"
     _greeting_retry_triggered = False
     _gemini_connect_failed = False  # True when Gemini WebSocket never connected within 5 s
+    _wrong_opener_detected = False  # True when Gemini's first turn was a probe ("क्या आप line पर हैं?") not a greeting
     _mic_enabled: bool = False  # mirrors the last value passed to set_audio_enabled
     _barge_in_fired: bool = False  # True once the 2s unmute task fires for this bot turn
     _bot_resp_watchdog_task: asyncio.Task | None = None  # cancelled when bot starts speaking
@@ -2521,6 +2544,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         elif state_str in ("listening", "idle"):
             if _bot_has_spoken and not _greeting_done:
                 _greeting_done = True
+                _log.info(
+                    f"[STATE] greeting_done → True (call_ended={_call_ended})"
+                )
                 # Transcribe any audio captured during the greeting window via Sarvam
                 # so it lands in _muted_transcript_log (and hence Mongo).
                 # Covers voicemail prompts, IVR menus, ambient speech that played

@@ -48,6 +48,17 @@ _BARE_CALL_SIGNAL_TOKENS: frozenset = frozenset(
     if word.strip()
 )
 
+# Phrases Gemini sometimes generates as its FIRST turn instead of the real greeting.
+# When detected, agent progression cannot be used to infer product confirmation.
+_WRONG_OPENER_PHRASES: tuple[str, ...] = (
+    "क्या आप अभी line पर हैं",
+    "क्या आप अभी लाइन पर हैं",
+    "kya aap abhi line par hain",
+    "kya aap line par hain",
+    "क्या आप line पर हैं",
+    "are you on the line",
+)
+
 DISPOSITION_MAP: dict[str, str] = {
     "Short Hangup":                      "The call ended with no product discussion — the customer said nothing at all, OR gave only a bare call-acknowledgment (e.g. hello, haan, hold on, ek second) and disconnected before any product topic was raised.",
     "Voicemail":                        "The call went to the recipient's voicemail instead of connecting directly.",
@@ -114,6 +125,9 @@ async def generate_call_analysis(
     muted_transcript: list[str] | None = None,
     gemini_connect_failed: bool = False,
     duration_secs: float | None = None,
+    greeting_done: bool = True,
+    user_speech_ms: int = 0,
+    wrong_opener_detected: bool = False,
 ) -> dict:
     if gemini_connect_failed:
         return {
@@ -146,6 +160,11 @@ async def generate_call_analysis(
         t for t in transcript
         if t.get("role") == "assistant" and (t.get("text") or "").strip()
     ]
+    # Detect Gemini wrong-opener: when Gemini generates a connection-probe as its first
+    # turn instead of the product greeting, agent progression is unreliable — the bot may
+    # have advanced on ambient noise or background conversation, not product confirmation.
+    _first_agent_text_lower = (_agent_turns_with_text[0].get("text") or "").lower() if _agent_turns_with_text else ""
+    _wrong_opener = wrong_opener_detected or any(p.lower() in _first_agent_text_lower for p in _WRONG_OPENER_PHRASES)
     # Check whether any user-side signal exists at all (live transcript OR muted capture).
     _has_any_user_signal = bool(non_empty_user_turns) or bool(
         muted_transcript and any((m or "").strip() for m in muted_transcript)
@@ -157,14 +176,22 @@ async def generate_call_analysis(
     _agent_progressed = bool(non_empty_user_turns) and len(_agent_turns_with_text) >= 2
     if not non_empty_user_turns:
         if not _has_any_user_signal:
-            # Zero user speech from any source — true Short Hangup.
-            # Do NOT rely on agent turn count here: the Gemini realtime model streams
-            # greeting TTS in multiple chunks, so 2+ agent turns can all be parts of
-            # the opening greeting, NOT evidence that the user spoke.
+            # Zero user speech from any source.
+            # Distinguish by whether the greeting actually completed and whether any
+            # sub-threshold audio was detected (user spoke but STT couldn't transcribe).
+            if not greeting_done:
+                _summary = "User disconnected before or during the agent greeting — no response at all."
+            elif user_speech_ms > 0:
+                _summary = (
+                    f"Greeting completed. User spoke briefly (~{user_speech_ms}ms, below STT threshold) "
+                    "then disconnected — no transcribable response captured."
+                )
+            else:
+                _summary = "No user response recorded — call ended after agent greeting only."
             return {
                 "call_outcome": "Short Hangup",
                 "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
-                "call_summary": "No user response recorded — call ended after agent greeting only.",
+                "call_summary": _summary,
                 "is_business": "", "business_city": "", "business_name": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
@@ -181,10 +208,20 @@ async def generate_call_analysis(
             if w.strip(".,!? ।")
         }
         if _muted_words and not (_muted_words - _BARE_CALL_SIGNAL_TOKENS):
+            if greeting_done and user_speech_ms > 0:
+                _summary = (
+                    f"Greeting completed. User acknowledged with a greeting during the bot turn "
+                    f"then spoke briefly (~{user_speech_ms}ms, below STT threshold) and disconnected "
+                    "— no product confirmation obtained."
+                )
+            elif not greeting_done:
+                _summary = "User acknowledged with a greeting during the bot turn then disconnected before greeting completed — no product confirmation obtained."
+            else:
+                _summary = "User responded with a greeting or acknowledgement only — no product confirmation or engagement obtained."
             return {
                 "call_outcome": "Short Hangup",
                 "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
-                "call_summary": "User responded with a greeting or acknowledgement only — no product confirmation or engagement obtained.",
+                "call_summary": _summary,
                 "is_business": "", "business_city": "", "business_name": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
@@ -401,15 +438,29 @@ async def generate_call_analysis(
     _first_user_meaningful_count = sum(
         1 for t in _first_user_tokens if len(t) >= 2 and not re.match(r"^(.)\1+$", t)
     )
-    _first_turn_is_confirmation = bool(_first_user_tokens & _CONFIRMATION_TOKENS) or (
-        _agent_progressed and _first_user_has_real_word and _first_user_meaningful_count >= 2
-    )
+    # Only fire _product_confirmed_note when the buyer explicitly used a confirmation
+    # token (हाँ / yes / ji / bilkul / etc.). Removing the _agent_progressed branch
+    # prevents ambient background conversation ("बना कर दे दिया क्लाइंट को",
+    # "पानी मत दो", etc.) from being treated as product confirmation just because
+    # the bot happened to advance on it. GP-7 in the LLM prompt still handles
+    # structural inference for sparse-but-genuine transcripts.
+    _first_turn_is_confirmation = bool(_first_user_tokens & _CONFIRMATION_TOKENS)
     _product_confirmed_note = (
         f"\n⚠ PRODUCT CONFIRMED: The agent asked specification questions (progressed past "
         f"the greeting), which means the buyer confirmed the product. Do NOT classify as "
         f"Could Not Confirm or Short Hangup. "
         f"Classify as Interested (zero valid specs), Enriched (1+ valid specs), or Approved."
-        if _first_turn_is_confirmation else ""
+        if _first_turn_is_confirmation and not _wrong_opener else ""
+    )
+    _wrong_opener_note = (
+        "\n🚨 GREETING FAILURE: The agent's first turn was a connection probe "
+        "(\"क्या आप अभी line पर हैं?\") instead of the standard product greeting. "
+        "This is a Gemini model failure — the bot may have advanced the conversation "
+        "on background noise or ambient conversation, NOT on a real product response. "
+        "GP-7 does NOT apply here. Evaluate product confirmation exclusively from the "
+        "buyer's actual words. If the buyer's turns are background conversation with no "
+        "product signal → Could Not Confirm."
+        if _wrong_opener else ""
     )
 
     _user_sparse = not non_empty_user_turns or len(non_empty_user_turns) <= 1
@@ -480,7 +531,7 @@ QnA EXTRACTION when buyer turns are absent:
         else:
             _duration_note = f"\n📞 CALL DURATION: {_dur_label}."
 
-    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}
+    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_wrong_opener_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}
 
 Current date/time (IST, GMT+5:30): {current_dt_str}
 
@@ -543,22 +594,28 @@ GP-7  AGENT PROGRESSION GUARANTEES PRODUCT CONFIRMATION: The bot is strictly pro
           misread. GP-7 does NOT apply — evaluate product_confirmed from the buyer's actual words.
         Case B — All turns are background noise (apply GP-8 before GP-7): if EVERY buyer turn
           throughout the entire call is off-topic personal chatter, name-calls, or background
-          conversation unrelated to the product — no single turn engages with any product topic,
-          spec, or buying signal — then the bot ran a one-sided conversation with background noise.
-          GP-7 does NOT apply. Evaluate as Could Not Confirm.
+          conversation unrelated to the product — domestic talk, side conversations, commenting on
+          unrelated things (water, bathroom, payments, people nearby, "बना कर दे दिया क्लाइंट को",
+          "पानी मत दो", "बाथरूम में से ना बात करो") — no single turn engages with any product
+          topic, spec, or buying signal — then the bot ran a one-sided conversation with background
+          noise. GP-7 does NOT apply. Evaluate as Could Not Confirm.
+        Case C — Wrong opener (🚨 GREETING FAILURE note present above): the agent started with
+          a connection probe ("क्या आप अभी line पर हैं?") instead of the product greeting, so
+          the bot may have advanced on ambient noise. GP-7 does NOT apply regardless of agent
+          turn count. Evaluate product confirmation from the buyer's actual words only.
 
 GP-8  PHANTOM ENGAGEMENT / BACKGROUND NOISE: When ALL of the following are true simultaneously:
-        ✓ closing_line_spoken is TRUE (bot completed its flow)
         ✓ ZERO valid_spec_values were captured across all questions
         ✓ NO buyer turn contains any product-related word, quantity, spec, or buying signal
         ✓ Buyer turns read as background conversations, name-calls, or side-chatter
           (e.g. calling out a person's name, commenting on unrelated topics like payments/internet,
-          rambling in Hindi with no product relevance)
+          domestic talk, conversations with people nearby, rambling with no product relevance)
       → The agent was capturing background noise, not a real engaged buyer.
       → product_confirmed = FALSE. GP-7 does NOT apply.
       → Outcome: "Could Not Confirm"
-      This overrides the closing_line_spoken signal — a bot that closed while talking to an
-      empty phone or background noise did not achieve genuine qualification.
+      This applies regardless of whether closing_line_spoken is TRUE or FALSE — a bot that
+      ran its full flow (or any part of it) while the user was talking to someone else or
+      in a noisy environment did not achieve genuine qualification.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 DEFINITIONS
