@@ -177,6 +177,40 @@ export type CallEvent = {
   created_at?: string;
 };
 
+export type OutcomeRule = {
+  outcome: string;
+  action: 'retry' | 'dnc' | 'stop' | 'completed';
+  max_attempts?: number;
+  retry_after_min?: number;
+  language_override?: string;
+  bot_id_override?: string;
+};
+
+export type CallWindow = {
+  days: string[];
+  start_time: string;
+  end_time: string;
+  timezone: string;
+};
+
+export type AttemptStep = {
+  attempt: number;
+  language?: string;
+  bot_id?: string;
+  delay_min?: number;
+};
+
+export type DialingStrategy = {
+  enabled: boolean;
+  outcome_rules: OutcomeRule[];
+  call_windows: CallWindow[];
+  attempt_sequence: AttemptStep[];
+  max_attempts_total: number;
+  max_attempts_per_day: number;
+  lead_expiry_days: number;
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+};
+
 export type Campaign = {
   _id: string;
   campaign_key: string;
@@ -184,6 +218,7 @@ export type Campaign = {
   bot_id?: string;
   status?: string;
   lead_api?: Record<string, unknown>;
+  dialing_strategy?: DialingStrategy;
   updated_at?: string;
 };
 
@@ -335,6 +370,9 @@ export const api = {
   transcriptEvents: (transcriptId: string) =>
     request<CallEvent[]>(`/api/transcripts/${encodeURIComponent(transcriptId)}/events`),
   campaigns: () => request<Campaign[]>('/api/campaigns'),
+  getCampaign: (campaignKey: string) => request<Campaign>(`/api/campaigns/${encodeURIComponent(campaignKey)}`),
+  upsertCampaign: (payload: Partial<Campaign> & { dialing_strategy?: DialingStrategy }) =>
+    request<Campaign>('/api/campaigns', { method: 'POST', body: JSON.stringify(payload) }),
   voices: () => request<VoiceOption[]>('/api/options/voices'),
   languages: () => request<LanguageOption[]>('/api/options/languages'),
   phrases: (category?: PhraseCategory) =>

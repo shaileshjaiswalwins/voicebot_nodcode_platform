@@ -12,6 +12,7 @@ import {
   Activity,
   AlertCircle,
   AlertTriangle,
+  Ban,
   Bot,
   BookOpen,
   Braces,
@@ -22,11 +23,14 @@ import {
   Database,
   FileText,
   Gauge,
+  GitBranch,
   Headphones,
+  Layers,
   Megaphone,
   MessageSquareText,
   Mic,
   PhoneCall,
+  PhoneOff,
   Play,
   Plus,
   RefreshCw,
@@ -44,15 +48,19 @@ import {
 import {
   api,
   apiUrl,
+  AttemptStep,
   Bot as BotType,
   BotVersion,
+  CallWindow,
   Campaign,
   CallEvent,
+  DialingStrategy,
   LangfuseSettings,
   LanguageOption,
   LanguageSettings,
   LibraryPhrase,
   OutcomeEntry,
+  OutcomeRule,
   PhraseCategory,
   RuntimeSettings,
   TestRecordingLookup,
@@ -133,6 +141,8 @@ const defaultConfig: RuntimeConfig = {
 function App() {
   const [view, setView] = useState<View>('bots');
   const [agentWorkspaceMode, setAgentWorkspaceMode] = useState<AgentWorkspaceMode>('list');
+  const [campaignWorkspaceMode, setCampaignWorkspaceMode] = useState<'list' | 'strategy'>('list');
+  const [selectedCampaignKey, setSelectedCampaignKey] = useState('');
   const [bots, setBots] = useState<BotType[]>([]);
   const [selectedBotId, setSelectedBotId] = useState('');
   const [versions, setVersions] = useState<BotVersion[]>([]);
@@ -523,6 +533,17 @@ function App() {
     });
   }
 
+  async function saveCampaignStrategy(campaignKey: string, campaignName: string, strategy: DialingStrategy) {
+    await runAction('campaignStrategy', 'Campaign Strategy', async () => {
+      await api.upsertCampaign({ campaign_key: campaignKey, name: campaignName, dialing_strategy: strategy });
+      const next = await api.campaigns();
+      setCampaigns(next);
+      cacheSet('campaigns', next);
+      clearDiagnostic('Campaigns API');
+      setMessage(`Dialing strategy saved for "${campaignName}".`);
+    });
+  }
+
   function updateConfig(key: keyof RuntimeConfig, value: unknown) {
     const current = parsedConfig.ok ? parsedConfig.value : defaultConfig;
     setConfigText(JSON.stringify({ ...current, [key]: value }, null, 2));
@@ -903,7 +924,18 @@ function App() {
 
         {view === 'campaigns' && (
           <ResilientPanel name="Campaigns" onDiagnostic={reportDiagnostic}>
-            <CampaignsView campaigns={campaigns} bots={bots} />
+            <CampaignsView
+              campaigns={campaigns}
+              bots={bots}
+              languages={languages}
+              outcomes={outcomes}
+              workspaceMode={campaignWorkspaceMode}
+              selectedCampaignKey={selectedCampaignKey}
+              onSelectCampaign={(key) => { setSelectedCampaignKey(key); setCampaignWorkspaceMode('strategy'); }}
+              onBackToList={() => setCampaignWorkspaceMode('list')}
+              onSaveStrategy={saveCampaignStrategy}
+              saveState={actionState.campaignStrategy}
+            />
           </ResilientPanel>
         )}
 
@@ -1388,7 +1420,45 @@ function BuilderView({
   );
 }
 
-function CampaignsView({ campaigns, bots }: { campaigns: Campaign[]; bots: BotType[] }) {
+function CampaignsView({
+  campaigns,
+  bots,
+  languages,
+  outcomes,
+  workspaceMode,
+  selectedCampaignKey,
+  onSelectCampaign,
+  onBackToList,
+  onSaveStrategy,
+  saveState
+}: {
+  campaigns: Campaign[];
+  bots: BotType[];
+  languages: LanguageOption[];
+  outcomes: OutcomeEntry[];
+  workspaceMode: 'list' | 'strategy';
+  selectedCampaignKey: string;
+  onSelectCampaign: (key: string) => void;
+  onBackToList: () => void;
+  onSaveStrategy: (key: string, name: string, strategy: DialingStrategy) => Promise<void>;
+  saveState?: 'idle' | 'running' | 'failed';
+}) {
+  const selectedCampaign = campaigns.find((c) => c.campaign_key === selectedCampaignKey) || campaigns[0];
+
+  if (workspaceMode === 'strategy' && selectedCampaign) {
+    return (
+      <DialingStrategyBuilder
+        campaign={selectedCampaign}
+        bots={bots}
+        languages={languages}
+        outcomes={outcomes}
+        onBack={onBackToList}
+        onSave={(strategy) => onSaveStrategy(selectedCampaign.campaign_key, selectedCampaign.name, strategy)}
+        saveState={saveState}
+      />
+    );
+  }
+
   return (
     <section className="content-grid two-col">
       <div className="table-panel">
@@ -1400,7 +1470,7 @@ function CampaignsView({ campaigns, bots }: { campaigns: Campaign[]; bots: BotTy
         </div>
         <table>
           <thead>
-            <tr><th>Campaign</th><th>Bot</th><th>Status</th><th>Lead API</th><th>Updated</th></tr>
+            <tr><th>Campaign</th><th>Bot</th><th>Status</th><th>Strategy</th><th>Lead API</th><th>Actions</th></tr>
           </thead>
           <tbody>
             {campaigns.map((campaign) => (
@@ -1408,12 +1478,22 @@ function CampaignsView({ campaigns, bots }: { campaigns: Campaign[]; bots: BotTy
                 <td><strong>{campaign.name}</strong><small>{campaign.campaign_key}</small></td>
                 <td>{bots.find((bot) => bot._id === campaign.bot_id)?.name || '-'}</td>
                 <td><StatusPill value={campaign.status || 'draft'} /></td>
+                <td>
+                  {campaign.dialing_strategy
+                    ? <span className={`pill ${campaign.dialing_strategy.enabled ? 'active' : 'draft'}`}>{campaign.dialing_strategy.enabled ? 'Active' : 'Paused'}</span>
+                    : <span className="pill draft">Default</span>
+                  }
+                </td>
                 <td><code>{String(campaign.lead_api?.url || campaign.lead_api?.endpoint || '-')}</code></td>
-                <td>{formatDate(campaign.updated_at)}</td>
+                <td>
+                  <button onClick={() => onSelectCampaign(campaign.campaign_key)}>
+                    <Layers size={14} /> Edit Strategy
+                  </button>
+                </td>
               </tr>
             ))}
             {!campaigns.length && (
-              <tr><td colSpan={5}>No campaigns yet. Backend can create mappings through <code>POST /api/campaigns</code>.</td></tr>
+              <tr><td colSpan={6}>No campaigns yet. Backend can create mappings through <code>POST /api/campaigns</code>.</td></tr>
             )}
           </tbody>
         </table>
@@ -1424,7 +1504,12 @@ function CampaignsView({ campaigns, bots }: { campaigns: Campaign[]; bots: BotTy
           <Step title="Lead event/API" text="Campaign fetches lead id, mobile, product, buyer name, city, and call id." />
           <Step title="Room metadata" text="Dialer creates LiveKit room with assistant_id, campaign_id, lead_id and call_id." />
           <Step title="Agent joins" text="Runtime fetches active published config and stores immutable call snapshot." />
+          <Step title="Strategy applied" text="Dialing strategy rules decide whether to retry, stop, or mark DNC based on call outcome." />
           <Step title="Callback" text="Outcome and raw transcript are saved, then callback mapping runs per campaign." />
+        </div>
+        <div className="callout">
+          <Layers size={18} />
+          Click "Edit Strategy" on any campaign to configure retry rules, time windows, and attempt sequencing.
         </div>
       </div>
     </section>
@@ -2465,6 +2550,540 @@ function LanguageSettingsCatalog({
         </div>
       </div>
     </>
+  );
+}
+
+const OUTCOME_CATEGORIES: Record<string, { label: string; group: 'completed' | 'retry' | 'stop' | 'dnc' }> = {
+  'Approved': { label: 'Approved', group: 'completed' },
+  'Enriched': { label: 'Enriched', group: 'completed' },
+  'Interested': { label: 'Interested', group: 'completed' },
+  'Short Hangup': { label: 'Short Hangup', group: 'retry' },
+  'Voicemail': { label: 'Voicemail', group: 'retry' },
+  'Could Not Confirm': { label: 'Could Not Confirm', group: 'retry' },
+  'Call Rescheduled': { label: 'Call Rescheduled', group: 'retry' },
+  'Technical Issue - Call Connected': { label: 'Technical Issue', group: 'retry' },
+  'Language Issue': { label: 'Language Issue', group: 'retry' },
+  'Other Cases': { label: 'Other Cases', group: 'retry' },
+  'Not Interested': { label: 'Not Interested', group: 'stop' },
+  'Wrong Number': { label: 'Wrong Number', group: 'stop' },
+  'Already Spoken': { label: 'Already Spoken', group: 'stop' },
+  'Will do it Myself': { label: 'Will do it Myself', group: 'stop' },
+  'Alternate Number': { label: 'Alternate Number', group: 'stop' },
+  'Seller Intent': { label: 'Seller Intent', group: 'stop' },
+  'Abusive Lead': { label: 'Abusive Lead', group: 'dnc' },
+  "DNC Client : Don't Call Further": { label: "DNC Client", group: 'dnc' },
+};
+
+const DEFAULT_OUTCOME_RULES: OutcomeRule[] = [
+  { outcome: 'Short Hangup', action: 'retry', max_attempts: 3, retry_after_min: 30 },
+  { outcome: 'Voicemail', action: 'retry', max_attempts: 2, retry_after_min: 120 },
+  { outcome: 'Wrong Number', action: 'stop' },
+  { outcome: 'Approved', action: 'completed' },
+  { outcome: 'Enriched', action: 'completed' },
+  { outcome: 'Interested', action: 'completed' },
+  { outcome: 'Not Interested', action: 'stop' },
+  { outcome: 'Could Not Confirm', action: 'retry', max_attempts: 2, retry_after_min: 60 },
+  { outcome: 'Alternate Number', action: 'stop' },
+  { outcome: 'Already Spoken', action: 'stop' },
+  { outcome: 'Will do it Myself', action: 'stop' },
+  { outcome: 'Call Rescheduled', action: 'retry', max_attempts: 1, retry_after_min: 0 },
+  { outcome: 'Seller Intent', action: 'stop' },
+  { outcome: 'Abusive Lead', action: 'dnc' },
+  { outcome: "DNC Client : Don't Call Further", action: 'dnc' },
+  { outcome: 'Other Cases', action: 'retry', max_attempts: 1, retry_after_min: 60 },
+  { outcome: 'Technical Issue - Call Connected', action: 'retry', max_attempts: 2, retry_after_min: 15 },
+  { outcome: 'Language Issue', action: 'retry', max_attempts: 1, retry_after_min: 60 },
+];
+
+function buildDefaultStrategy(): DialingStrategy {
+  return {
+    enabled: true,
+    outcome_rules: DEFAULT_OUTCOME_RULES,
+    call_windows: [{ days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat'], start_time: '09:00', end_time: '20:00', timezone: 'Asia/Kolkata' }],
+    attempt_sequence: [
+      { attempt: 1, language: 'hindi' },
+      { attempt: 2, language: 'hindi' },
+      { attempt: 3, language: 'english' },
+    ],
+    max_attempts_total: 5,
+    max_attempts_per_day: 2,
+    lead_expiry_days: 30,
+    priority: 'normal',
+  };
+}
+
+function mergeWithDefaults(existing: DialingStrategy | undefined): DialingStrategy {
+  const defaults = buildDefaultStrategy();
+  if (!existing) return defaults;
+  // Merge outcome_rules: start from defaults, overlay existing rules by outcome key
+  const existingByOutcome = new Map((existing.outcome_rules || []).map((r) => [r.outcome, r]));
+  const mergedRules = defaults.outcome_rules.map((defaultRule) => existingByOutcome.get(defaultRule.outcome) || defaultRule);
+  // Also include any rules in existing that aren't in defaults
+  (existing.outcome_rules || []).forEach((r) => {
+    if (!mergedRules.find((mr) => mr.outcome === r.outcome)) mergedRules.push(r);
+  });
+  return {
+    ...defaults,
+    ...existing,
+    outcome_rules: mergedRules,
+  };
+}
+
+function formatDelay(min?: number): string {
+  if (min === undefined || min === null) return '-';
+  if (min === 0) return 'immediate';
+  if (min < 60) return `${min}m`;
+  const hours = Math.floor(min / 60);
+  const remainder = min % 60;
+  return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+}
+
+function DialingStrategyBuilder({
+  campaign,
+  bots,
+  languages,
+  outcomes,
+  onBack,
+  onSave,
+  saveState
+}: {
+  campaign: Campaign;
+  bots: BotType[];
+  languages: LanguageOption[];
+  outcomes: OutcomeEntry[];
+  onBack: () => void;
+  onSave: (strategy: DialingStrategy) => Promise<void>;
+  saveState?: 'idle' | 'running' | 'failed';
+}) {
+  const [strategy, setStrategy] = useState<DialingStrategy>(() =>
+    mergeWithDefaults(campaign.dialing_strategy)
+  );
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    setStrategy(mergeWithDefaults(campaign.dialing_strategy));
+    setDirty(false);
+  }, [campaign.campaign_key]);
+
+  function updateStrategy(patch: Partial<DialingStrategy>) {
+    setStrategy((prev) => ({ ...prev, ...patch }));
+    setDirty(true);
+  }
+
+  function updateRule(outcome: string, patch: Partial<OutcomeRule>) {
+    setStrategy((prev) => ({
+      ...prev,
+      outcome_rules: prev.outcome_rules.map((r) =>
+        r.outcome === outcome ? { ...r, ...patch } : r
+      )
+    }));
+    setDirty(true);
+  }
+
+  async function handleSave() {
+    await onSave(strategy);
+    setDirty(false);
+  }
+
+  const retryCount = strategy.outcome_rules.filter((r) => r.action === 'retry').length;
+  const stopCount = strategy.outcome_rules.filter((r) => r.action === 'stop').length;
+  const dncCount = strategy.outcome_rules.filter((r) => r.action === 'dnc').length;
+  const completedCount = strategy.outcome_rules.filter((r) => r.action === 'completed').length;
+
+  return (
+    <section className="strategy-builder">
+      <div className="strategy-topbar">
+        <div className="strategy-breadcrumb">
+          <button onClick={onBack}><ChevronRight className="rotate-180" size={16} /> Campaigns</button>
+          <ChevronRight size={14} />
+          <strong>{campaign.name}</strong>
+        </div>
+        <div className="strategy-header-right">
+          <div className="strategy-stats">
+            <span className="strategy-stat retry">{retryCount} retry</span>
+            <span className="strategy-stat stop">{stopCount} stop</span>
+            <span className="strategy-stat dnc">{dncCount} DNC</span>
+            <span className="strategy-stat completed">{completedCount} done</span>
+          </div>
+          <label className="toggle-inline">
+            <input
+              type="checkbox"
+              checked={strategy.enabled}
+              onChange={(e) => updateStrategy({ enabled: e.target.checked })}
+            />
+            {strategy.enabled ? 'Strategy active' : 'Strategy paused'}
+          </label>
+          <button
+            className={saveState === 'failed' ? 'fallback-button' : 'primary'}
+            onClick={handleSave}
+            disabled={saveState === 'running' || !dirty}
+          >
+            <Save size={16} />
+            {saveState === 'running' ? 'Saving...' : saveState === 'failed' ? 'Retry save' : dirty ? 'Save strategy' : 'Saved'}
+          </button>
+        </div>
+      </div>
+
+      <div className="strategy-layout">
+        <div className="strategy-main">
+          <div className="panel">
+            <div className="panel-header">
+              <div>
+                <h2>Outcome rules</h2>
+                <p>For each call outcome, set whether to retry, stop, or block the number (DNC).</p>
+              </div>
+              <GitBranch size={18} />
+            </div>
+            <OutcomeRulesTable
+              rules={strategy.outcome_rules}
+              bots={bots}
+              languages={languages}
+              onUpdate={updateRule}
+            />
+          </div>
+        </div>
+
+        <aside className="strategy-rail">
+          <div className="panel compact">
+            <div className="panel-header">
+              <div><h2>Global limits</h2><p>Caps that apply across all outcome rules.</p></div>
+            </div>
+            <div className="form-section">
+              <div className="form-grid">
+                <label>
+                  Max total attempts
+                  <input
+                    type="number"
+                    min={1} max={50}
+                    value={strategy.max_attempts_total}
+                    onChange={(e) => updateStrategy({ max_attempts_total: Number(e.target.value) })}
+                  />
+                </label>
+                <label>
+                  Max attempts per day
+                  <input
+                    type="number"
+                    min={1} max={20}
+                    value={strategy.max_attempts_per_day}
+                    onChange={(e) => updateStrategy({ max_attempts_per_day: Number(e.target.value) })}
+                  />
+                </label>
+                <label>
+                  Lead expiry (days)
+                  <input
+                    type="number"
+                    min={1} max={365}
+                    value={strategy.lead_expiry_days}
+                    onChange={(e) => updateStrategy({ lead_expiry_days: Number(e.target.value) })}
+                  />
+                </label>
+                <label>
+                  Priority
+                  <select
+                    value={strategy.priority}
+                    onChange={(e) => updateStrategy({ priority: e.target.value as DialingStrategy['priority'] })}
+                  >
+                    <option value="low">Low</option>
+                    <option value="normal">Normal</option>
+                    <option value="high">High</option>
+                    <option value="urgent">Urgent</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div className="panel compact">
+            <div className="panel-header">
+              <div><h2>Call windows</h2><p>Only dial during these hours.</p></div>
+            </div>
+            <CallWindowsEditor
+              windows={strategy.call_windows}
+              onChange={(windows) => { updateStrategy({ call_windows: windows }); }}
+            />
+          </div>
+
+          <div className="panel compact">
+            <div className="panel-header">
+              <div><h2>Attempt sequence</h2><p>Override bot or language per attempt number.</p></div>
+              <button
+                onClick={() => {
+                  const nextAttempt = (strategy.attempt_sequence.length ? Math.max(...strategy.attempt_sequence.map((s) => s.attempt)) : 0) + 1;
+                  updateStrategy({ attempt_sequence: [...strategy.attempt_sequence, { attempt: nextAttempt }] });
+                }}
+              >
+                <Plus size={14} /> Add step
+              </button>
+            </div>
+            <AttemptSequenceEditor
+              steps={strategy.attempt_sequence}
+              bots={bots}
+              languages={languages}
+              onChange={(steps) => { updateStrategy({ attempt_sequence: steps }); }}
+            />
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function OutcomeRulesTable({
+  rules,
+  bots,
+  languages,
+  onUpdate
+}: {
+  rules: OutcomeRule[];
+  bots: BotType[];
+  languages: LanguageOption[];
+  onUpdate: (outcome: string, patch: Partial<OutcomeRule>) => void;
+}) {
+  const ruleByOutcome = new Map(rules.map((r) => [r.outcome, r]));
+
+  return (
+    <div className="outcome-rules-table">
+      <div className="outcome-group-header completed-group">Positive outcomes — stop calling, lead is qualified</div>
+      {['Approved', 'Enriched', 'Interested'].map((outcome) => {
+        const rule = ruleByOutcome.get(outcome) || { outcome, action: 'completed' as const };
+        return <OutcomeRuleRow key={outcome} rule={rule} bots={bots} languages={languages} onUpdate={onUpdate} />;
+      })}
+
+      <div className="outcome-group-header retry-group">Retry outcomes — call again after a delay</div>
+      {['Short Hangup', 'Voicemail', 'Could Not Confirm', 'Call Rescheduled', 'Technical Issue - Call Connected', 'Language Issue', 'Other Cases'].map((outcome) => {
+        const rule = ruleByOutcome.get(outcome) || { outcome, action: 'retry' as const, max_attempts: 2, retry_after_min: 60 };
+        return <OutcomeRuleRow key={outcome} rule={rule} bots={bots} languages={languages} onUpdate={onUpdate} />;
+      })}
+
+      <div className="outcome-group-header stop-group">Stop outcomes — no more calls for this lead</div>
+      {['Not Interested', 'Wrong Number', 'Already Spoken', 'Will do it Myself', 'Alternate Number', 'Seller Intent'].map((outcome) => {
+        const rule = ruleByOutcome.get(outcome) || { outcome, action: 'stop' as const };
+        return <OutcomeRuleRow key={outcome} rule={rule} bots={bots} languages={languages} onUpdate={onUpdate} />;
+      })}
+
+      <div className="outcome-group-header dnc-group">Do Not Call — permanently block this number</div>
+      {["DNC Client : Don't Call Further", 'Abusive Lead'].map((outcome) => {
+        const rule = ruleByOutcome.get(outcome) || { outcome, action: 'dnc' as const };
+        return <OutcomeRuleRow key={outcome} rule={rule} bots={bots} languages={languages} onUpdate={onUpdate} />;
+      })}
+    </div>
+  );
+}
+
+function OutcomeRuleRow({
+  rule,
+  bots,
+  languages,
+  onUpdate
+}: {
+  rule: OutcomeRule;
+  bots: BotType[];
+  languages: LanguageOption[];
+  onUpdate: (outcome: string, patch: Partial<OutcomeRule>) => void;
+}) {
+  const cat = OUTCOME_CATEGORIES[rule.outcome];
+  const group = cat?.group || 'stop';
+  const isRetry = rule.action === 'retry';
+
+  return (
+    <div className={`outcome-rule-row outcome-row-${group}`}>
+      <div className="outcome-rule-name">
+        <span className={`outcome-action-icon ${rule.action}`}>
+          {rule.action === 'completed' && <CheckCircle2 size={14} />}
+          {rule.action === 'retry' && <RefreshCw size={14} />}
+          {rule.action === 'stop' && <PhoneOff size={14} />}
+          {rule.action === 'dnc' && <Ban size={14} />}
+        </span>
+        <strong>{cat?.label || rule.outcome}</strong>
+      </div>
+      <div className="outcome-rule-controls">
+        <select
+          value={rule.action}
+          onChange={(e) => onUpdate(rule.outcome, { action: e.target.value as OutcomeRule['action'] })}
+          className="outcome-action-select"
+        >
+          <option value="retry">Retry</option>
+          <option value="stop">Stop</option>
+          <option value="dnc">DNC</option>
+          <option value="completed">Completed</option>
+        </select>
+        {isRetry && (
+          <>
+            <label className="inline-label">
+              <span>Attempts</span>
+              <input
+                type="number"
+                min={1} max={20}
+                value={rule.max_attempts ?? 2}
+                onChange={(e) => onUpdate(rule.outcome, { max_attempts: Number(e.target.value) })}
+                className="attempts-input"
+              />
+            </label>
+            <label className="inline-label">
+              <span>Delay (min)</span>
+              <input
+                type="number"
+                min={0} max={10080}
+                value={rule.retry_after_min ?? 60}
+                onChange={(e) => onUpdate(rule.outcome, { retry_after_min: Number(e.target.value) })}
+                className="delay-input"
+              />
+            </label>
+            <label className="inline-label">
+              <span>Language</span>
+              <select
+                value={rule.language_override || ''}
+                onChange={(e) => onUpdate(rule.outcome, { language_override: e.target.value || undefined })}
+                className="language-override-select"
+              >
+                <option value="">Same as strategy</option>
+                {languages.map((lang) => (
+                  <option key={lang.id} value={lang.id}>{lang.label}</option>
+                ))}
+              </select>
+            </label>
+          </>
+        )}
+        {!isRetry && (
+          <span className="outcome-rule-summary">
+            {rule.action === 'completed' ? 'Mark qualified, no follow-up' :
+             rule.action === 'dnc' ? 'Block number permanently' :
+             'Remove from queue'}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const DAY_OPTIONS = [
+  { id: 'mon', label: 'Mon' },
+  { id: 'tue', label: 'Tue' },
+  { id: 'wed', label: 'Wed' },
+  { id: 'thu', label: 'Thu' },
+  { id: 'fri', label: 'Fri' },
+  { id: 'sat', label: 'Sat' },
+  { id: 'sun', label: 'Sun' },
+];
+
+function CallWindowsEditor({
+  windows,
+  onChange
+}: {
+  windows: CallWindow[];
+  onChange: (windows: CallWindow[]) => void;
+}) {
+  const window = windows[0] || { days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat'], start_time: '09:00', end_time: '20:00', timezone: 'Asia/Kolkata' };
+
+  function updateWindow(patch: Partial<CallWindow>) {
+    onChange([{ ...window, ...patch }]);
+  }
+
+  function toggleDay(day: string) {
+    const days = window.days.includes(day)
+      ? window.days.filter((d) => d !== day)
+      : [...window.days, day];
+    updateWindow({ days });
+  }
+
+  return (
+    <div className="call-window-editor">
+      <div className="day-picker">
+        {DAY_OPTIONS.map((day) => (
+          <button
+            key={day.id}
+            className={window.days.includes(day.id) ? 'day-btn active' : 'day-btn'}
+            onClick={() => toggleDay(day.id)}
+            type="button"
+          >
+            {day.label}
+          </button>
+        ))}
+      </div>
+      <div className="form-grid">
+        <label>
+          From
+          <input
+            type="time"
+            value={window.start_time}
+            onChange={(e) => updateWindow({ start_time: e.target.value })}
+          />
+        </label>
+        <label>
+          To
+          <input
+            type="time"
+            value={window.end_time}
+            onChange={(e) => updateWindow({ end_time: e.target.value })}
+          />
+        </label>
+        <label className="full">
+          Timezone
+          <input
+            value={window.timezone}
+            onChange={(e) => updateWindow({ timezone: e.target.value })}
+            placeholder="Asia/Kolkata"
+          />
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function AttemptSequenceEditor({
+  steps,
+  bots,
+  languages,
+  onChange
+}: {
+  steps: AttemptStep[];
+  bots: BotType[];
+  languages: LanguageOption[];
+  onChange: (steps: AttemptStep[]) => void;
+}) {
+  function updateStep(attempt: number, patch: Partial<AttemptStep>) {
+    onChange(steps.map((s) => s.attempt === attempt ? { ...s, ...patch } : s));
+  }
+
+  function removeStep(attempt: number) {
+    onChange(steps.filter((s) => s.attempt !== attempt));
+  }
+
+  if (!steps.length) {
+    return <p className="muted" style={{ padding: '12px 0' }}>No steps defined. All attempts use the campaign default bot and language.</p>;
+  }
+
+  return (
+    <div className="attempt-sequence">
+      {steps.sort((a, b) => a.attempt - b.attempt).map((step) => (
+        <div key={step.attempt} className="attempt-step">
+          <span className="attempt-badge">#{step.attempt}</span>
+          <div className="attempt-controls">
+            <select
+              value={step.language || ''}
+              onChange={(e) => updateStep(step.attempt, { language: e.target.value || undefined })}
+            >
+              <option value="">Default language</option>
+              {languages.map((lang) => (
+                <option key={lang.id} value={lang.id}>{lang.label}</option>
+              ))}
+            </select>
+            <select
+              value={step.bot_id || ''}
+              onChange={(e) => updateStep(step.attempt, { bot_id: e.target.value || undefined })}
+            >
+              <option value="">Default bot</option>
+              {bots.map((bot) => (
+                <option key={bot._id} value={bot._id}>{bot.name}</option>
+              ))}
+            </select>
+          </div>
+          <button className="danger-button" onClick={() => removeStep(step.attempt)} style={{ padding: '0 8px', minHeight: 32 }}>
+            <Trash2 size={13} />
+          </button>
+        </div>
+      ))}
+    </div>
   );
 }
 

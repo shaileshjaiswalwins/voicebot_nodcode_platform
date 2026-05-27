@@ -32,6 +32,7 @@ from .config_store import (
     duplicate_bot,
     fetch_active_bot_config,
     get_bot,
+    get_campaign,
     get_transcript,
     list_bots,
     list_campaigns,
@@ -402,6 +403,14 @@ def campaigns():
 @app.post("/api/campaigns")
 def campaign_upsert(payload: CampaignPayload, x_jd_user: str | None = Header(default=None)):
     return upsert_campaign(payload.model_dump(exclude_none=True), current_user(x_jd_user))
+
+
+@app.get("/api/campaigns/{campaign_key}")
+def campaign_detail(campaign_key: str):
+    doc = get_campaign(campaign_key)
+    if not doc:
+        raise HTTPException(status_code=404, detail="campaign_not_found")
+    return doc
 
 
 @app.post("/api/bots/{bot_id}/test-session")

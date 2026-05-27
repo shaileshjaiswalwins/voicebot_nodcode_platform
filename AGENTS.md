@@ -17,11 +17,13 @@ server files.
 Important product boundaries:
 
 - V1 is not a general drag-and-drop bot builder. It is a prompt, settings,
-  catalog, test-call, transcript, and observability platform.
+  catalog, test-call, transcript, observability, and dialing-strategy platform.
 - The runtime is LiveKit Agents native with Gemini Live. Do not assume this is a
   Pipecat runtime unless a specific file proves it.
 - MIS, dialer, CRM, and recording APIs are external JustDial systems. Keep this
   platform standalone and integrate through explicit APIs/config.
+- Dialing strategies are authored here but executed by the external JustDial
+  dialer; the platform stores the config and the dialer/callback system reads it.
 
 ## Repository Map
 
@@ -228,7 +230,7 @@ collections use the `tbl_ai_vb_` prefix:
 
 - `tbl_ai_vb_bot_definitions`
 - `tbl_ai_vb_bot_versions`
-- `tbl_ai_vb_campaigns`
+- `tbl_ai_vb_campaigns` — includes `dialing_strategy` sub-document per campaign
 - `tbl_ai_vb_call_transcripts`
 - `tbl_ai_vb_call_events`
 - `tbl_ai_vb_callback_deliveries`
@@ -243,6 +245,68 @@ collections use the `tbl_ai_vb_` prefix:
 If transcripts are missing, first verify whether the worker wrote to the wrong
 database/collection, whether the worker joined the LiveKit room, and whether the
 dashboard API can reach Mongo from its process.
+
+## Dialing Strategy
+
+Each campaign can carry a `dialing_strategy` sub-document stored directly on
+the `tbl_ai_vb_campaigns` document. It is authored through the dashboard
+Campaigns → Edit Strategy UI and consumed by the external JustDial dialer /
+callback pipeline.
+
+### Schema
+
+```json
+{
+  "enabled": true,
+  "outcome_rules": [
+    { "outcome": "Short Hangup", "action": "retry", "max_attempts": 3, "retry_after_min": 30 },
+    { "outcome": "Voicemail",    "action": "retry", "max_attempts": 2, "retry_after_min": 120 },
+    { "outcome": "Approved",     "action": "completed" },
+    { "outcome": "Not Interested","action": "stop" },
+    { "outcome": "DNC Client : Don't Call Further", "action": "dnc" }
+  ],
+  "call_windows": [
+    { "days": ["mon","tue","wed","thu","fri","sat"], "start_time": "09:00", "end_time": "20:00", "timezone": "Asia/Kolkata" }
+  ],
+  "attempt_sequence": [
+    { "attempt": 1, "language": "hindi" },
+    { "attempt": 2, "language": "hindi" },
+    { "attempt": 3, "language": "english" }
+  ],
+  "max_attempts_total": 5,
+  "max_attempts_per_day": 2,
+  "lead_expiry_days": 30,
+  "priority": "normal"
+}
+```
+
+### Outcome rule actions
+
+| action | Meaning |
+|--------|---------|
+| `retry` | Retry the lead after `retry_after_min` minutes, up to `max_attempts` times. Optional `language_override` and `bot_id_override` per rule. |
+| `stop` | Remove from the dialing queue; no more attempts. |
+| `dnc` | Block the number permanently (Do Not Call). |
+| `completed` | Lead is qualified; no follow-up needed. |
+
+### API
+
+- `GET /api/campaigns` — list all campaigns; each includes `dialing_strategy` if set.
+- `GET /api/campaigns/{campaign_key}` — single campaign detail.
+- `POST /api/campaigns` — upsert; include `dialing_strategy` in the body to save it.
+
+### Validation
+
+`voicebot_platform/schemas.py` contains `DialingStrategyPayload`, `OutcomeRulePayload`,
+`CallWindowPayload`, and `AttemptStepPayload`. `action` is validated against
+`VALID_DIALING_ACTIONS`; `priority` against `VALID_DIALING_PRIORITIES`.
+
+### Frontend
+
+The builder lives in `frontend/src/main.tsx` as `DialingStrategyBuilder` and is
+accessed from Campaigns → Edit Strategy. It merges saved rules with smart
+defaults (`mergeWithDefaults`) so new outcomes always have a sensible starting
+value. The builder does NOT execute the strategy — it only stores the config.
 
 ## Recording And Verified Transcript Flow
 

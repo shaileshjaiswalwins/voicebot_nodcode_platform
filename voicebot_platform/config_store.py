@@ -339,6 +339,11 @@ def list_campaigns() -> list[dict[str, Any]]:
     return serialize_doc(list(get_db()[CAMPAIGN_COLLECTION].find().sort("updated_at", -1)))
 
 
+def get_campaign(campaign_key: str) -> dict[str, Any] | None:
+    doc = get_db()[CAMPAIGN_COLLECTION].find_one({"campaign_key": campaign_key})
+    return serialize_doc(doc) if doc else None
+
+
 def upsert_campaign(payload: dict[str, Any], user: str) -> dict[str, Any]:
     db = get_db()
     now = _now()
@@ -352,6 +357,8 @@ def upsert_campaign(payload: dict[str, Any], user: str) -> dict[str, Any]:
         "updated_by": user,
         "updated_at": now,
     }
+    if payload.get("dialing_strategy") is not None:
+        update["dialing_strategy"] = payload["dialing_strategy"]
     doc = db[CAMPAIGN_COLLECTION].find_one_and_update(
         {"campaign_key": campaign_key},
         {"$set": update, "$setOnInsert": {"created_at": now, "created_by": user}},

@@ -1633,3 +1633,286 @@ label.full {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Dialing Strategy Builder ───────────────────────────────────────── */
+
+.strategy-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.strategy-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+.strategy-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #546e85;
+}
+
+.strategy-breadcrumb strong {
+  color: #17212b;
+}
+
+.strategy-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.strategy-stats {
+  display: flex;
+  gap: 6px;
+}
+
+.strategy-stat {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+
+.strategy-stat.retry { background: #e8f0fe; color: #1a5bbf; }
+.strategy-stat.stop { background: #fff3e0; color: #a05a00; }
+.strategy-stat.dnc { background: #fce8e8; color: #8b1c1c; }
+.strategy-stat.completed { background: #e6f4ea; color: #1e6b33; }
+
+.toggle-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.toggle-inline input[type="checkbox"] {
+  width: 18px;
+  min-height: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.strategy-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+.strategy-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.strategy-main {
+  min-width: 0;
+}
+
+/* Outcome Rules Table */
+
+.outcome-rules-table {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.outcome-group-header {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 7px 16px;
+}
+
+.completed-group { background: #e6f4ea; color: #1e6b33; }
+.retry-group { background: #e8f0fe; color: #1a5bbf; }
+.stop-group { background: #fff8e1; color: #8a6000; }
+.dnc-group { background: #fce8e8; color: #8b1c1c; }
+
+.outcome-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #eef2f6;
+  flex-wrap: wrap;
+}
+
+.outcome-rule-row:last-child {
+  border-bottom: none;
+}
+
+.outcome-row-completed { background: #fafffe; }
+.outcome-row-retry { background: #fafbff; }
+.outcome-row-stop { background: #fffdf5; }
+.outcome-row-dnc { background: #fffafa; }
+
+.outcome-rule-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 180px;
+  flex-shrink: 0;
+}
+
+.outcome-rule-name strong {
+  font-size: 13.5px;
+}
+
+.outcome-action-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.outcome-action-icon.completed { background: #e6f4ea; color: #1e6b33; }
+.outcome-action-icon.retry { background: #e8f0fe; color: #1a5bbf; }
+.outcome-action-icon.stop { background: #fff3e0; color: #a05a00; }
+.outcome-action-icon.dnc { background: #fce8e8; color: #8b1c1c; }
+
+.outcome-rule-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.outcome-action-select {
+  min-height: 34px;
+  width: 120px;
+  flex-shrink: 0;
+}
+
+.inline-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: #546e85;
+  font-weight: 600;
+}
+
+.inline-label > span {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #7a94aa;
+}
+
+.attempts-input {
+  width: 72px;
+  min-height: 32px;
+}
+
+.delay-input {
+  width: 90px;
+  min-height: 32px;
+}
+
+.language-override-select {
+  min-height: 32px;
+  width: 140px;
+}
+
+.outcome-rule-summary {
+  font-size: 12px;
+  color: #546e85;
+  font-style: italic;
+}
+
+/* Call Windows */
+
+.call-window-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.day-picker {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.day-btn {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 6px;
+  border: 1px solid #d4dce6;
+  background: #f7f9fb;
+  color: #546e85;
+}
+
+.day-btn.active {
+  background: #105cab;
+  border-color: #105cab;
+  color: #ffffff;
+}
+
+/* Attempt Sequence */
+
+.attempt-sequence {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.attempt-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f7f9fb;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.attempt-badge {
+  font-size: 12px;
+  font-weight: 800;
+  color: #1a5bbf;
+  background: #e8f0fe;
+  border-radius: 20px;
+  padding: 2px 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.attempt-controls {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.attempt-controls select {
+  min-height: 32px;
+  font-size: 12px;
+}

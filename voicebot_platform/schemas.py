@@ -171,6 +171,66 @@ class RollbackPayload(BaseModel):
         return v
 
 
+VALID_DIALING_ACTIONS = {"retry", "dnc", "stop", "completed"}
+VALID_DIALING_PRIORITIES = {"low", "normal", "high", "urgent"}
+
+
+class OutcomeRulePayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    outcome: str = Field(min_length=1, max_length=200)
+    action: str = Field(min_length=1, max_length=20)
+    max_attempts: int | None = Field(default=None, ge=0, le=20)
+    retry_after_min: int | None = Field(default=None, ge=0, le=10080)
+    language_override: str | None = Field(default=None, max_length=50)
+    bot_id_override: str | None = Field(default=None, max_length=200)
+
+    @field_validator("action")
+    @classmethod
+    def _action_valid(cls, v):
+        if v not in VALID_DIALING_ACTIONS:
+            raise ValueError(f"action must be one of {sorted(VALID_DIALING_ACTIONS)}")
+        return v
+
+
+class CallWindowPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    days: list[str] = Field(default_factory=list)
+    start_time: str = Field(default="09:00", max_length=10)
+    end_time: str = Field(default="20:00", max_length=10)
+    timezone: str = Field(default="Asia/Kolkata", max_length=100)
+
+
+class AttemptStepPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    attempt: int = Field(ge=1, le=50)
+    language: str | None = Field(default=None, max_length=50)
+    bot_id: str | None = Field(default=None, max_length=200)
+    delay_min: int | None = Field(default=None, ge=0, le=10080)
+
+
+class DialingStrategyPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    enabled: bool = True
+    outcome_rules: list[OutcomeRulePayload] | None = None
+    call_windows: list[CallWindowPayload] | None = None
+    attempt_sequence: list[AttemptStepPayload] | None = None
+    max_attempts_total: int | None = Field(default=None, ge=1, le=50)
+    max_attempts_per_day: int | None = Field(default=None, ge=1, le=20)
+    lead_expiry_days: int | None = Field(default=None, ge=1, le=365)
+    priority: str | None = Field(default=None, max_length=20)
+
+    @field_validator("priority")
+    @classmethod
+    def _priority_valid(cls, v):
+        if v is not None and v not in VALID_DIALING_PRIORITIES:
+            raise ValueError(f"priority must be one of {sorted(VALID_DIALING_PRIORITIES)}")
+        return v
+
+
 class CampaignPayload(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -179,6 +239,7 @@ class CampaignPayload(BaseModel):
     bot_id: str | None = Field(default=None, max_length=200)
     status: str | None = Field(default=None, max_length=50)
     lead_api: dict[str, Any] | None = None
+    dialing_strategy: DialingStrategyPayload | None = None
 
 
 class TestSessionPayload(BaseModel):
