@@ -369,7 +369,13 @@ _HARDCODED_BOT_CONFIG: dict = {
         "If buyer proactively answers multiple questions in one turn — absorb all of it, acknowledge naturally, then ask only what is still unanswered.\n"
         "Never re-ask something the buyer already answered, even if they phrased it loosely.\n\n"
         "Step 3 — Closing\n"
-        "Only after EVERY question has an answer (even \"Not Sure\"):\n"
+        "HARD GATE — say the closing line ONLY when ALL of the following are true:\n"
+        "  ✓ The buyer has explicitly confirmed they need the product (passed Step 1 gate)\n"
+        "  ✓ Every qualification question from the schema has been asked AND received an answer (even \"Not Sure\")\n"
+        "  ✓ You have explicitly heard or inferred a real answer to EACH question — do not skip any\n"
+        "NEVER say the closing line after only greeting exchanges or social chat ('aap kaise hain', 'theek hoon', etc.).\n"
+        "NEVER close early — if even one question is unanswered, keep asking.\n"
+        "When the gate is satisfied, say EXACTLY:\n"
         "\"ठीक है जी, सारी details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए शुक्रिया.\" then stop — do not add anything after.\n"
         "CRITICAL: If the buyer's final answer also contains a side-question ('aap kahan se ho', 'aapka naam kya hai', 'ye kaun si company hai', 'kahan se call kar rahe ho', etc.) — do NOT answer it. Extract the answer, then go directly to the closing line. Never explain yourself or introduce yourself again at closing.\n\n"
 
@@ -481,7 +487,9 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Persistent off-topic loop (3+ times): \"मैं सिर्फ requirements note कर रही हूँ — [current question]?\"\n\n"
         "Not interested: \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop\n"
         "Rude or hang-up: same warm close immediately\n"
-        "Reschedule: \"ठीक है जी, [time] पे बात करते हैं.\" → stop\n\n"
+        "Reschedule: \"ठीक है जी, [time] पे बात करते हैं.\" → stop\n"
+        "CRITICAL — TIME-REFERENCE OVERRIDES QUANTITY: If the buyer says any number word (चार, पाँच, दस, 4, 5, etc.) followed by OR near a time-of-day word (बजे, o'clock, AM, PM, बजे के बाद, बजे तक, घंटे बाद) — treat the ENTIRE utterance as a reschedule request, NOT as a quantity answer. Even if you are currently on the quantity question. Even if the number appears first and the time word appears in a fragment you only partially heard. Respond: \"ठीक है जी, [time] पे बात करते हैं.\" → stop immediately. Do NOT ask the quantity question again.\n"
+        "Example: buyer says 'मैम, चार बजे बात कर रहे हैं' or just 'चार बजे' or 'four बजे' while you are asking about quantity → this is reschedule, not an answer of 4 units.\n\n"
 
         "━━━ BEFORE YOU RESPOND ━━━\n\n"
         "1. Did the buyer answer the current question? Trust clear intent — accept it and move on.\n"
@@ -1545,6 +1553,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if _nudge_count >= 3:
             _nudge_count = 0
             _inactivity_task = None
+            # Race-condition guard: user may have spoken in the last instant before
+            # this timer fired. If any live transcript exists or a partial is pending,
+            # reset and let the normal flow continue — don't end a live conversation.
+            if _turn_counter > 0 or _pending_user_text:
+                _log.info(
+                    f"[INACTIVITY] end suppressed — user just spoke "
+                    f"(turn_counter={_turn_counter}, pending={_pending_user_text!r})"
+                )
+                _inactivity_task = asyncio.create_task(_inactivity_timeout())
+                return
             _log.info("[INACTIVITY] extended silence — ending call directly")
             call_state["ended_naturally"] = True
             end_phrase = INACTIVITY_END_PHRASE
@@ -1569,6 +1587,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _inactivity_status = "completed" if _turn_counter > 0 else "disconnected"
             asyncio.create_task(_save_and_close(_inactivity_status))
         else:
+            # Skip nudge if user just spoke (race: timer fired as user was responding)
+            if _turn_counter > 0 or _pending_user_text:
+                _log.info(
+                    f"[INACTIVITY] nudge suppressed — user just spoke "
+                    f"(turn_counter={_turn_counter}, pending={_pending_user_text!r})"
+                )
+                _nudge_count = 0
+                _inactivity_task = asyncio.create_task(_inactivity_timeout())
+                return
             # Skip nudge if audio RMS shows active input — caller on noisy line
             if _user_audio["speech_ms"] > 200:
                 _log.info(
@@ -2230,35 +2257,42 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _is_incomplete = _barge_in_fired and _last_char not in ("।", ".", "?", "!", "…")
             if _is_incomplete:
                 _log.info(f"[BARGE-IN] Skipping interrupted partial bot turn: {text!r}")
+                # Bot never finished speaking this turn — reset early-close flag so the
+                # closing phrase (which the user never heard) doesn't lock out the mic.
+                if _early_close_muting and not _closing_triggered:
+                    _early_close_muting = False
+                    _log.info("[BARGE-IN] Resetting early_close_muting — closing phrase was barged into")
             elif not _live_transcript or _live_transcript[-1] != {"role": "assistant", "text": text}:
                 _asst_entry: dict = {"role": "assistant", "text": text}
                 _live_transcript.append(_asst_entry)
         # Sniffer partial is superseded by the officially committed item — clear it.
         _pending_assistant_text = ""
-        # Early mute: partial closing phrases are unique to the wrap-up line — mute
-        # immediately so the user cannot interrupt before the full phrase is committed.
-        if not _early_close_muting and not _closing_triggered:
-            _buf_lower = _closing_buffer.lower()
-            if any(m in _buf_lower for m in (
-                "details मिल गईं",   # start of Hindi closing line
-                "sellers आपसे contact",   # closing line only — not mid-call "relevant sellers से connect"
-                "sellers will contact",
-                "all details",        # English equivalent
-            )):
-                _early_close_muting = True
-                _set_mic(False, reason="commit-closing-phrase")
-                _log.info("[CLOSE DETECT] Partial closing phrase detected in commit — mic muted")
-        if _is_closing_phrase(_closing_buffer):
-            _closing_triggered = True
-            call_state["ended_naturally"] = True
-            if _is_not_interested_close(_closing_buffer):
-                _close_status = "not_interested"
-                _log.info("[CLOSE DETECT] Not-interested close detected — status=not_interested")
-            else:
-                _close_status = "completed"
-            _log.info(f"[CLOSE DETECT] Closing phrase matched — status={_close_status!r} — scheduling end")
-            _set_mic(False, reason="closing-phrase-matched")
-            asyncio.create_task(_handle_close())
+        # Only run closing phrase detection if the bot actually finished speaking this turn
+        # (not barged into). A closing phrase in a barged-into turn was never heard by the
+        # user and must not end the call.
+        if not _is_incomplete:
+            if not _early_close_muting and not _closing_triggered:
+                _buf_lower = _closing_buffer.lower()
+                if any(m in _buf_lower for m in (
+                    "details मिल गईं",   # start of Hindi closing line
+                    "sellers आपसे contact",   # closing line only — not mid-call "relevant sellers से connect"
+                    "sellers will contact",
+                    "all details",        # English equivalent
+                )):
+                    _early_close_muting = True
+                    _set_mic(False, reason="commit-closing-phrase")
+                    _log.info("[CLOSE DETECT] Partial closing phrase detected in commit — mic muted")
+            if _is_closing_phrase(_closing_buffer):
+                _closing_triggered = True
+                call_state["ended_naturally"] = True
+                if _is_not_interested_close(_closing_buffer):
+                    _close_status = "not_interested"
+                    _log.info("[CLOSE DETECT] Not-interested close detected — status=not_interested")
+                else:
+                    _close_status = "completed"
+                _log.info(f"[CLOSE DETECT] Closing phrase matched — status={_close_status!r} — scheduling end")
+                _set_mic(False, reason="closing-phrase-matched")
+                asyncio.create_task(_handle_close())
 
     @session.on("user_input_transcribed")
     def _on_user_spoke(ev) -> None:
@@ -2576,6 +2610,26 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             return
                         text = _muted_inject.get("text", "")
                         if not text:
+                            return
+                        # Drop bare phone-pickup signals ("हाँ जी", "हाँ", "हेलो", "जी", etc.)
+                        # captured mid-greeting. These are reflexive phone-answer responses,
+                        # not product confirmations — injecting them causes Gemini to treat
+                        # them as "yes I need the product" and skip to spec questions.
+                        _inject_tokens = {
+                            unicodedata.normalize("NFC", re.sub(r"[^\w]", "", w.lower()))
+                            for w in text.split() if w.strip()
+                        }
+                        _BARE_GREETING_TOKENS = frozenset(unicodedata.normalize("NFC", w) for w in {
+                            "हाँ", "हां", "हा", "जी", "हाँजी", "हांजी",
+                            "हेलो", "hello", "हैलो", "hi", "हाय",
+                            "haan", "ha", "han", "ji", "jee", "okay", "ok",
+                            "हाँ", "हां", "बोलो", "bol", "bolo",
+                        })
+                        if _inject_tokens and not (_inject_tokens - _BARE_GREETING_TOKENS):
+                            _log.info(
+                                f"[MUTED-CAPTURE] post-greeting inject skipped — bare phone-pickup signal: {text!r}"
+                            )
+                            _muted_inject["text"] = ""
                             return
                         if _rt is None or getattr(_rt, "_active_session", None) is None:
                             return

@@ -445,12 +445,32 @@ async def generate_call_analysis(
     # the bot happened to advance on it. GP-7 in the LLM prompt still handles
     # structural inference for sparse-but-genuine transcripts.
     _first_turn_is_confirmation = bool(_first_user_tokens & _CONFIRMATION_TOKENS)
+    # If the bot's second turn is a re-ask of the opening question (contains the
+    # re-ask pattern "तो क्या आपको"), the agent did NOT accept the first हाँ/जी as a
+    # product confirmation — so we must not inject the PRODUCT CONFIRMED note either.
+    _second_agent_text = (
+        (_agent_turns_with_text[1].get("text") or "").lower()
+        if len(_agent_turns_with_text) >= 2 else ""
+    )
+    _bot_reask_patterns = (
+        "तो क्या आपको", "to kya aapko", "क्या आपको", "kya aapko",
+        "do you need", "do you still need", "क्या आप",
+    )
+    _agent_reask_opening = any(p in _second_agent_text for p in _bot_reask_patterns)
+    # Also block the note when the buyer's first turn contains an explicit "नहीं" —
+    # even if the agent mistakenly proceeded to spec questions (bot error), the buyer
+    # rejection is the authoritative signal.
+    _first_turn_has_explicit_no = "नहीं" in unicodedata.normalize("NFC", _first_user_text)
     _product_confirmed_note = (
         f"\n⚠ PRODUCT CONFIRMED: The agent asked specification questions (progressed past "
         f"the greeting), which means the buyer confirmed the product. Do NOT classify as "
         f"Could Not Confirm or Short Hangup. "
         f"Classify as Interested (zero valid specs), Enriched (1+ valid specs), or Approved."
-        if _first_turn_is_confirmation and not _wrong_opener else ""
+        if _first_turn_is_confirmation
+        and not _wrong_opener
+        and not _agent_reask_opening
+        and not _first_turn_has_explicit_no
+        else ""
     )
     _wrong_opener_note = (
         "\n🚨 GREETING FAILURE: The agent's first turn was a connection probe "
@@ -514,9 +534,9 @@ QnA EXTRACTION when buyer turns are absent:
     _duration_note = ""
     if duration_secs is not None:
         _dur_label = f"{duration_secs:.0f}s"
-        if duration_secs < 15:
+        if duration_secs < 20:
             _duration_note = (
-                f"\n⚠ SHORT CALL ({_dur_label}): This call lasted under 15 seconds. "
+                f"\n⚠ SHORT CALL ({_dur_label}): This call lasted under 20 seconds. "
                 f"A call this short rarely produces genuine product engagement. "
                 f"If the buyer's only signal is a bare acknowledgement (हाँ / ji / yes / ok) "
                 f"with no product-specific statement, prefer Short Hangup over Interested. "
@@ -603,6 +623,19 @@ GP-7  AGENT PROGRESSION GUARANTEES PRODUCT CONFIRMATION: The bot is strictly pro
           a connection probe ("क्या आप अभी line पर हैं?") instead of the product greeting, so
           the bot may have advanced on ambient noise. GP-7 does NOT apply regardless of agent
           turn count. Evaluate product confirmation from the buyer's actual words only.
+        Case D — Explicit buyer rejection ignored by bot (bot error): if the buyer's FIRST
+          live response to the opening product question begins with or prominently contains
+          "नहीं" (no) — e.g. "नहीं मैम", "नहीं जी", "नहीं, हमें नहीं चाहिए" — AND the agent
+          then proceeded to ask spec questions without resolving the rejection, this is a bot
+          programming error. The agent advanced on a misread. GP-7 does NOT apply. Evaluate
+          product_confirmed from the buyer's actual words. A clear consistent "नहीं" to the
+          opening question = product_confirmed FALSE → classify as Not Interested.
+        Case E — Bare phone-pickup signal injected as muted capture: if the only user signal
+          is a reflexive greeting or acknowledgement ("हाँ जी", "हाँ", "जी", "हेलो") captured
+          during the bot's greeting window (mic was muted), and the agent advanced on this
+          signal alone with no subsequent live user confirmation — the bot advanced on a
+          phone-pickup reflex, not a product confirmation. GP-7 does NOT apply. Evaluate as
+          Could Not Confirm or Short Hangup based on actual engagement.
 
 GP-8  PHANTOM ENGAGEMENT / BACKGROUND NOISE: When ALL of the following are true simultaneously:
         ✓ ZERO valid_spec_values were captured across all questions
@@ -1046,14 +1079,14 @@ STRICT OUTPUT RULES:
                     result["qna"] = []
 
                 # 5. Duration-aware Interested → Short Hangup for very short calls.
-                #    Calls under 15 s with only bare acknowledgements (हाँ / ji / yes / ok)
+                #    Calls under 20 s with only bare acknowledgements (हाँ / ji / yes / ok)
                 #    and no valid spec values are almost always Short Hangups — the buyer
                 #    said a reflexive yes and disconnected, not a genuine product confirmation.
                 #    ~10 % of these may be genuine quick yeses; that tradeoff is accepted.
                 if (
                     outcome == "Interested"
                     and duration_secs is not None
-                    and duration_secs < 15
+                    and duration_secs < 20
                 ):
                     _BARE_ACK_SET = {
                         "haan", "ha", "han", "ji", "jee", "yes", "okay", "ok",
@@ -1076,7 +1109,7 @@ STRICT OUTPUT RULES:
                                 _all_user_words.add(_clean)
                     if not _all_user_words or not (_all_user_words - _bare_ack_nfc):
                         logger.info(
-                            f"[POST-PROC] Interested → Short Hangup: duration={duration_secs:.0f}s < 15s, "
+                            f"[POST-PROC] Interested → Short Hangup: duration={duration_secs:.0f}s < 20s, "
                             f"user signal is bare acknowledgement only: {_all_user_words}"
                         )
                         outcome = "Short Hangup"
