@@ -85,6 +85,32 @@ def fetch_active_bot_config(assistant_id: str) -> dict[str, Any] | None:
     return serialize_doc(build_runtime_snapshot(bot, version))
 
 
+def fetch_bot_config_by_version(assistant_id: str, version_id: str) -> dict[str, Any] | None:
+    """Fetch a specific version's config regardless of publish state.
+
+    Used for test sessions so developers can exercise draft or older published
+    versions without having to publish them first.
+    """
+    if not assistant_id or not version_id:
+        return None
+    db = get_db()
+    bot = db[BOT_COLLECTION].find_one(
+        {"assistant_id": assistant_id, "status": {"$nin": ["archived", "deleted"]}}
+    )
+    if not bot:
+        return None
+    try:
+        version_obj_id = ObjectId(version_id)
+    except Exception:
+        return None
+    version = db[BOT_VERSION_COLLECTION].find_one(
+        {"_id": version_obj_id, "bot_id": bot["_id"]}
+    )
+    if not version:
+        return None
+    return serialize_doc(build_runtime_snapshot(bot, version))
+
+
 def seed_default_bot(default_config: dict[str, Any], user: str = DEFAULT_USER) -> dict[str, Any]:
     db = get_db()
     config = _clean_config(default_config)
@@ -195,12 +221,34 @@ def get_bot(bot_id: str) -> dict[str, Any] | None:
     return serialize_doc({"bot": bot, "versions": versions})
 
 
+def update_bot_meta(bot_id: str, payload: dict[str, Any], user: str) -> dict[str, Any]:
+    """Update mutable bot metadata (name, description). Config/version is unchanged."""
+    db = get_db()
+    obj_id = ObjectId(bot_id)
+    bot = db[BOT_COLLECTION].find_one({"_id": obj_id})
+    if not bot:
+        raise KeyError(f"bot_not_found:{bot_id}")
+    update: dict[str, Any] = {"updated_at": _now()}
+    if "name" in payload and payload["name"]:
+        update["name"] = str(payload["name"])[:200].strip()
+    if "description" in payload:
+        update["description"] = str(payload["description"] or "")[:2000]
+    db[BOT_COLLECTION].update_one({"_id": obj_id}, {"$set": update})
+    return serialize_doc(db[BOT_COLLECTION].find_one({"_id": obj_id}))
+
+
 def _next_version_number(db, bot_obj_id: ObjectId) -> int:
     latest = db[BOT_VERSION_COLLECTION].find_one({"bot_id": bot_obj_id}, sort=[("version", -1)])
     return int((latest or {}).get("version", 0)) + 1
 
 
 def save_draft(bot_id: str, payload: dict[str, Any], user: str) -> dict[str, Any]:
+    """Create a new draft version for this bot.
+
+    Always inserts a new version document with the next sequential version
+    number and sets ``bot.draft_version_id`` to point to it.  For in-place
+    editing of an existing draft use ``update_version`` instead.
+    """
     db = get_db()
     bot_obj_id = ObjectId(bot_id)
     bot = db[BOT_COLLECTION].find_one({"_id": bot_obj_id})
@@ -208,9 +256,9 @@ def save_draft(bot_id: str, payload: dict[str, Any], user: str) -> dict[str, Any
         raise KeyError("bot_not_found")
     config = _clean_config(payload.get("config") or {})
     config["assistant_id"] = bot["assistant_id"]
+    now = _now()
 
     version_id = None
-    now = _now()
     for attempt in range(3):
         draft = {
             "bot_id": bot_obj_id,
@@ -235,6 +283,45 @@ def save_draft(bot_id: str, payload: dict[str, Any], user: str) -> dict[str, Any
         {"$set": {"draft_version_id": version_id, "status": "draft", "updated_at": now}},
     )
     return serialize_doc(db[BOT_VERSION_COLLECTION].find_one({"_id": version_id}))
+
+
+def update_version(bot_id: str, version_id: str, payload: dict[str, Any], user: str) -> dict[str, Any]:
+    """Update a draft version's config in-place.
+
+    Published versions are immutable — calling this on a published version
+    raises ValueError.  Only the config, notes, updated_by and updated_at
+    fields are mutated; version number and state are preserved.
+    """
+    db = get_db()
+    bot_obj_id = ObjectId(bot_id)
+    version_obj_id = ObjectId(version_id)
+
+    bot = db[BOT_COLLECTION].find_one({"_id": bot_obj_id})
+    if not bot:
+        raise KeyError("bot_not_found")
+    version = db[BOT_VERSION_COLLECTION].find_one(
+        {"_id": version_obj_id, "bot_id": bot_obj_id}
+    )
+    if not version:
+        raise KeyError("version_not_found")
+    if version["state"] != "draft":
+        raise ValueError("published_versions_are_immutable")
+
+    config = _clean_config(payload.get("config") or version.get("config") or {})
+    config["assistant_id"] = bot["assistant_id"]
+    now = _now()
+
+    set_fields: dict[str, Any] = {
+        "config": config,
+        "updated_by": user,
+        "updated_at": now,
+    }
+    if "notes" in payload:
+        set_fields["notes"] = payload["notes"]
+
+    db[BOT_VERSION_COLLECTION].update_one({"_id": version_obj_id}, {"$set": set_fields})
+    db[BOT_COLLECTION].update_one({"_id": bot_obj_id}, {"$set": {"updated_at": now}})
+    return serialize_doc(db[BOT_VERSION_COLLECTION].find_one({"_id": version_obj_id}))
 
 
 def publish_version(bot_id: str, version_id: str | None, user: str) -> dict[str, Any]:
@@ -385,6 +472,10 @@ def create_test_session(bot_id: str, payload: dict[str, Any], user: str) -> dict
         "test_worker_agent_name": payload.get("test_worker_agent_name", ""),
         "test_session": True,
     }
+    # If the caller pinned a specific version, include it so the worker can
+    # load that version's config instead of the default active/published one.
+    if payload.get("test_bot_version_id"):
+        room_metadata["test_bot_version_id"] = payload["test_bot_version_id"]
     return {
         "room_metadata": room_metadata,
         "instructions": "Pass this metadata when creating the LiveKit room for the controlled test call.",

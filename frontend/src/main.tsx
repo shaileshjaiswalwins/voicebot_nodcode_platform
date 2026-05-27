@@ -16,6 +16,7 @@ import {
   Bot,
   BookOpen,
   Braces,
+  Pencil,
   CheckCircle2,
   ChevronRight,
   Clock3,
@@ -116,6 +117,8 @@ type TestForm = {
   buyer_name: string;
   city: string;
   test_worker_agent_name: string;
+  /** Pinned version id — empty string means "use active published version" */
+  test_bot_version_id: string;
 };
 
 const defaultConfig: RuntimeConfig = {
@@ -146,6 +149,7 @@ function App() {
   const [bots, setBots] = useState<BotType[]>([]);
   const [selectedBotId, setSelectedBotId] = useState('');
   const [versions, setVersions] = useState<BotVersion[]>([]);
+  const [editingVersionId, setEditingVersionId] = useState<string | undefined>();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [languages, setLanguages] = useState<LanguageOption[]>([]);
@@ -173,7 +177,8 @@ function App() {
     srchterm: 'air conditioner',
     buyer_name: 'Test User',
     city: 'Mumbai',
-    test_worker_agent_name: ''
+    test_worker_agent_name: '',
+    test_bot_version_id: ''
   });
   const [testStatus, setTestStatus] = useState('Idle');
   const [testError, setTestError] = useState('');
@@ -342,7 +347,10 @@ function App() {
           bundle.versions.find((item) => item.state === 'draft') ||
           bundle.versions.find((item) => item._id === bundle.bot.active_version_id) ||
           bundle.versions[0];
-        if (preferred) setConfigText(JSON.stringify(preferred.config, null, 2));
+        if (preferred) {
+          setConfigText(JSON.stringify(preferred.config, null, 2));
+          setEditingVersionId(preferred._id);
+        }
       })
       .catch((error) => reportDiagnostic('Bot Versions API', error, 'Keep editing cached config or retry refresh'));
   }, [selectedBot?._id]);
@@ -430,6 +438,24 @@ function App() {
     });
   }
 
+  /** Re-fetch the selected bot's full version list and update React state. */
+  async function refreshBotVersions(opts?: { selectVersionId?: string }) {
+    if (!selectedBot) return;
+    try {
+      const bundle = await api.bot(selectedBot._id);
+      setVersions(bundle.versions);
+      if (opts?.selectVersionId) {
+        const target = bundle.versions.find((v) => v._id === opts.selectVersionId);
+        if (target) {
+          setEditingVersionId(target._id);
+          setConfigText(JSON.stringify(target.config, null, 2));
+        }
+      }
+    } catch (error) {
+      reportDiagnostic('Bot Versions API', error, 'Retry or continue with current data');
+    }
+  }
+
   async function saveDraft() {
     if (!selectedBot || !parsedConfig.ok) return;
     await runAction('saveDraft', 'Save Draft', async () => {
@@ -437,8 +463,41 @@ function App() {
         config: parsedConfig.value,
         notes: 'Dashboard draft save'
       });
-      setMessage(`Draft version ${version.version} saved. Publish it when ready for new calls.`);
+      setMessage(`Draft v${version.version} saved. Publish it when ready for new calls.`);
+      // Reload versions so the new draft appears in the history panel and is
+      // immediately selectable with its correct (fresh) config.
+      await refreshBotVersions({ selectVersionId: version._id });
+    });
+  }
+
+  async function renameBotMeta(name: string, description: string) {
+    if (!selectedBot) return;
+    await runAction('renameBotMeta', 'Rename Agent', async () => {
+      await api.updateBotMeta(selectedBot._id, {
+        name: name.trim() || selectedBot.name,
+        description: description.trim()
+      });
+      setMessage(`Agent renamed to "${name.trim() || selectedBot.name}".`);
       await refresh();
+    });
+  }
+
+  function selectVersion(version: BotVersion) {
+    setEditingVersionId(version._id);
+    setConfigText(JSON.stringify(version.config, null, 2));
+  }
+
+  async function updateVersionAction(versionId: string) {
+    if (!selectedBot || !parsedConfig.ok) return;
+    await runAction('updateVersion', 'Update Version', async () => {
+      const updatedVersion = await api.updateVersion(selectedBot._id, versionId, {
+        config: parsedConfig.value,
+      });
+      // Patch the in-memory versions list with the fresh version document so
+      // clicking the version row in history reloads the SAVED config, not stale state.
+      setVersions((prev) => prev.map((v) => v._id === updatedVersion._id ? updatedVersion : v));
+      setMessage(`v${updatedVersion.version} updated.`);
+      // configText intentionally NOT reset — user's current edits remain visible.
     });
   }
 
@@ -446,7 +505,9 @@ function App() {
     if (!selectedBot) return;
     await runAction('publishDraft', 'Publish Bot', async () => {
       const version = await api.publish(selectedBot._id, latestDraft?._id);
-      setMessage(`Published version ${version.version}. Live calls keep their old snapshot; new calls use this version.`);
+      setMessage(`Published v${version.version}. Live calls keep their old snapshot; new calls use this version.`);
+      // Reload versions so published/draft states are accurate in the history panel.
+      await refreshBotVersions();
       await refresh();
     });
   }
@@ -823,46 +884,88 @@ function App() {
     }
   }
 
+  const hasError = diagnostics.some((item) => item.severity === 'error');
+
+  function navigate(nextView: View) {
+    setView(nextView);
+    if (nextView !== 'bots') setAgentWorkspaceMode('list');
+  }
+
   return (
     <div className="app-shell">
+      {/* ── Desktop sidebar ── */}
       <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark"><Mic size={19} /></div>
-          <div>
-            <strong>JustDial Voice AI</strong>
-            <span>No-code operations</span>
+        <div className="sidebar-header">
+          <div className="brand-mark"><Mic size={16} /></div>
+          <div className="brand-text">
+            <strong>Voice AI</strong>
+            <span>No-code ops</span>
           </div>
         </div>
-        <div className="nav-group">
-          <NavButton icon={<Bot />} label="Agents" active={view === 'bots'} onClick={() => setView('bots')} />
-          <NavButton icon={<Megaphone />} label="Campaigns" active={view === 'campaigns'} onClick={() => setView('campaigns')} />
-          <NavButton icon={<Play />} label="Test Call" active={view === 'test'} onClick={() => setView('test')} />
-          <NavButton icon={<FileText />} label="Transcripts" active={view === 'transcripts'} onClick={() => setView('transcripts')} />
-          <NavButton icon={<Gauge />} label="Observability" active={view === 'observability'} onClick={() => setView('observability')} />
-          <NavButton icon={<BookOpen />} label="Library" active={view === 'library'} onClick={() => setView('library')} />
-          <NavButton icon={<ClipboardList />} label="Settings" active={view === 'settings'} onClick={() => setView('settings')} />
-        </div>
-        <div className="sidebar-card">
-          <span className={diagnostics.some((item) => item.severity === 'error') ? 'status-dot error-dot' : 'status-dot'} />
-          <strong>{diagnostics.length ? `${diagnostics.length} diagnostic${diagnostics.length > 1 ? 's' : ''}` : 'Systems nominal'}</strong>
-          <small>{diagnostics[0]?.scope || 'ai_voice_bot_management'}</small>
+
+        <nav className="sidebar-nav">
+          <NavItem icon={<Bot />} label="Agents" active={view === 'bots'} onClick={() => navigate('bots')} />
+          <NavItem icon={<Megaphone />} label="Campaigns" active={view === 'campaigns'} onClick={() => navigate('campaigns')} />
+          <NavItem icon={<Play />} label="Test Call" active={view === 'test'} onClick={() => navigate('test')} />
+          <NavItem icon={<FileText />} label="Transcripts" active={view === 'transcripts'} onClick={() => navigate('transcripts')} />
+          <NavItem icon={<Gauge />} label="Observability" active={view === 'observability'} onClick={() => navigate('observability')} />
+          <NavItem icon={<BookOpen />} label="Library" active={view === 'library'} onClick={() => navigate('library')} />
+          <NavItem icon={<ClipboardList />} label="Settings" active={view === 'settings'} onClick={() => navigate('settings')} />
+        </nav>
+
+        <div className="sidebar-footer">
+          <span className={`status-dot ${hasError ? 'error' : ''}`} />
+          <div className="sidebar-footer-text">
+            <strong>{diagnostics.length ? `${diagnostics.length} issue${diagnostics.length > 1 ? 's' : ''}` : 'All systems go'}</strong>
+            <small>{diagnostics[0]?.scope || 'ai_voice_bot_management'}</small>
+          </div>
         </div>
       </aside>
 
+      {/* ── Mobile topbar ── */}
+      <div className="mobile-topbar">
+        <div className="brand-mark" style={{ width: 30, height: 30 }}><Mic size={14} /></div>
+        <span className="mobile-topbar-title">{titleFor(view)}</span>
+        <button onClick={refresh} style={{ color: '#94A3B8' }}><RefreshCw size={17} /></button>
+      </div>
+
       <main className="workspace">
-        <header className="topbar">
-          <div>
-            <span className="eyebrow">Standalone platform</span>
-            <h1>{titleFor(view)}</h1>
-            <p>{subtitleFor(view)}</p>
+        {/* ── Page header ── */}
+        <header className="page-header">
+          <div className="page-header-top">
+            <div className="page-title-group">
+              <span className="page-eyebrow">JustDial · Voice AI</span>
+              <h1 className="page-title">{titleFor(view)}</h1>
+              <p className="page-subtitle">{subtitleFor(view)}</p>
+            </div>
+            <div className="page-actions">
+              <select
+                value={selectedBot?._id || ''}
+                onChange={(event) => setSelectedBotId(event.target.value)}
+                style={{ width: 200, fontSize: 13 }}
+              >
+                {bots.map((bot) => <option key={bot._id} value={bot._id}>{bot.name}</option>)}
+              </select>
+              <button onClick={refresh}><RefreshCw size={14} /> Refresh</button>
+              <button className="primary" onClick={createBot} disabled={actionState.createBot === 'running'}>
+                <Rocket size={14} /> {actionState.createBot === 'failed' ? 'Retry' : 'New Agent'}
+              </button>
+            </div>
           </div>
-          <div className="topbar-actions">
-            <select value={selectedBot?._id || ''} onChange={(event) => setSelectedBotId(event.target.value)}>
-              {bots.map((bot) => <option key={bot._id} value={bot._id}>{bot.name}</option>)}
-            </select>
-            <button onClick={refresh}><RefreshCw size={16} /> Refresh</button>
-            <button className="primary" onClick={createBot} disabled={actionState.createBot === 'running'}><Rocket size={16} /> {actionState.createBot === 'failed' ? 'Retry New Agent' : 'New Agent'}</button>
-          </div>
+
+          {/* ── Per-page dynamic summary ── */}
+          <PageSummary
+            view={view}
+            bots={bots}
+            transcripts={transcripts}
+            campaigns={campaigns}
+            selectedBot={selectedBot}
+            testStatus={testStatus}
+            roomName={testRoomName}
+            micEnabled={micEnabled}
+            remoteAudioReady={remoteAudioReady}
+            loading={loading}
+          />
         </header>
 
         <DiagnosticsBar diagnostics={diagnostics} onClear={clearDiagnostic} onRetry={refresh} onUseCache={() => {
@@ -878,11 +981,9 @@ function App() {
 
         {message && (
           <div className={message.startsWith('Cannot') || message.startsWith('API') ? 'notice error' : 'notice'}>
-            <AlertCircle size={16} /> {message}
+            <AlertCircle size={15} /> {message}
           </div>
         )}
-
-        <KpiStrip bots={bots} transcripts={transcripts} campaigns={campaigns} loading={loading} />
 
         {view === 'bots' && (
           <ResilientPanel name="Agents" onDiagnostic={reportDiagnostic}>
@@ -902,9 +1003,15 @@ function App() {
                 onUpdateLanguage={updateLanguage}
                 onSaveDraft={saveDraft}
                 onPublish={publishDraft}
+                onRename={renameBotMeta}
                 saveState={actionState.saveDraft}
                 publishState={actionState.publishDraft}
+                renameState={actionState.renameBotMeta}
                 onBack={() => setAgentWorkspaceMode('list')}
+                editingVersionId={editingVersionId}
+                onSelectVersion={selectVersion}
+                onUpdateVersion={updateVersionAction}
+                updateVersionState={actionState.updateVersion}
               />
             ) : (
               <BotsView
@@ -1020,26 +1127,165 @@ function App() {
           />
         )}
       </main>
+
+      {/* ── Bottom nav (mobile only) ── */}
+      <nav className="bottom-nav">
+        <button className={`bottom-nav-item ${view === 'bots' ? 'active' : ''}`} onClick={() => navigate('bots')}><Bot size={20} /><span>Agents</span></button>
+        <button className={`bottom-nav-item ${view === 'campaigns' ? 'active' : ''}`} onClick={() => navigate('campaigns')}><Megaphone size={20} /><span>Campaigns</span></button>
+        <button className={`bottom-nav-item ${view === 'test' ? 'active' : ''}`} onClick={() => navigate('test')}><Play size={20} /><span>Test</span></button>
+        <button className={`bottom-nav-item ${view === 'transcripts' ? 'active' : ''}`} onClick={() => navigate('transcripts')}><FileText size={20} /><span>Calls</span></button>
+        <button className={`bottom-nav-item ${(view === 'observability' || view === 'library' || view === 'settings') ? 'active' : ''}`} onClick={() => navigate('library')}><BookOpen size={20} /><span>More</span></button>
+      </nav>
     </div>
   );
 }
 
-function KpiStrip({ bots, transcripts, campaigns, loading }: {
+// ─── Page Summary (dynamic per-page) ──────────────────────────────────────────
+function PageSummary({
+  view, bots, transcripts, campaigns, selectedBot,
+  testStatus, roomName, micEnabled, remoteAudioReady, loading
+}: {
+  view: View;
   bots: BotType[];
   transcripts: Transcript[];
   campaigns: Campaign[];
+  selectedBot?: BotType;
+  testStatus: string;
+  roomName: string;
+  micEnabled: boolean;
+  remoteAudioReady: boolean;
   loading: boolean;
 }) {
-  const activeBots = bots.filter((bot) => bot.status === 'active').length;
-  const completedCalls = transcripts.filter((item) => item.status === 'completed').length;
-  const avgDuration = average(transcripts.map((item) => Number(item.call_duration_sec || 0)).filter(Boolean));
+  const L = loading ? '…' : null;
+
+  if (view === 'bots' || view === 'builder') {
+    const total = bots.length;
+    const active = bots.filter((b) => b.status === 'active').length;
+    const draft = bots.filter((b) => b.status === 'draft').length;
+    const botCalls = transcripts.filter((t) => t.bot_id === selectedBot?._id).length;
+    return (
+      <div className="page-summary">
+        <SummaryCard icon={<Bot size={17} />} color="blue" label="Total agents" value={L ?? total.toString()} sub="All configured bots" />
+        <SummaryCard icon={<CheckCircle2 size={17} />} color="green" label="Active" value={L ?? active.toString()} sub="Published & running" />
+        <SummaryCard icon={<Braces size={17} />} color="amber" label="Draft" value={L ?? draft.toString()} sub="Awaiting publish" />
+        <SummaryCard icon={<PhoneCall size={17} />} color="slate" label="Calls (selected)" value={L ?? botCalls.toString()} sub={selectedBot?.name || 'Select a bot'} />
+      </div>
+    );
+  }
+
+  if (view === 'campaigns') {
+    const total = campaigns.length;
+    const withBot = campaigns.filter((c) => c.bot_id).length;
+    const active = campaigns.filter((c) => c.status === 'active').length;
+    const noBot = campaigns.filter((c) => !c.bot_id).length;
+    return (
+      <div className="page-summary">
+        <SummaryCard icon={<Megaphone size={17} />} color="blue" label="Total campaigns" value={L ?? total.toString()} sub="All campaign keys" />
+        <SummaryCard icon={<CheckCircle2 size={17} />} color="green" label="Active" value={L ?? active.toString()} sub="Status: active" />
+        <SummaryCard icon={<Bot size={17} />} color="amber" label="Bot assigned" value={L ?? withBot.toString()} sub="Have a bot mapping" />
+        <SummaryCard icon={<AlertCircle size={17} />} color="red" label="No bot" value={L ?? noBot.toString()} sub="Need assignment" />
+      </div>
+    );
+  }
+
+  if (view === 'test') {
+    const connected = Boolean(roomName) && !testStatus.toLowerCase().includes('failed') && testStatus !== 'Idle';
+    return (
+      <div className="page-summary">
+        <SummaryCard icon={<Bot size={17} />} color="blue" label="Selected bot" value={selectedBot?.name || '—'} sub="Active config" />
+        <SummaryCard icon={<Wifi size={17} />} color={connected ? 'green' : 'slate'} label="Session" value={connected ? 'Live' : 'Idle'} sub={testStatus} />
+        <SummaryCard icon={<Mic size={17} />} color={micEnabled ? 'green' : 'slate'} label="Microphone" value={micEnabled ? 'Live' : 'Off'} sub="Input status" />
+        <SummaryCard icon={<Volume2 size={17} />} color={remoteAudioReady ? 'green' : 'slate'} label="Bot audio" value={remoteAudioReady ? 'Connected' : 'Waiting'} sub="Output status" />
+      </div>
+    );
+  }
+
+  if (view === 'transcripts') {
+    const total = transcripts.length;
+    const completed = transcripts.filter((t) => t.status === 'completed').length;
+    const avgDur = average(transcripts.map((t) => Number(t.call_duration_sec || 0)).filter(Boolean));
+    const today = transcripts.filter((t) => {
+      if (!t.created_at) return false;
+      const d = new Date(t.created_at);
+      const n = new Date();
+      return d.getDate() === n.getDate() && d.getMonth() === n.getMonth() && d.getFullYear() === n.getFullYear();
+    }).length;
+    return (
+      <div className="page-summary">
+        <SummaryCard icon={<FileText size={17} />} color="blue" label="Total calls" value={L ?? total.toString()} sub="All transcripts" />
+        <SummaryCard icon={<CheckCircle2 size={17} />} color="green" label="Completed" value={L ?? completed.toString()} sub="Status: completed" />
+        <SummaryCard icon={<Clock3 size={17} />} color="amber" label="Avg duration" value={avgDur ? `${avgDur}s` : '—'} sub="From saved records" />
+        <SummaryCard icon={<Activity size={17} />} color="slate" label="Today" value={L ?? today.toString()} sub="Calls today" />
+      </div>
+    );
+  }
+
+  if (view === 'observability') {
+    const total = transcripts.length;
+    const nonCompleted = transcripts.filter((t) => t.status && t.status !== 'completed').length;
+    const completed = transcripts.filter((t) => t.status === 'completed').length;
+    return (
+      <div className="page-summary">
+        <SummaryCard icon={<Activity size={17} />} color="blue" label="Total traces" value={L ?? total.toString()} sub="Transcripts stored" />
+        <SummaryCard icon={<CheckCircle2 size={17} />} color="green" label="Completed" value={L ?? completed.toString()} sub="Clean calls" />
+        <SummaryCard icon={<AlertTriangle size={17} />} color="amber" label="Non-completed" value={L ?? nonCompleted.toString()} sub="Errors / incomplete" />
+        <SummaryCard icon={<Bot size={17} />} color="slate" label="Agent" value={selectedBot?.name || '—'} sub="Selected bot" />
+      </div>
+    );
+  }
+
+  if (view === 'library') {
+    return (
+      <div className="page-summary">
+        <SummaryCard icon={<BookOpen size={17} />} color="blue" label="Library" value="Phrase DB" sub="Voicemail · Hold · DNC" />
+        <SummaryCard icon={<MessageSquareText size={17} />} color="green" label="Outcomes" value="AI labels" sub="Call classification" />
+        <SummaryCard icon={<Wand2 size={17} />} color="amber" label="Languages" value="Style notes" sub="Per-language config" />
+        <SummaryCard icon={<ShieldCheck size={17} />} color="slate" label="Live in" value="~60s" sub="Edits go live fast" />
+      </div>
+    );
+  }
+
+  if (view === 'settings') {
+    return (
+      <div className="page-summary">
+        <SummaryCard icon={<ClipboardList size={17} />} color="blue" label="Runtime" value="LiveKit" sub="Connection settings" />
+        <SummaryCard icon={<Wifi size={17} />} color="green" label="Agent name" value="Worker ID" sub="LiveKit dispatch key" />
+        <SummaryCard icon={<ShieldCheck size={17} />} color="amber" label="Credentials" value="Backend .env" sub="Keys not shown here" />
+        <SummaryCard icon={<Database size={17} />} color="slate" label="Mongo" value="Connected" sub="Auto-managed" />
+      </div>
+    );
+  }
+
+  // Fallback — global overview
+  const activeBots = bots.filter((b) => b.status === 'active').length;
+  const completedCalls = transcripts.filter((t) => t.status === 'completed').length;
+  const avgDuration = average(transcripts.map((t) => Number(t.call_duration_sec || 0)).filter(Boolean));
   return (
-    <section className="kpi-strip">
-      <Kpi icon={<Bot />} label="Active agents" value={loading ? '...' : activeBots.toString()} helper={`${bots.length} total`} />
-      <Kpi icon={<Megaphone />} label="Campaigns" value={loading ? '...' : campaigns.length.toString()} helper="Mongo-backed mappings" />
-      <Kpi icon={<PhoneCall />} label="Completed calls" value={loading ? '...' : completedCalls.toString()} helper={`${transcripts.length} transcripts`} />
-      <Kpi icon={<Clock3 />} label="Avg duration" value={avgDuration ? `${avgDuration}s` : '-'} helper="from saved transcripts" />
-    </section>
+    <div className="page-summary">
+      <SummaryCard icon={<Bot size={17} />} color="blue" label="Active agents" value={L ?? activeBots.toString()} sub={`${bots.length} total`} />
+      <SummaryCard icon={<Megaphone size={17} />} color="green" label="Campaigns" value={L ?? campaigns.length.toString()} sub="Mongo mappings" />
+      <SummaryCard icon={<PhoneCall size={17} />} color="amber" label="Completed calls" value={L ?? completedCalls.toString()} sub={`${transcripts.length} transcripts`} />
+      <SummaryCard icon={<Clock3 size={17} />} color="slate" label="Avg duration" value={avgDuration ? `${avgDuration}s` : '—'} sub="Saved transcripts" />
+    </div>
+  );
+}
+
+function SummaryCard({ icon, color, label, value, sub }: {
+  icon: React.ReactNode;
+  color: 'blue' | 'green' | 'amber' | 'red' | 'slate';
+  label: string;
+  value: string;
+  sub: string;
+}) {
+  return (
+    <div className="summary-card">
+      <div className={`summary-icon ${color}`}>{icon}</div>
+      <div className="summary-body">
+        <div className="summary-label">{label}</div>
+        <div className="summary-value">{value}</div>
+        <div className="summary-sub">{sub}</div>
+      </div>
+    </div>
   );
 }
 
@@ -1120,19 +1366,6 @@ function DiagnosticsBar({
   );
 }
 
-function Kpi({ icon, label, value, helper }: { icon: React.ReactNode; label: string; value: string; helper: string }) {
-  return (
-    <div className="kpi">
-      <div className="kpi-icon">{icon}</div>
-      <div>
-        <span>{label}</span>
-        <strong>{value}</strong>
-        <small>{helper}</small>
-      </div>
-    </div>
-  );
-}
-
 function BotsView({ bots, selectedBot, transcripts, onSelect, onEdit, onDelete }: {
   bots: BotType[];
   selectedBot?: BotType;
@@ -1150,7 +1383,7 @@ function BotsView({ bots, selectedBot, transcripts, onSelect, onEdit, onDelete }
             <p>Each agent owns its prompt, voice, language, versions, and runtime settings.</p>
           </div>
         </div>
-        <table>
+        <div className="table-scroll"><table>
           <thead>
             <tr><th>Name</th><th>Status</th><th>Assistant</th><th>Updated</th><th>Actions</th></tr>
           </thead>
@@ -1166,14 +1399,14 @@ function BotsView({ bots, selectedBot, transcripts, onSelect, onEdit, onDelete }
                 <td>{formatDate(bot.updated_at)}</td>
                 <td>
                   <div className="table-actions">
-                    <button onClick={(event) => { event.stopPropagation(); onEdit(bot._id); }}><Braces size={14} /> Edit</button>
+                    <button onClick={(event) => { event.stopPropagation(); onEdit(bot._id); }}><Pencil size={13} /> Edit</button>
                     <button className="danger-button" onClick={(event) => { event.stopPropagation(); onDelete(bot); }}><Trash2 size={14} /> Delete</button>
                   </div>
                 </td>
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
       </div>
       <div className="panel">
         <div className="agent-profile">
@@ -1196,7 +1429,7 @@ function BotsView({ bots, selectedBot, transcripts, onSelect, onEdit, onDelete }
         </div>
         {selectedBot && (
           <div className="button-row">
-            <button className="primary" onClick={() => onEdit(selectedBot._id)}><Braces size={16} /> Edit agent</button>
+            <button className="primary" onClick={() => onEdit(selectedBot._id)}><Pencil size={15} /> Edit agent</button>
             <button className="danger-button" onClick={() => onDelete(selectedBot)}><Trash2 size={16} /> Delete agent</button>
           </div>
         )}
@@ -1222,15 +1455,19 @@ function DeleteAgentDialog({
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="modal-panel critical" role="dialog" aria-modal="true" aria-labelledby="delete-agent-title">
-        <div className="modal-icon"><AlertTriangle size={22} /></div>
-        <div>
+
+        <div className="modal-header">
+          <div className="modal-icon"><AlertTriangle size={17} /></div>
           <h2 id="delete-agent-title">Delete agent?</h2>
+        </div>
+
+        <div className="modal-body">
           <p>
-            This removes <strong>{bot.name}</strong> from active dashboard use and disables its runtime config lookup.
-            Existing transcripts and historical call records stay available for audit.
+            This will permanently remove <strong style={{ color: 'var(--text)' }}>{bot.name}</strong> from the
+            dashboard and disable its runtime config lookup. Existing transcripts and call records are kept for audit.
           </p>
           <label>
-            Type the agent name to confirm
+            Type <strong style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-2)' }}>{bot.name}</strong> to confirm
             <input
               value={confirmText}
               onChange={(event) => setConfirmText(event.target.value)}
@@ -1238,13 +1475,15 @@ function DeleteAgentDialog({
               autoFocus
             />
           </label>
-          <div className="button-row">
-            <button onClick={onCancel} disabled={busy}>Cancel</button>
-            <button className="danger-button" onClick={onConfirm} disabled={!canDelete || busy}>
-              <Trash2 size={16} /> {busy ? 'Deleting...' : 'Delete agent'}
-            </button>
-          </div>
         </div>
+
+        <div className="modal-footer">
+          <button onClick={onCancel} disabled={busy}>Cancel</button>
+          <button className="danger-button" onClick={onConfirm} disabled={!canDelete || busy}>
+            <Trash2 size={15} /> {busy ? 'Deleting…' : 'Delete agent'}
+          </button>
+        </div>
+
       </section>
     </div>
   );
@@ -1265,9 +1504,15 @@ function BuilderView({
   onUpdateLanguage,
   onSaveDraft,
   onPublish,
+  onRename,
   onBack,
   saveState,
-  publishState
+  publishState,
+  renameState,
+  editingVersionId,
+  onSelectVersion,
+  onUpdateVersion,
+  updateVersionState
 }: {
   selectedBot?: BotType;
   versions: BotVersion[];
@@ -1283,33 +1528,111 @@ function BuilderView({
   onUpdateLanguage: (value: string) => void;
   onSaveDraft: () => void;
   onPublish: () => void;
+  onRename?: (name: string, description: string) => void;
   onBack?: () => void;
   saveState?: 'idle' | 'running' | 'failed';
   publishState?: 'idle' | 'running' | 'failed';
+  renameState?: 'idle' | 'running' | 'failed';
+  editingVersionId?: string;
+  onSelectVersion?: (version: BotVersion) => void;
+  onUpdateVersion?: (versionId: string) => void;
+  updateVersionState?: 'idle' | 'running' | 'failed';
 }) {
   const value = config.ok ? config.value : defaultConfig;
 
+
+  const [draftName, setDraftName] = useState(selectedBot?.name || '');
+  const [draftDescription, setDraftDescription] = useState(selectedBot?.description || '');
+
+  useEffect(() => {
+    setDraftName(selectedBot?.name || '');
+    setDraftDescription(selectedBot?.description || '');
+  }, [selectedBot?._id]);
+
+  const nameChanged = draftName.trim() !== (selectedBot?.name || '').trim()
+    || draftDescription.trim() !== (selectedBot?.description || '').trim();
+
+  const editingVer = versions.find(v => v._id === editingVersionId);
+  const isPublishedVer = editingVer?.state === 'published';
+
   return (
     <section className="builder-layout">
+      {/* ── Back nav + action bar ─────────────────────────────── */}
+      <div className="builder-action-bar">
+        {onBack && (
+          <button className="back-link" onClick={onBack}>
+            <ChevronRight className="rotate-180" size={15} /> Back to agents
+          </button>
+        )}
+        <div className="builder-action-bar-right">
+          {!isPublishedVer && editingVersionId && onUpdateVersion && (
+            <button
+              disabled={!config.ok || updateVersionState === 'running'}
+              onClick={() => onUpdateVersion(editingVersionId)}
+            >
+              <Save size={15} />
+              {updateVersionState === 'running' ? 'Saving…' : updateVersionState === 'failed' ? 'Retry' : `Update v${editingVer?.version ?? ''}`}
+            </button>
+          )}
+          <button disabled={!config.ok || saveState === 'running'} onClick={onSaveDraft}>
+            <Plus size={15} /> {saveState === 'failed' ? 'Retry' : saveState === 'running' ? 'Saving…' : 'New version'}
+          </button>
+          <button
+            className={publishState === 'failed' ? 'fallback-button' : 'primary'}
+            disabled={publishState === 'running' || (!latestDraft && versions.length > 0)}
+            onClick={onPublish}
+          >
+            <Rocket size={15} /> {publishState === 'failed' ? 'Retry' : publishState === 'running' ? 'Publishing…' : 'Publish'}
+          </button>
+        </div>
+      </div>
+
       <div className="builder-main">
         <div className="panel">
           <div className="panel-header">
             <div>
-              <h2>{selectedBot?.name || 'Bot Builder'}</h2>
+              <h2>{draftName || selectedBot?.name || 'Bot Builder'}</h2>
               <p>PMs edit the spoken behavior here. Developers can use the JSON panel for advanced runtime settings.</p>
-            </div>
-            <div className="button-row">
-              {onBack && <button onClick={onBack}><ChevronRight className="rotate-180" size={16} /> Back to agents</button>}
-              <button disabled={!config.ok || saveState === 'running'} onClick={onSaveDraft}>
-                <Save size={16} /> {saveState === 'failed' ? 'Retry save draft' : saveState === 'running' ? 'Saving...' : 'Save draft'}
-              </button>
-              <button className={publishState === 'failed' ? 'fallback-button' : 'primary'} disabled={publishState === 'running' || (!latestDraft && versions.length > 0)} onClick={onPublish}>
-                <Rocket size={16} /> {publishState === 'failed' ? 'Fallback: retry publish' : publishState === 'running' ? 'Publishing...' : 'Publish'}
-              </button>
             </div>
           </div>
           {!config.ok && <div className="notice error"><AlertTriangle size={16} /> JSON is invalid: {config.error}</div>}
+          {isPublishedVer && (
+            <div className="notice" style={{ background: 'var(--warning-bg)', borderColor: 'var(--warning-border)', color: 'var(--warning)' }}>
+              <ShieldCheck size={15} />
+              Viewing published v{editingVer?.version} — changes here create a new draft. The live version is unaffected.
+            </div>
+          )}
           <div className="form-section">
+            <div className="form-grid agent-identity">
+              <label>
+                Agent name
+                <input
+                  value={draftName}
+                  placeholder={selectedBot?.name || 'Agent name'}
+                  onChange={(e) => setDraftName(e.target.value)}
+                />
+              </label>
+              <label>
+                Description
+                <input
+                  value={draftDescription}
+                  placeholder="Short description (optional)"
+                  onChange={(e) => setDraftDescription(e.target.value)}
+                />
+              </label>
+              {onRename && (
+                <div className="rename-action">
+                  <button
+                    className={renameState === 'failed' ? 'fallback-button' : nameChanged ? 'primary' : ''}
+                    disabled={!nameChanged || renameState === 'running'}
+                    onClick={() => onRename(draftName, draftDescription)}
+                  >
+                    <Pencil size={14} />
+                    {renameState === 'running' ? 'Saving…' : renameState === 'failed' ? 'Retry rename' : 'Save name'}
+                  </button>
+                </div>
+              )}
+            </div>
             <label className="full">
               System prompt
               <textarea
@@ -1403,7 +1726,12 @@ function BuilderView({
           <h2>Version history</h2>
           <div className="version-list">
             {versions.map((version) => (
-              <div className="version-row" key={version._id}>
+              <div
+                className={`version-row${version._id === editingVersionId ? ' active' : ''}`}
+                key={version._id}
+                onClick={() => onSelectVersion?.(version)}
+                style={{ cursor: 'pointer' }}
+              >
                 <span>v{version.version}</span>
                 <StatusPill value={version.state} />
                 <small>{version.published_at ? `Published ${formatDate(version.published_at)}` : `Created ${formatDate(version.created_at)}`}</small>
@@ -1468,7 +1796,7 @@ function CampaignsView({
             <p>One bot belongs to one campaign, with lead API and callback mapping owned in Mongo.</p>
           </div>
         </div>
-        <table>
+        <div className="table-scroll"><table>
           <thead>
             <tr><th>Campaign</th><th>Bot</th><th>Status</th><th>Strategy</th><th>Lead API</th><th>Actions</th></tr>
           </thead>
@@ -1496,7 +1824,7 @@ function CampaignsView({
               <tr><td colSpan={6}>No campaigns yet. Backend can create mappings through <code>POST /api/campaigns</code>.</td></tr>
             )}
           </tbody>
-        </table>
+        </table></div>
       </div>
       <div className="panel">
         <h2>Dispatch contract</h2>
@@ -1559,6 +1887,24 @@ function TestCallPanel({
   onToggleMic: () => void;
   onSendChat: (messageText: string) => void;
 }) {
+  const [botVersions, setBotVersions] = useState<BotVersion[]>([]);
+
+  useEffect(() => {
+    if (!selectedBot) { setBotVersions([]); return; }
+    api.bot(selectedBot._id)
+      .then((bundle) => {
+        const sorted = bundle.versions; // already sorted desc by version
+        setBotVersions(sorted);
+        // Auto-select active published version; fall back to latest draft
+        const active = sorted.find((v) => v._id === bundle.bot.active_version_id);
+        const defaultV = active || sorted.find((v) => v.state === 'draft') || sorted[0];
+        if (defaultV) {
+          setForm((prev) => ({ ...prev, test_bot_version_id: defaultV._id }));
+        }
+      })
+      .catch(() => setBotVersions([]));
+  }, [selectedBot?._id]);
+
   function updateField(key: keyof TestForm, value: string) {
     setForm((current) => ({ ...current, [key]: value }));
   }
@@ -1567,6 +1913,8 @@ function TestCallPanel({
   const effectiveWorker = form.test_worker_agent_name || defaultWorker;
   const agentState = deriveAgentState(status, remoteAudioReady, Boolean(roomName));
   const connected = Boolean(roomName) && status !== 'Idle' && !status.toLowerCase().includes('failed');
+
+  const selectedVersion = botVersions.find((v) => v._id === form.test_bot_version_id);
 
   return (
     <section className="test-grid">
@@ -1580,7 +1928,7 @@ function TestCallPanel({
         </div>
         <div className="test-context">
           <div>
-            <span>Dashboard agent</span>
+            <span>Agent</span>
             <select value={selectedBotId} onChange={(event) => onSelectBot(event.target.value)}>
               {bots.map((bot) => <option key={bot._id} value={bot._id}>{bot.name}</option>)}
             </select>
@@ -1588,9 +1936,32 @@ function TestCallPanel({
           </div>
           <ChevronRight size={18} />
           <div>
-            <span>LiveKit worker for this test</span>
+            <span>Version to test</span>
+            <select
+              value={form.test_bot_version_id}
+              onChange={(e) => updateField('test_bot_version_id', e.target.value)}
+              disabled={botVersions.length === 0}
+            >
+              {botVersions.length === 0 && <option value="">Loading…</option>}
+              {botVersions.map((v) => (
+                <option key={v._id} value={v._id}>
+                  v{v.version} — {v.state === 'published' ? '✓ Published' : '✏ Draft'}
+                </option>
+              ))}
+            </select>
+            <small>
+              {selectedVersion
+                ? selectedVersion.state === 'published'
+                  ? `Active published version`
+                  : `Draft — not yet live in production`
+                : 'No versions found'}
+            </small>
+          </div>
+          <ChevronRight size={18} />
+          <div>
+            <span>LiveKit worker</span>
             <strong>{effectiveWorker}</strong>
-            <small>Override here. No SSH or server restart needed.</small>
+            <small>Override below if needed.</small>
           </div>
         </div>
         <div className="form-grid">
@@ -1652,6 +2023,12 @@ function TestCallPanel({
         <h2>Connection checklist</h2>
         <ConnectionLine icon={<Database />} label="Backend room" value={roomName || 'Not created'} done={Boolean(roomName)} />
         <ConnectionLine icon={<Bot />} label="Dispatched worker" value={effectiveWorker} done={Boolean(effectiveWorker)} />
+        <ConnectionLine
+          icon={<Rocket />}
+          label="Bot version"
+          value={selectedVersion ? `v${selectedVersion.version} (${selectedVersion.state})` : '—'}
+          done={Boolean(selectedVersion)}
+        />
         <ConnectionLine icon={<Wifi />} label="LiveKit socket" value={status} done={!status.toLowerCase().includes('failed') && status !== 'Idle'} />
         <ConnectionLine icon={<Mic />} label="Microphone" value={status.includes('Microphone') || remoteAudioReady ? 'Requested' : 'Waiting'} done={status.includes('Microphone') || remoteAudioReady} />
         <ConnectionLine icon={<Volume2 />} label="Bot audio" value={remoteAudioReady ? 'Connected' : 'Waiting'} done={remoteAudioReady} />
@@ -1731,7 +2108,7 @@ function TranscriptsView({
           </div>
           <div className="search-box"><Search size={15} /><input value={searchText} onChange={(event) => onSearchText(event.target.value)} placeholder="Search call, lead, campaign or text" /></div>
         </div>
-        <table>
+        <div className="table-scroll"><table>
           <thead>
             <tr><th>Call</th><th>Lead</th><th>Status</th><th>Duration</th><th>Turns</th><th>Created</th></tr>
           </thead>
@@ -1748,7 +2125,7 @@ function TranscriptsView({
             ))}
             {!transcripts.length && <tr><td colSpan={6}>No transcripts found.</td></tr>}
           </tbody>
-        </table>
+        </table></div>
       </div>
       <div className="panel transcript-detail">
         <div className="conversation-header">
@@ -2261,7 +2638,7 @@ function PhraseEditor({
             <p>{rows.length} entries. Click a row to edit. Deleted entries stop matching new calls within a minute.</p>
           </div>
         </div>
-        <table>
+        <div className="table-scroll"><table>
           <thead>
             <tr><th>Phrase</th><th>Language</th><th>Notes</th><th>Updated</th><th /></tr>
           </thead>
@@ -2288,7 +2665,7 @@ function PhraseEditor({
                   <td>{formatDate(row.updated_at)}</td>
                   <td>
                     <div className="button-row">
-                      <button onClick={() => onStartEdit(row)}>Edit</button>
+                      <button onClick={() => onStartEdit(row)}><Pencil size={13} /> Edit</button>
                       <button className="fallback-button" onClick={() => onConfirmDelete(row)}><Trash2 size={14} /> Delete</button>
                     </div>
                   </td>
@@ -2297,7 +2674,7 @@ function PhraseEditor({
             ))}
             {!rows.length && <tr><td colSpan={5}>No phrases yet for this category. Add the first one above.</td></tr>}
           </tbody>
-        </table>
+        </table></div>
       </div>
     </>
   );
@@ -2352,7 +2729,7 @@ function OutcomeCatalog({
             <p>The longer and clearer the description, the better the AI gets at picking the right label.</p>
           </div>
         </div>
-        <table>
+        <div className="table-scroll"><table>
           <thead>
             <tr>
               <th style={{ width: 220 }}>Key</th>
@@ -2383,13 +2760,13 @@ function OutcomeCatalog({
                   <td><strong>{row.display_label || row.key}</strong></td>
                   <td><small>{row.description}</small></td>
                   <td>{formatDate(row.updated_at)}</td>
-                  <td><button onClick={() => startEditOutcome(row)}>Edit</button></td>
+                  <td><button onClick={() => startEditOutcome(row)}><Pencil size={13} /> Edit</button></td>
                 </tr>
               )
             ))}
             {!outcomes.length && <tr><td colSpan={5}>Outcome catalog is empty. The backend seeds defaults on next startup.</td></tr>}
           </tbody>
-        </table>
+        </table></div>
       </div>
     </>
   );
@@ -2469,7 +2846,7 @@ function LanguageSettingsCatalog({
             </div>
             <button onClick={startNew}><Plus size={16} /> New language</button>
           </div>
-          <table>
+          <div className="table-scroll"><table>
             <thead>
               <tr><th>ID</th><th>Display name</th><th>Updated</th></tr>
             </thead>
@@ -2487,7 +2864,7 @@ function LanguageSettingsCatalog({
               ))}
               {!settings.length && <tr><td colSpan={3}>No languages yet. Click "New language" to add the first.</td></tr>}
             </tbody>
-          </table>
+          </table></div>
         </div>
         <div className="panel">
           <div className="panel-header">
@@ -2544,8 +2921,7 @@ function LanguageSettingsCatalog({
               disabled={!draft.id.trim() || !draft.name.trim()}
             >
               <Save size={16} /> Save
-            </button>
-            {creating && <button onClick={cancelNew}>Cancel</button>}
+            </button>            {creating && <button onClick={cancelNew}>Cancel</button>}
           </div>
         </div>
       </div>
@@ -3087,13 +3463,24 @@ function AttemptSequenceEditor({
   );
 }
 
-function NavButton({ icon, label, active, onClick }: {
+function NavItem({ icon, label, active, onClick }: {
+
+// function NavButton({ icon, label, active, onClick }: {
   icon: React.ReactNode;
   label: string;
   active: boolean;
   onClick: () => void;
 }) {
-  return <button className={`nav-button ${active ? 'active' : ''}`} onClick={onClick}>{icon}<span>{label}</span></button>;
+  return (
+    <button className={`nav-item ${active ? 'active' : ''}`} onClick={onClick}>
+      {icon}<span>{label}</span>
+    </button>
+  );
+}
+
+// Keep backward-compat alias
+function NavButton(props: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
+  return <NavItem {...props} />;
 }
 
 function Detail({ label, value }: { label: string; value: string }) {

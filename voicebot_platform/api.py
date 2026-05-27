@@ -41,6 +41,8 @@ from .config_store import (
     rollback_bot,
     save_draft,
     search_transcripts,
+    update_bot_meta,
+    update_version,
     upsert_campaign,
 )
 from .livekit_sessions import LiveKitConfigError, close_webrtc_test_room, create_webrtc_test_room
@@ -80,6 +82,8 @@ from .schemas import (
     RuntimeSettingsUpdatePayload,
     SaveDraftPayload,
     TestSessionPayload,
+    UpdateBotMetaPayload,
+    UpdateVersionPayload,
     assert_object_id,
 )
 from .platform_settings import (
@@ -339,11 +343,42 @@ def bot_detail(bot_id: str):
     return doc
 
 
+@app.patch("/api/bots/{bot_id}")
+def update_bot(bot_id: str, payload: UpdateBotMetaPayload, x_jd_user: str | None = Header(default=None)):
+    _validate_bot_id(bot_id)
+    try:
+        return update_bot_meta(bot_id, payload.model_dump(exclude_none=True), current_user(x_jd_user))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/bots/{bot_id}/draft")
 def draft(bot_id: str, payload: SaveDraftPayload, x_jd_user: str | None = Header(default=None)):
     _validate_bot_id(bot_id)
     try:
         return save_draft(bot_id, payload.model_dump(exclude_none=True), current_user(x_jd_user))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/bots/{bot_id}/versions/{version_id}")
+def update_version_endpoint(
+    bot_id: str,
+    version_id: str,
+    payload: UpdateVersionPayload,
+    x_jd_user: str | None = Header(default=None),
+):
+    _validate_bot_id(bot_id)
+    try:
+        assert_object_id(version_id, "version_id")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        return update_version(bot_id, version_id, payload.model_dump(exclude_none=True), current_user(x_jd_user))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

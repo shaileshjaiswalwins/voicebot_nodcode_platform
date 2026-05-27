@@ -321,8 +321,15 @@ export const api = {
     request<Bot>('/api/bots', { method: 'POST', body: JSON.stringify(payload) }),
   deleteBot: (botId: string) =>
     request<{ status: string; bot_id: string }>(`/api/bots/${botId}`, { method: 'DELETE' }),
+  updateBotMeta: (botId: string, payload: { name?: string; description?: string }) =>
+    request<Bot>(`/api/bots/${botId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   saveDraft: (botId: string, payload: unknown) =>
     request<BotVersion>(`/api/bots/${botId}/draft`, { method: 'POST', body: JSON.stringify(payload) }),
+  updateVersion: (botId: string, versionId: string, payload: unknown) =>
+    request<BotVersion>(`/api/bots/${botId}/versions/${encodeURIComponent(versionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
   publish: (botId: string, versionId?: string) =>
     request<BotVersion>(`/api/bots/${botId}/publish`, {
       method: 'POST',

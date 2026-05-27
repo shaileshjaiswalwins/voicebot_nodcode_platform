@@ -59,7 +59,7 @@ from livekit.plugins import google
 from google.genai import types
 
 from voicebot_platform.call_events import record_call_event
-from voicebot_platform.config_store import fetch_active_bot_config
+from voicebot_platform.config_store import fetch_active_bot_config, fetch_bot_config_by_version
 from voicebot_platform.language_settings import get_language_settings
 from voicebot_platform.observability import recorder as _observability
 
@@ -558,13 +558,28 @@ _HARDCODED_BOT_CONFIG: dict = {
 }
 
 
-async def fetch_bot_config(assistant_id: str) -> dict | None:
-    """Fetch the active published bot config from MongoDB without blocking the event loop."""
+async def fetch_bot_config(assistant_id: str, *, version_id: str | None = None) -> dict | None:
+    """Fetch bot config from MongoDB without blocking the event loop.
+
+    When *version_id* is supplied (test-session override) the specific version
+    is loaded regardless of publish state, allowing draft versions to be tested.
+    Falls back to the active published version when no override is given.
+    """
     try:
         loop = asyncio.get_running_loop()
+        if version_id:
+            result = await loop.run_in_executor(
+                None, fetch_bot_config_by_version, assistant_id, version_id
+            )
+            if result:
+                return result
+            logger.warning(
+                f"[CONFIG] version override {version_id!r} not found for assistant_id={assistant_id!r}, "
+                "falling back to active version"
+            )
         return await loop.run_in_executor(None, fetch_active_bot_config, assistant_id)
     except Exception as e:
-        logger.warning(f"[CONFIG] active config lookup failed for assistant_id={assistant_id!r}: {e}")
+        logger.warning(f"[CONFIG] config lookup failed for assistant_id={assistant_id!r}: {e}")
         return None
 
 
@@ -1180,8 +1195,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # 2. Resolve bot config and settings
     _assistant_id = _room_meta_raw.get("assistant_id", "")
-    _bc = await fetch_bot_config(_assistant_id) if _assistant_id else None
+    _test_version_id = _room_meta_raw.get("test_bot_version_id", "") if _room_meta_raw.get("test_session") else ""
     _config_source = "mongo_active_version"
+    if _test_version_id:
+        _config_source = f"mongo_version_override:{_test_version_id}"
+    _bc = await fetch_bot_config(_assistant_id, version_id=_test_version_id or None) if _assistant_id else None
     if not _bc:
         _config_source = "hardcoded_fallback" if _assistant_id else "no_assistant_id"
         _log.error(

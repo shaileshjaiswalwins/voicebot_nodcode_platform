@@ -147,6 +147,18 @@ class SaveDraftPayload(BaseModel):
     notes: str | None = Field(default=None, max_length=2000)
 
 
+class UpdateVersionPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    config: RuntimeConfigModel
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class UpdateBotMetaPayload(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+
+
 class PublishPayload(BaseModel):
     version_id: str | None = None
 
@@ -253,6 +265,9 @@ class TestSessionPayload(BaseModel):
     buyer_name: str | None = Field(default=None, max_length=200)
     city: str | None = Field(default=None, max_length=200)
     test_worker_agent_name: str | None = Field(default=None, max_length=80)
+    # Optional: pin test to a specific bot version (any state — draft or published).
+    # When absent the worker uses the bot's current active (published) version.
+    test_bot_version_id: str | None = Field(default=None, max_length=24)
 
     @field_validator("test_worker_agent_name")
     @classmethod
