@@ -1911,13 +1911,28 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _log.info(f"[STT] skipped — speech_ms={speech_ms:.0f} < min={_sarvam_min_speech_ms}")
             return None
         wav_path = _wav_paths[0]
-        if not Path(wav_path).exists():
-            return None
-        try:
-            with open(wav_path, "rb") as f:
-                wav_data = f.read()
-        except Exception as e:
-            _log.warning(f"[STT] WAV read error: {e}")
+        wav_data: bytes | None = None
+        if Path(wav_path).exists():
+            try:
+                with open(wav_path, "rb") as f:
+                    wav_data = f.read()
+            except Exception as e:
+                _log.warning(f"[STT] WAV read error: {e}")
+        if not wav_data and _current_window_pcm:
+            # WAV file was deleted (buffer_frozen at disconnect) but in-memory PCM
+            # still has the audio — wrap it in a WAV container and use that.
+            _log.info(
+                f"[STT] WAV file gone — using in-memory PCM "
+                f"({len(_current_window_pcm)} bytes, speech_ms={speech_ms:.0f})"
+            )
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(bytes(_current_window_pcm))
+            wav_data = buf.getvalue()
+        if not wav_data:
             return None
         # Silero VAD gate — applies to both Soniox and Sarvam paths.
         try:

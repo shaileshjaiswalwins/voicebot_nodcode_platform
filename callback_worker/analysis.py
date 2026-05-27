@@ -37,9 +37,12 @@ _BARE_CALL_SIGNAL_TOKENS: frozenset = frozenset(
         "kaun", "कौन", "kaun hai", "कौन है",
         # common call-acknowledgement fillers (achha / theek / sahi)
         "acha", "achha", "accha", "achcha",
+        "अच्छा", "अच्छे",               # Devanagari achha — GP-4 listed, was missing
         "theek", "thik",
+        "ठीक", "ठीक है", "ठीक है जी",  # Devanagari theek — was missing
         "haan ji", "ji haan",
-        "sahi",
+        "जी", "जी हाँ", "हाँ जी", "जी हां", "हां जी",  # Devanagari ji variants
+        "sahi", "सही",                  # Devanagari sahi
     }
     for word in phrase.split()
     if word.strip()
@@ -276,6 +279,29 @@ async def generate_call_analysis(
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
 
+    # Pre-LLM: detect agent's not-interested closing phrase.
+    # The bot emits "कोई बात नहीं जी, future में ज़रूरत हो तो Justdial पे call कर सकते हैं"
+    # ONLY when the buyer explicitly rejected the product. This is a hard structural signal —
+    # the agent would not say this if the buyer had shown any interest.
+    _NI_AGENT_MARKERS = [
+        "कोई बात नहीं",
+        "future में ज़रूरत",
+        "future mein zaroorat",
+        "justdial पे call",
+        "justdial pe call",
+        "ज़रूरत हो तो",
+        "zaroorat ho toh",
+    ]
+    _last_agent_text = (_agent_turns_with_text[-1].get("text") or "").lower() if _agent_turns_with_text else ""
+    if any(m.lower() in _last_agent_text for m in _NI_AGENT_MARKERS):
+        return {
+            "call_outcome": "Not Interested",
+            "call_outcome_description": DISPOSITION_MAP["Not Interested"],
+            "call_summary": "Agent responded with not-interested closing — buyer did not confirm the product requirement.",
+            "is_business": "", "business_city": "", "business_name": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
+
     # All user turns contain only bare call-presence signals (hello, haan bolo, achha, etc.)
     # and the agent never progressed past the greeting → Short Hangup.
     # `not _agent_progressed` ensures we never short-circuit when the bot actually asked
@@ -369,9 +395,14 @@ async def generate_call_analysis(
         len(tok) >= 2 and not re.match(r"^(.)\1+$", tok)
         for tok in _first_user_tokens
     )
-    _first_turn_is_confirmation = (
-        (_agent_progressed and _first_user_has_real_word)
-        or bool(_first_user_tokens & _CONFIRMATION_TOKENS)
+    # Require ≥2 meaningful tokens for implicit confirmation (prevents a single ambiguous word
+    # like "यह" from firing the PRODUCT CONFIRMED note when agent progressed past greeting).
+    # Explicit confirmation tokens (हाँ, yes, bilkul, etc.) still work with just 1 token.
+    _first_user_meaningful_count = sum(
+        1 for t in _first_user_tokens if len(t) >= 2 and not re.match(r"^(.)\1+$", t)
+    )
+    _first_turn_is_confirmation = bool(_first_user_tokens & _CONFIRMATION_TOKENS) or (
+        _agent_progressed and _first_user_has_real_word and _first_user_meaningful_count >= 2
     )
     _product_confirmed_note = (
         f"\n⚠ PRODUCT CONFIRMED: The agent asked specification questions (progressed past "
@@ -409,6 +440,12 @@ READING THE AGENT'S QUESTION SEQUENCE:
 • Agent asked Q2 or beyond (progressed past Q1) → buyer confirmed the product AND answered at least Q1 → minimum "Enriched"
 • Agent said the closing line ("सारी details मिल गईं" / "relevant sellers आपसे contact करेंगे") → ALL questions were answered → "Approved"
 • Agent asked business name or city → buyer confirmed product AND answered ALL spec questions
+
+MUTED-WINDOW RESPONSES DURING THE OPENING GREETING (agent said only one turn):
+When the muted transcript captures content during the agent's OPENING GREETING only (no Q1 asked):
+• Bare acknowledgement (ठीक है, हाँ, ok, जी) → buyer answered the phone but gave no product signal → "Short Hangup"
+• Ambiguous or off-topic (e.g., "नहीं अभी भी आ रही है", "क्या बात है", fragment sentences) → buyer spoke but product confirmation was NOT obtained → "Could Not Confirm"
+• Only classify as Interested if the muted content EXPLICITLY states the product need (e.g., "हाँ, Nut Bolt चाहिए", "yes I need it")
 
 SPECIAL AGENT PHRASES TO DETECT:
 • "कोई response नहीं आया, इसलिए मैं call समाप्त कर रही हूँ" → inactivity timeout, buyer was truly silent → "Short Hangup"
