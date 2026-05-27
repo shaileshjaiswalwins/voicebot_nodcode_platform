@@ -2542,6 +2542,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _speaking_unmute_task = asyncio.create_task(_greeting_early_unmute())
 
         elif state_str in ("listening", "idle"):
+            # Bot finished speaking — cancel watchdog if it was started by a FINAL
+            # that arrived while the bot was already responding to the partial.
+            if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
+                _bot_resp_watchdog_task.cancel()
+                _bot_resp_watchdog_task = None
             if _bot_has_spoken and not _greeting_done:
                 _greeting_done = True
                 _log.info(
