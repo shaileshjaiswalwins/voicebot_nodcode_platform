@@ -2430,29 +2430,19 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _live_transcript[-1] = _user_entry
             else:
                 _live_transcript.append(_user_entry)
-            # If Gemini already started speaking in response to the PARTIAL (barge-in
-            # micro-ack like 'अच्छा जी,'), immediately re-inject the FINAL with
-            # turn_complete=True so Gemini generates the full reply without waiting
-            # for the 8-second watchdog.
+            # Start watchdog: if Gemini doesn't begin speaking within 8 s, re-inject.
+            # When the FINAL arrives while the bot is already speaking (barge-in path),
+            # do NOT inject immediately — that causes Gemini to queue a second generation
+            # on top of the already-in-flight partial response, producing two consecutive
+            # bot turns for a single user utterance.  Instead the speaking→listening
+            # handler below restarts this watchdog with a 1 s window once the current
+            # speaking turn ends, but only when the turn was short (micro-ack); a long
+            # turn means Gemini already gave a full answer and no re-inject is needed.
             nonlocal _bot_resp_watchdog_task, _last_user_final_text, _last_user_final_turn
             _last_user_final_text = transcript_text
             _last_user_final_turn = _turn_counter
             if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
                 _bot_resp_watchdog_task.cancel()
-            if _agent_state_now == "speaking" and _rt is not None and getattr(_rt, "_active_session", None) is not None:
-                async def _inject_final_now(text: str, turn: int) -> None:
-                    try:
-                        _rt._send_client_event(
-                            types.LiveClientContent(
-                                turns=[types.Content(parts=[types.Part(text=text)], role="user")],
-                                turn_complete=True,
-                            )
-                        )
-                        _log.info(f"[FINAL-INJECT] re-injected FINAL immediately (agent was speaking): {text!r} (turn={turn})")
-                    except Exception as e:
-                        _log.warning(f"[FINAL-INJECT] inject failed: {e}")
-                asyncio.create_task(_inject_final_now(transcript_text, _turn_counter))
-            # Always keep watchdog as safety net (shorter timeout since we may have injected)
             _bot_resp_watchdog_task = asyncio.create_task(
                 _bot_response_watchdog(transcript_text, _turn_counter)
             )
@@ -2491,12 +2481,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _bot_resp_watchdog_task: asyncio.Task | None = None  # cancelled when bot starts speaking
     _last_user_final_text: str = ""      # text of the most recent user FINAL turn
     _last_user_final_turn: int = 0       # _turn_counter value when watchdog was started
+    _speaking_start_time: float = 0.0   # monotonic time when current speaking turn began
 
-    async def _bot_response_watchdog(user_text: str, turn: int) -> None:
-        """Re-inject the user's last turn if Gemini doesn't start speaking within 8 s.
+    async def _bot_response_watchdog(user_text: str, turn: int, timeout: float = 8.0) -> None:
+        """Re-inject the user's last turn if Gemini doesn't start speaking within `timeout` s.
         Handles silent Gemini failures where the model transcribed audio but produced
         no output — observed as 12+ second silences before user disconnects."""
-        await asyncio.sleep(8.0)
+        await asyncio.sleep(timeout)
         if _call_ended or _closing_triggered or _last_user_final_turn != turn:
             return
         if _rt is None or getattr(_rt, "_active_session", None) is None:
@@ -2528,7 +2519,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _barge_in_fired, _bot_resp_watchdog_task
+        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _barge_in_fired, _bot_resp_watchdog_task, _speaking_start_time
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
@@ -2542,6 +2533,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if state_str == "speaking":
             _bot_has_spoken = True
             _barge_in_fired = False  # reset at start of each bot turn
+            _speaking_start_time = asyncio.get_event_loop().time()
             _cancel_inactivity()
             # Gemini started speaking — cancel the response watchdog.
             if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
@@ -2594,11 +2586,24 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _speaking_unmute_task = asyncio.create_task(_greeting_early_unmute())
 
         elif state_str in ("listening", "idle"):
-            # Bot finished speaking — cancel watchdog if it was started by a FINAL
-            # that arrived while the bot was already responding to the partial.
+            # Bot finished speaking — cancel the long watchdog.  If a FINAL is still
+            # pending (arrived while the bot was mid-response to a partial), decide
+            # whether to re-inject based on how long the bot spoke:
+            #   • Short turn (< 3 s) → micro-ack (e.g. 'अच्छा जी') — Gemini didn't
+            #     give a full answer; restart watchdog with 1 s so Gemini gets the
+            #     FINAL quickly.
+            #   • Long turn (≥ 3 s) → Gemini already gave a complete response to the
+            #     partial; do NOT re-inject or we produce a duplicate bot turn.
+            speaking_duration = asyncio.get_event_loop().time() - _speaking_start_time
             if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
                 _bot_resp_watchdog_task.cancel()
                 _bot_resp_watchdog_task = None
+            if (not _call_ended and not _closing_triggered
+                    and _last_user_final_text
+                    and speaking_duration < 3.0):
+                _bot_resp_watchdog_task = asyncio.create_task(
+                    _bot_response_watchdog(_last_user_final_text, _last_user_final_turn, timeout=1.0)
+                )
             if _bot_has_spoken and not _greeting_done:
                 _greeting_done = True
                 _log.info(
