@@ -179,7 +179,23 @@ async def generate_call_analysis(
     # turn instead of the product greeting, agent progression is unreliable — the bot may
     # have advanced on ambient noise or background conversation, not product confirmation.
     _first_agent_text_lower = (_agent_turns_with_text[0].get("text") or "").lower() if _agent_turns_with_text else ""
-    _wrong_opener = wrong_opener_detected or any(p.lower() in _first_agent_text_lower for p in _WRONG_OPENER_PHRASES)
+    # Also detect a truncated greeting: agent started with "हेलो…" but the TTS was cut
+    # before the product question ("requirement है ना?" / "चाहिए?" / "चाहिए थे?").
+    # In that case the user's "हाँ/जी" was a response to an incomplete utterance, NOT to
+    # the product question — agent progression cannot be used to infer product confirmation.
+    _greeting_start = any(
+        _first_agent_text_lower.startswith(p)
+        for p in ("हेलो", "hello", "helo", "नमस्ते", "namaste")
+    )
+    _greeting_has_product_q = any(
+        kw in _first_agent_text_lower
+        for kw in ("requirement", "है ना", "चाहिए", "chahiye", "zaroorat")
+    )
+    _truncated_greeting = _greeting_start and not _greeting_has_product_q
+    _wrong_opener = (
+        wrong_opener_detected
+        or any(p.lower() in _first_agent_text_lower for p in _WRONG_OPENER_PHRASES)
+    )
     # Check whether any user-side signal exists at all (live transcript OR muted capture).
     _has_any_user_signal = bool(non_empty_user_turns) or bool(
         muted_transcript and any((m or "").strip() for m in muted_transcript)
@@ -355,16 +371,27 @@ async def generate_call_analysis(
         }
 
     # Transfer-to-someone-else: receptionist/assistant answered and offered to connect
-    # to the actual decision maker. No product confirmation possible → Could Not Confirm.
+    # to the actual decision maker, OR user handed the phone to another person mid-call.
+    # No product confirmation possible → Could Not Confirm.
     _TRANSFER_PATTERNS = [
         r"\bgive you to\b", r"\bconnect you to\b", r"\btransfer to\b",
         r"\bput you through\b", r"\bput you on to\b", r"\bpass you to\b",
         r"\bput you to\b", r"\bhand you to\b",
+        # Hindi: "भाई/boss/sir से बात करा/करवा" patterns
+        r"भाई\s+से\s+बात\s+करा", r"bhai\s+se\s+baat\s+kara",
+        r"भाई\s+को\s+दे", r"bhai\s+ko\s+de",
+        r"boss\s+से\s+बात", r"boss\s+ko\s+de",
+        r"sir\s+से\s+बात\s+करा", r"sir\s+ko\s+de",
+        r"sahab\s+se\s+baat", r"साहब\s+से\s+बात",
+        r"brother\s+se\s+baat", r"bhai\s+se\s+baat",
     ]
-    if non_empty_user_turns and all(
+    # A turn counts as a "handoff" if it contains a transfer pattern anywhere in it —
+    # even if it also contains a number that looks like a spec (e.g. "भाई साहब, 1200").
+    _has_handoff_turn = any(
         any(re.search(p, (t.get("text") or "").lower()) for p in _TRANSFER_PATTERNS)
         for t in non_empty_user_turns
-    ):
+    )
+    if _has_handoff_turn:
         return {
             "call_outcome": "Could Not Confirm",
             "call_outcome_description": DISPOSITION_MAP["Could Not Confirm"],
@@ -522,6 +549,7 @@ async def generate_call_analysis(
         f"Classify as Interested (zero valid specs), Enriched (1+ valid specs), or Approved."
         if _first_turn_is_confirmation
         and not _wrong_opener
+        and not _truncated_greeting   # buyer never heard the product question
         and not _agent_reask_opening
         and not _first_turn_has_explicit_no
         and not _user_asks_for_agent
@@ -561,6 +589,19 @@ async def generate_call_analysis(
         "buyer's actual words. If the buyer's turns are background conversation with no "
         "product signal → Could Not Confirm."
         if _wrong_opener else ""
+    )
+    # Truncated greeting: TTS was cut before the product question was delivered.
+    # The buyer never heard the product question, so any हाँ/जी is just a phone-answer
+    # reflex, NOT product confirmation. Agent progression is meaningless here.
+    # Outcome must be Short Hangup (no product topic was ever raised).
+    _truncated_greeting_note = (
+        "\n🚨 TRUNCATED GREETING: The agent's first turn started the greeting but was "
+        "cut off before stating the product or asking the product question "
+        "(it ended with 'आपको' or similar incomplete phrase). The buyer NEVER heard "
+        "what product was being asked about. Any हाँ / जी / yes from the buyer is purely "
+        "a phone-answering reflex, NOT product confirmation. GP-7 does NOT apply. "
+        "All subsequent background chatter is ambient noise. → Short Hangup."
+        if _truncated_greeting else ""
     )
 
     _user_sparse = not non_empty_user_turns or len(non_empty_user_turns) <= 1
@@ -618,10 +659,14 @@ QnA EXTRACTION when buyer turns are absent:
             _duration_note = (
                 f"\n⚠ SHORT CALL ({_dur_label}): This call lasted under 20 seconds. "
                 f"A call this short rarely produces genuine product engagement. "
-                f"If the buyer's only signal is a bare acknowledgement (हाँ / ji / yes / ok) "
-                f"with no product-specific statement, prefer Short Hangup over Interested. "
+                f"If the buyer's signal is unclear, garbled, off-topic, or just a bare "
+                f"acknowledgement (हाँ / ji / yes / ok) with no product-specific statement, "
+                f"prefer Short Hangup over BOTH Interested AND Could Not Confirm. "
                 f"Only classify as Interested if the buyer gave a clear, product-specific "
-                f"confirmation beyond a single-word acknowledgement."
+                f"confirmation beyond a single-word acknowledgement. "
+                f"Only classify as Could Not Confirm if there is a clear reason the "
+                f"confirmation couldn't happen (hold, handoff, IVR). Garbled or off-topic "
+                f"audio alone is Short Hangup, not Could Not Confirm."
             )
         elif duration_secs < 25:
             _duration_note = (
@@ -631,7 +676,7 @@ QnA EXTRACTION when buyer turns are absent:
         else:
             _duration_note = f"\n📞 CALL DURATION: {_dur_label}."
 
-    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_wrong_opener_note}{_phantom_connect_note}{_reask_opening_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}
+    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_wrong_opener_note}{_truncated_greeting_note}{_phantom_connect_note}{_reask_opening_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}
 
 Current date/time (IST, GMT+5:30): {current_dt_str}
 
@@ -1191,6 +1236,41 @@ STRICT OUTPUT RULES:
                         logger.info(
                             f"[POST-PROC] Interested → Short Hangup: duration={duration_secs:.0f}s < 20s, "
                             f"user signal is bare acknowledgement only: {_all_user_words}"
+                        )
+                        outcome = "Short Hangup"
+                        result["call_outcome"] = outcome
+                        result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+                        result["qna"] = []
+
+                # 6. Short-call Could Not Confirm → Short Hangup when user speech is
+                #    off-topic / garbled / contains no product signal.
+                #    "Could Not Confirm" requires a clear reason (hold, handoff, IVR).
+                #    Background noise captured as STT text is NOT a reason — it's Short Hangup.
+                if (
+                    outcome == "Could Not Confirm"
+                    and duration_secs is not None
+                    and duration_secs < 20
+                    and not _has_handoff_turn         # handoff is a valid CNC reason
+                ):
+                    # Collect all user-side words
+                    _cnc_user_words: set[str] = set()
+                    for _t in transcript:
+                        if _t.get("role") == "user":
+                            for _w in (_t.get("text") or "").split():
+                                _c = _strip_punct(_w)
+                                if _c:
+                                    _cnc_user_words.add(_c)
+                    # Words that indicate a legitimate CNC (hold, transfer, IVR prompts)
+                    _CNC_SIGNALS = {
+                        "hold", "wait", "ruko", "रुको", "minute", "मिनट", "second", "सेकंड",
+                        "bhai", "भाई", "boss", "sir", "साहब", "transfer", "connect",
+                    }
+                    _nfc_cnc = {unicodedata.normalize("NFC", w) for w in _CNC_SIGNALS}
+                    if not (_cnc_user_words & _nfc_cnc):
+                        logger.info(
+                            f"[POST-PROC] Could Not Confirm → Short Hangup: "
+                            f"dur={duration_secs:.0f}s < 20s, no valid CNC signal in user words: "
+                            f"{_cnc_user_words}"
                         )
                         outcome = "Short Hangup"
                         result["call_outcome"] = outcome
