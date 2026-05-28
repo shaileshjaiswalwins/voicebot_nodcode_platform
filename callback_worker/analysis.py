@@ -495,6 +495,26 @@ async def generate_call_analysis(
     # even if the agent mistakenly proceeded to spec questions (bot error), the buyer
     # rejection is the authoritative signal.
     _first_turn_has_explicit_no = "नहीं" in unicodedata.normalize("NFC", _first_user_text)
+
+    # Detect "connect me to [agent]" pattern across ALL user turns.
+    # A buyer asking to be connected to the bot by name proves they don't realise they're
+    # already talking to it — any earlier हाँ/जी was a phone-pickup reflex, not product
+    # confirmation. Covers phrases like "Simran से बात करवाईए".
+    _CONNECT_TO_AGENT_PATTERNS = [
+        "से बात करवाईए", "से बात करा दो", "से बात करा दीजिए", "से बात करवा दो",
+        "se baat karwaiye", "se baat kara do", "se baat kara dijiye", "se baat karwa do",
+        "से connect करवाईए", "se connect karwaiye",
+        "से बात करो", "se baat karo",
+        "से बात करना है", "se baat karni hai",
+    ]
+    _user_asks_for_agent = any(
+        any(
+            unicodedata.normalize("NFC", p) in unicodedata.normalize("NFC", (t.get("text") or "").lower())
+            for p in _CONNECT_TO_AGENT_PATTERNS
+        )
+        for t in non_empty_user_turns
+    )
+
     _product_confirmed_note = (
         f"\n⚠ PRODUCT CONFIRMED: The agent asked specification questions (progressed past "
         f"the greeting), which means the buyer confirmed the product. Do NOT classify as "
@@ -504,7 +524,33 @@ async def generate_call_analysis(
         and not _wrong_opener
         and not _agent_reask_opening
         and not _first_turn_has_explicit_no
+        and not _user_asks_for_agent
         else ""
+    )
+    # Phantom signal: user asked to be connected to the agent they are already talking to.
+    # Any earlier confirmation token was a phone-pickup reflex, not product engagement.
+    _phantom_connect_note = (
+        "\n⚠ PHANTOM ENGAGEMENT — USER ASKED TO BE CONNECTED TO THE AGENT: "
+        "A buyer turn contains a phrase asking to speak to or be connected to the agent "
+        "(e.g. 'Simran से बात करवाईए'). This proves the user did not realise they were "
+        "already talking to the bot — any earlier 'हाँ/जी/yes' was a phone-pickup reflex, "
+        "NOT a product confirmation. GP-7 Case E applies. "
+        "Evaluate as Could Not Confirm or Short Hangup."
+        if _user_asks_for_agent else ""
+    )
+    # When the agent re-asked the opening product question the bot itself rejected the
+    # first response as insufficient. If the post-reask user turn is ALSO off-topic or
+    # background noise, the bot may have advanced a second time on a misread — GP-7
+    # Case A applies and structural progression alone does not prove product confirmation.
+    _reask_opening_note = (
+        "\n⚠ AGENT RE-ASKED THE OPENING QUESTION: The agent's second turn re-asked the "
+        "product confirmation question, meaning the bot did NOT accept the first user "
+        "response as a valid product confirmation. If the second user response is also "
+        "off-topic, ambiguous, or background noise (e.g. talking to someone nearby, "
+        "side conversation, generic filler), GP-7 Case A applies — the bot may have "
+        "advanced incorrectly a second time. Do NOT rely on agent progression alone as "
+        "structural proof of product_confirmed = TRUE. Evaluate from the buyer's actual words."
+        if _agent_reask_opening else ""
     )
     _wrong_opener_note = (
         "\n🚨 GREETING FAILURE: The agent's first turn was a connection probe "
@@ -585,7 +631,7 @@ QnA EXTRACTION when buyer turns are absent:
         else:
             _duration_note = f"\n📞 CALL DURATION: {_dur_label}."
 
-    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_wrong_opener_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}
+    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_wrong_opener_note}{_phantom_connect_note}{_reask_opening_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}
 
 Current date/time (IST, GMT+5:30): {current_dt_str}
 
