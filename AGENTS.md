@@ -125,6 +125,18 @@ Safe server deploy to the staging checkout:
 ./ops/deploy_safe_server.sh
 ```
 
+Verify the staging API is healthy after a deploy:
+
+```bash
+./ops/verify_staging.sh
+```
+
+Audit call quality end-to-end (transcript, events, analysis, recording):
+
+```bash
+./ops/audit_call.sh <call_id>
+```
+
 ## Server Safety Rules
 
 There are live voicebot processes on the same server as the safe dashboard
