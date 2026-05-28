@@ -594,8 +594,11 @@ HINDI_LANG_CONFIG = {
         "STYLE: Natural spoken Hinglish — how a real person talks on a call. Conversational, warm, never formal or literary.\n"
         "  Good: 'हाँ जी', 'अच्छा', 'ठीक है', 'samajh gaya', 'okay jee'\n"
         "  Avoid: 'आपकी बात सुनकर खुशी हुई', 'मैं आपकी सहायता के लिए यहाँ हूँ'\n\n"
-        "FILLERS — sprinkle naturally, don't force them:\n"
-        "अच्छा, हाँ, जी, तो, ठीक है — use when they fit the moment. Vary them. Don't start every response the same way.\n\n"
+        "FILLERS — STRICT RULE:\n"
+        "You MAY start a response with a filler word (अच्छा, हाँ, जी, तो, ठीक है) BUT you MUST continue immediately into your answer in the SAME sentence — NEVER end your turn on a filler alone.\n"
+        "✓ CORRECT:  'जी, कितनी quantity चाहिए?'\n"
+        "✗ WRONG:    'जी.' [stop] ... [pause] ... 'कितनी quantity चाहिए?'\n"
+        "The filler and the question must be ONE continuous utterance with no pause between them. Vary fillers; don't start every response with 'अच्छा'.\n\n"
         "TTS: Write 'डेढ़ ton' not '1.5 ton'. Write 'ढाई ton' not '2.5 ton'.\n\n"
         "NEVER use these overly formal words:\n"
         "शयनकक्ष, बैठक कक्ष, कार्यालय, स्थापित, आवश्यकता, पर्याप्त, उपयुक्त, उचित, सूचित, प्राप्त, विवरण, अनुसार, सुविधाजनक"
@@ -2336,6 +2339,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 f"agent_state={_agent_state_now} mic={_mic_enabled} "
                 f"speech_ms={speech_ms_now:.0f}"
             )
+            if _call_ended:
+                return
+            _early_inject_done = False  # reset for next turn
             _had_partial = bool(_pending_user_text)
             _pending_user_text = ""
             # Gemini confirmed this turn — rotate WAV segment so next turn starts fresh
@@ -2471,6 +2477,41 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             else:
                 _live_transcript.append({"role": "user", "text": transcript_text})
 
+            # Early-inject: for short monosyllabic responses (जी, हाँ, ना, ok…)
+            # PARTIAL == FINAL 100% of the time. Inject now so Gemini has a
+            # 400-600 ms head start on generating the real answer before the
+            # actual FINAL arrives, eliminating the post-filler thinking gap.
+            # Guards:
+            #   1. speech_ms >= 150 — filters sub-100ms noise glitches; slow/soft
+            #      speech still accumulates ≥150ms before Gemini fires PARTIAL
+            #   2. agent in "listening" — barge-in path uses FINAL-INJECT instead
+            nonlocal _early_inject_done
+            _speech_ms_now = _user_audio["speech_ms"]
+            if (
+                not _early_inject_done
+                and not _call_ended
+                and _greeting_done
+                and _agent_state_now == "listening"
+                and _speech_ms_now >= 150
+            ):
+                _tokens = set(_normalize_stt_tokens(transcript_text))
+                if _tokens and _tokens <= _SHORT_TERMINAL_TOKENS:
+                    if _rt is not None and getattr(_rt, "_active_session", None) is not None:
+                        try:
+                            _rt._send_client_event(
+                                types.LiveClientContent(
+                                    turns=[types.Content(parts=[types.Part(text=transcript_text)], role="user")],
+                                    turn_complete=True,
+                                )
+                            )
+                            _early_inject_done = True
+                            _log.info(
+                                f"[EARLY-INJECT] Short terminal PARTIAL → Gemini: {transcript_text!r} "
+                                f"(speech_ms={_speech_ms_now:.0f})"
+                            )
+                        except Exception as _ei_exc:
+                            _log.warning(f"[EARLY-INJECT] failed: {_ei_exc}")
+
     _greeting_done = False
     _bot_has_spoken = False  # True once the agent first transitions to "speaking"
     _greeting_retry_triggered = False
@@ -2482,6 +2523,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _last_user_final_text: str = ""      # text of the most recent user FINAL turn
     _last_user_final_turn: int = 0       # _turn_counter value when watchdog was started
     _speaking_start_time: float = 0.0   # monotonic time when current speaking turn began
+    _early_inject_done: bool = False     # True if this PARTIAL was already early-injected
+
+    # Short terminal tokens: PARTIAL == FINAL for these 100% of the time.
+    # Safe to treat the PARTIAL as FINAL and inject early so Gemini gets
+    # a 400-600 ms head start on generating the real answer.
+    _SHORT_TERMINAL_TOKENS: frozenset = frozenset(unicodedata.normalize("NFC", w) for w in {
+        "जी", "हाँ", "हां", "हा", "ना", "नहीं", "नहि",
+        "yes", "no", "ok", "okay", "हाँजी", "हांजी",
+        "ठीक", "बिल्कुल", "सही", "sure", "bilkul",
+    })
 
     async def _bot_response_watchdog(user_text: str, turn: int, timeout: float = 8.0) -> None:
         """Re-inject the user's last turn if Gemini doesn't start speaking within `timeout` s.
@@ -2531,6 +2582,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         )
 
         if state_str == "speaking":
+            if _call_ended:
+                return
             _bot_has_spoken = True
             _barge_in_fired = False  # reset at start of each bot turn
             _speaking_start_time = asyncio.get_event_loop().time()
@@ -2647,6 +2700,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             "हेलो", "hello", "हैलो", "hi", "हाय",
                             "haan", "ha", "han", "ji", "jee", "okay", "ok",
                             "हाँ", "हां", "बोलो", "bol", "bolo",
+                            "बोला", "bola",  # past-tense "spoke" — reflexive phone-pickup, not a yes
                         })
                         if _inject_tokens and not (_inject_tokens - _BARE_GREETING_TOKENS):
                             _log.info(
@@ -2665,6 +2719,31 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                                     turn_complete=True,
                                 )
                             )
+                            # Watchdog: if Gemini doesn't start speaking within 5 s, re-inject.
+                            # Handles silent Gemini failures after muted-capture injection.
+                            _injected_text = text
+                            async def _post_greeting_watchdog() -> None:
+                                await asyncio.sleep(5.0)
+                                if _call_ended or _closing_triggered or _turn_counter > 0:
+                                    return
+                                _s = session.agent_state
+                                _s_val = _s.value if hasattr(_s, "value") else str(_s)
+                                if _s_val == "speaking":
+                                    return
+                                _log.warning(
+                                    f"[GEMINI-WATCHDOG] post-greeting inject no response in 5s "
+                                    f"— re-injecting {_injected_text!r}"
+                                )
+                                try:
+                                    _rt._send_client_event(
+                                        types.LiveClientContent(
+                                            turns=[types.Content(parts=[types.Part(text=_injected_text)], role="user")],
+                                            turn_complete=True,
+                                        )
+                                    )
+                                except Exception as _ex:
+                                    _log.warning(f"[GEMINI-WATCHDOG] post-greeting re-inject failed: {_ex}")
+                            asyncio.create_task(_post_greeting_watchdog())
                         except Exception as e:
                             _log.warning(f"[MUTED-CAPTURE] post-greeting inject failed: {e}")
                     asyncio.create_task(_post_greeting_inject())
