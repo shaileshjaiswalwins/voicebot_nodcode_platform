@@ -2564,15 +2564,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         _set_mic(True, reason="4s-speaking-unmute")
                 _speaking_unmute_task = asyncio.create_task(_delayed_unmute())
             elif not _greeting_done and not _closing_triggered:
-                # Greeting turn early unmute: re-enable Gemini audio input at 3 s so
+                # Greeting turn early unmute: re-enable Gemini audio input at 4 s so
                 # it is already processing the stream when the greeting finishes.
-                # 3 s (was 5 s) — greetings can be as short as ~4.5 s; at 5 s the timer
-                # fired after the greeting ended for short greetings, leaving Gemini with
-                # zero warm-up time and silently dropping the first user turn.
+                # 4 s (was 3 s, before that 5 s) — greetings can be as short as ~4.5 s;
+                # at 5 s the timer fired after the greeting ended for short greetings,
+                # leaving Gemini with zero warm-up time and silently dropping the first user turn.
                 async def _greeting_early_unmute() -> None:
-                    await asyncio.sleep(3.0)
+                    await asyncio.sleep(4.0)
                     if not _greeting_done and not _call_ended:
-                        _set_mic(True, reason="greeting-3s-early-unmute")
+                        _set_mic(True, reason="greeting-4s-early-unmute")
                 _speaking_unmute_task = asyncio.create_task(_greeting_early_unmute())
 
         elif state_str in ("listening", "idle"):
