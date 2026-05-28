@@ -2430,12 +2430,29 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _live_transcript[-1] = _user_entry
             else:
                 _live_transcript.append(_user_entry)
-            # Start watchdog: if Gemini doesn't begin speaking within 8 s, re-inject.
+            # If Gemini already started speaking in response to the PARTIAL (barge-in
+            # micro-ack like 'अच्छा जी,'), immediately re-inject the FINAL with
+            # turn_complete=True so Gemini generates the full reply without waiting
+            # for the 8-second watchdog.
             nonlocal _bot_resp_watchdog_task, _last_user_final_text, _last_user_final_turn
             _last_user_final_text = transcript_text
             _last_user_final_turn = _turn_counter
             if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
                 _bot_resp_watchdog_task.cancel()
+            if _agent_state_now == "speaking" and _rt is not None and getattr(_rt, "_active_session", None) is not None:
+                async def _inject_final_now(text: str, turn: int) -> None:
+                    try:
+                        _rt._send_client_event(
+                            types.LiveClientContent(
+                                turns=[types.Content(parts=[types.Part(text=text)], role="user")],
+                                turn_complete=True,
+                            )
+                        )
+                        _log.info(f"[FINAL-INJECT] re-injected FINAL immediately (agent was speaking): {text!r} (turn={turn})")
+                    except Exception as e:
+                        _log.warning(f"[FINAL-INJECT] inject failed: {e}")
+                asyncio.create_task(_inject_final_now(transcript_text, _turn_counter))
+            # Always keep watchdog as safety net (shorter timeout since we may have injected)
             _bot_resp_watchdog_task = asyncio.create_task(
                 _bot_response_watchdog(transcript_text, _turn_counter)
             )
