@@ -12,6 +12,21 @@ from .config import GEMINI_API_KEY
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
+
+def _strip_punct(s: str) -> str:
+    """Strip punctuation/separators while keeping Unicode letters AND combining marks.
+
+    Python's \\w strips Devanagari vowel marks (category Mn) because they are
+    not 'word characters' in the regex sense. This breaks matching for scripts
+    like Devanagari where vowels are combining diacritics (e.g. हेलो→हल via \\w).
+    We keep categories L (letters), M (marks/combining), N (numbers) instead.
+    """
+    return "".join(
+        c for c in unicodedata.normalize("NFC", s.lower())
+        if unicodedata.category(c)[0] in ("L", "M", "N")
+    )
+
+
 # Individual NFC-normalised lowercase words that indicate a bare call-presence signal
 # rather than product engagement. Derived by tokenising all greeting/acknowledgement
 # phrases. Used in two places:
@@ -339,14 +354,33 @@ async def generate_call_analysis(
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
+    # Transfer-to-someone-else: receptionist/assistant answered and offered to connect
+    # to the actual decision maker. No product confirmation possible → Could Not Confirm.
+    _TRANSFER_PATTERNS = [
+        r"\bgive you to\b", r"\bconnect you to\b", r"\btransfer to\b",
+        r"\bput you through\b", r"\bput you on to\b", r"\bpass you to\b",
+        r"\bput you to\b", r"\bhand you to\b",
+    ]
+    if non_empty_user_turns and all(
+        any(re.search(p, (t.get("text") or "").lower()) for p in _TRANSFER_PATTERNS)
+        for t in non_empty_user_turns
+    ):
+        return {
+            "call_outcome": "Could Not Confirm",
+            "call_outcome_description": DISPOSITION_MAP["Could Not Confirm"],
+            "call_summary": "Call answered by a gatekeeper who offered to transfer — decision maker not reached.",
+            "is_business": "", "business_city": "", "business_name": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
+
     # All user turns contain only bare call-presence signals (hello, haan bolo, achha, etc.)
-    # and the agent never progressed past the greeting → Short Hangup.
-    # `not _agent_progressed` ensures we never short-circuit when the bot actually asked
-    # spec questions (which structurally proves the buyer engaged with the product).
+    # → Short Hangup regardless of agent progression. The bot can advance on bare signals
+    # (greeting accepted as a response), so `_agent_progressed` is NOT a reliable guard
+    # when every captured user turn is a bare signal.
     # NFC-normalise each token so Devanagari vowel marks compare correctly.
-    if non_empty_user_turns and not _agent_progressed and all(
+    if non_empty_user_turns and all(
         not ({
-            unicodedata.normalize("NFC", re.sub(r"[^\w]", "", w.lower()))
+            _strip_punct(w)
             for w in (t.get("text") or "").split() if w.strip()
         } - _BARE_CALL_SIGNAL_TOKENS)
         for t in non_empty_user_turns
@@ -421,7 +455,7 @@ async def generate_call_analysis(
     def _tokens(text: str) -> set[str]:
         import unicodedata as _ud
         t = _ud.normalize("NFC", text)
-        return {re.sub(r"[^\w]", "", w.lower()) for w in t.split() if w.strip()}
+        return {_strip_punct(w) for w in t.split() if w.strip()}
 
     _first_user_text = (non_empty_user_turns[0].get("text") or "") if non_empty_user_turns else ""
     _first_user_tokens = _tokens(_first_user_text)
@@ -1098,7 +1132,7 @@ STRICT OUTPUT RULES:
                     for _t in transcript:
                         if _t.get("role") == "user":
                             for _w in (_t.get("text") or "").split():
-                                _clean = unicodedata.normalize("NFC", re.sub(r"[^\w]", "", _w.lower()))
+                                _clean = _strip_punct(_w)
                                 if _clean:
                                     _all_user_words.add(_clean)
                     # Also include words from muted transcript
