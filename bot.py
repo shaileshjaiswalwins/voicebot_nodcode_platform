@@ -2300,7 +2300,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("user_input_transcribed")
     def _on_user_spoke(ev) -> None:
-        nonlocal _turn_counter, _live_transcript, _pending_user_text, _wav_reset_flag, _call_ended
+        nonlocal _turn_counter, _live_transcript, _pending_user_text, _wav_reset_flag, _call_ended, _early_inject_done
         # User spoke — reset inactivity timer (pass from_user_speech=True so nudge count clears)
         if not _call_ended:
             _reset_inactivity(from_user_speech=True)
@@ -2485,7 +2485,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             #   1. speech_ms >= 150 — filters sub-100ms noise glitches; slow/soft
             #      speech still accumulates ≥150ms before Gemini fires PARTIAL
             #   2. agent in "listening" — barge-in path uses FINAL-INJECT instead
-            nonlocal _early_inject_done
             _speech_ms_now = _user_audio["speech_ms"]
             if (
                 not _early_inject_done
