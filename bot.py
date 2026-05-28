@@ -622,10 +622,11 @@ def normalize_mobile(number: str) -> str:
 
 async def fetch_lead(lead_id: str = "", mobile: str = "", mis_api_base: str = MIS_API_BASE) -> dict | None:
     today = _date.today().strftime("%Y-%m-%d")
+    yesterday = (_date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
     if lead_id:
-        params = f"lead_id={lead_id}&page=1&limit=1&ai_partner=inh-suny-bot&fromdate={today}&todate={today}"
+        params = f"lead_id={lead_id}&page=1&limit=1&ai_partner=inh-suny-bot&fromdate={yesterday}&todate={today}"
     elif mobile:
-        params = f"mobile={mobile}&page=1&limit=1&ai_partner=inh-suny-bot&fromdate={today}&todate={today}"
+        params = f"mobile={mobile}&page=1&limit=1&ai_partner=inh-suny-bot&fromdate={yesterday}&todate={today}"
     else:
         return None
 
@@ -1436,8 +1437,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             or _search_ctx.get("searched_keyword", "")
             or _lead.get("catname", "")
         )
-        _end_ts = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-        _start_ts = (datetime.fromtimestamp(_start, tz=timezone.utc) - timedelta(days=1)).isoformat() if _start else None
+        _end_ts = datetime.now(timezone.utc).isoformat()
+        _start_ts = datetime.fromtimestamp(_start, tz=timezone.utc).isoformat() if _start else None
         _transcripts = [
             {
                 "id": idx + 1, "call_id": 0,
