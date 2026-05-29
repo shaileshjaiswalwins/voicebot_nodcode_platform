@@ -2697,6 +2697,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             #     FINAL quickly.
             #   • Long turn (≥ 3 s) → Gemini already gave a complete response to the
             #     partial; do NOT re-inject or we produce a duplicate bot turn.
+            #   • Barge-in turn (any duration) → the long speaking was the OLD response
+            #     being cut short, not a response to the user's barge-in utterance.
+            #     Always restart watchdog so Gemini gets the text if audio was insufficient.
             speaking_duration = asyncio.get_event_loop().time() - _speaking_start_time
             _speaking_turns_completed += 1
             if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
@@ -2704,7 +2707,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _bot_resp_watchdog_task = None
             if (not _call_ended and not _closing_triggered
                     and _last_user_final_text
-                    and speaking_duration < 3.0):
+                    and (speaking_duration < 3.0 or _barge_in_fired)):
                 _bot_resp_watchdog_task = asyncio.create_task(
                     _bot_response_watchdog(_last_user_final_text, _last_user_final_turn, timeout=1.0,
                                            speaking_count_at_start=_speaking_turns_completed)
@@ -2775,10 +2778,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             )
                             # Watchdog: if Gemini doesn't start speaking within 5 s, re-inject.
                             # Handles silent Gemini failures after muted-capture injection.
+                            # Snapshot speaking count so we don't re-inject if Gemini already responded.
                             _injected_text = text
+                            _speaking_count_at_inject = _speaking_turns_completed
                             async def _post_greeting_watchdog() -> None:
                                 await asyncio.sleep(5.0)
                                 if _call_ended or _closing_triggered or _turn_counter > 0:
+                                    return
+                                # Bot already spoke at least once since inject — no need to re-inject.
+                                if _speaking_turns_completed > _speaking_count_at_inject:
                                     return
                                 _s = session.agent_state
                                 _s_val = _s.value if hasattr(_s, "value") else str(_s)
