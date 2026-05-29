@@ -2488,7 +2488,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _live_transcript[-1] = _user_entry
             else:
                 _live_transcript.append(_user_entry)
-            _last_user_turn_time = asyncio.get_event_loop().time()
             # Start watchdog: if Gemini doesn't begin speaking within 8 s, re-inject.
             # When the FINAL arrives while the bot is already speaking (barge-in path),
             # do NOT inject immediately — that causes Gemini to queue a second generation
@@ -2498,6 +2497,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # speaking turn ends, but only when the turn was short (micro-ack); a long
             # turn means Gemini already gave a full answer and no re-inject is needed.
             nonlocal _bot_resp_watchdog_task, _last_user_final_text, _last_user_final_turn, _stale_partial_task, _last_user_turn_time
+            _last_user_turn_time = asyncio.get_event_loop().time()
             # FINAL arrived — cancel the stale-partial watchdog (no longer needed)
             if _stale_partial_task and not _stale_partial_task.done():
                 _stale_partial_task.cancel()
