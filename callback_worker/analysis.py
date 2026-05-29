@@ -157,6 +157,16 @@ async def generate_call_analysis(
 
     # --- Deterministic pre-LLM guards (saves cost + prevents model misclassification) ---
 
+    # Any turn explicitly tagged role="ivr" means the call was answered by an automated system.
+    if any(t.get("role") == "ivr" for t in transcript):
+        return {
+            "call_outcome": "Voicemail",
+            "call_outcome_description": DISPOSITION_MAP["Voicemail"],
+            "call_summary": "Call was answered by an automated IVR system, not a live person.",
+            "is_business": "", "business_city": "", "business_name": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
+
     user_turns = [t for t in transcript if t.get("role") == "user"]
     non_empty_user_turns = [t for t in user_turns if (t.get("text") or "").strip()]
 
@@ -1072,7 +1082,11 @@ values explicitly stated by the buyer.
                  | "False" if buyer said personal/home use;
                  | "" if not discussed or answer was unclear.
   business_name  | Exact name buyer stated for their business/shop/company; "" if not stated.
+                 | MUST be in English — transliterate Devanagari/regional script to Roman letters
+                 | (e.g. "एस एस पोर्टेबल कैबिन" → "SS Portable Cabin").
   business_city  | City buyer stated specifically for their business location; "" if not stated.
+                 | MUST be in English — use the standard English spelling of the city/state
+                 | (e.g. "भुवनेश्वर, उड़ीसा" → "Bhubaneswar, Odisha").
                  | Do NOT use the buyer's personal city as business_city unless explicitly
                  | stated in the context of their business during the call.
 
@@ -1088,8 +1102,8 @@ Return a SINGLE JSON object with EXACTLY these keys — no extra keys, no markdo
   "call_outcome_description": "<the corresponding description from the list>",
   "call_summary": "<1-2 sentence English summary of what happened on the call>",
   "is_business": "<'True' | 'False' | '' — per Step 2B>",
-  "business_name": "<exact business name from transcript, or ''>",
-  "business_city": "<business city from transcript, or ''>",
+  "business_name": "<business name in English (transliterated if needed), or ''>",
+  "business_city": "<business city in English, or ''>",
   "qna": [ ...entries per Step 2... ],
   "product_change": {{"product_name": "<new product name>"}},  // or {{}} if no product switch
   "rescheduled_to": "<ISO datetime YYYY-MM-DDTHH:MM:SS in IST if rescheduled, else ''>"
