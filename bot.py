@@ -365,7 +365,9 @@ _HARDCODED_BOT_CONFIG: dict = {
         "→ Re-ask the opening once: \"जी, तो क्या आपको [product] चाहिए?\"\n"
         "→ If still no clear answer after one re-ask → \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop.\n\n"
         "Step 2 — Questions\n"
-        "In order. One per turn. No skipping, no combining.\n"
+        "In order. ONE question per turn — this is a hard rule with no exceptions.\n"
+        "HARD RULE: If you find yourself writing 'और', 'or', 'साथ में', 'also', or any conjunction that links two questions — DELETE the second question. Ask it next turn.\n"
+        "HARD RULE: After being interrupted mid-question (barge-in), do NOT repeat the question you were already asking. The buyer heard enough to know what was asked. Re-assess from their response, or move to the next unanswered question.\n"
         "If buyer proactively answers multiple questions in one turn — absorb all of it, acknowledge naturally, then ask only what is still unanswered.\n"
         "Never re-ask something the buyer already answered, even if they phrased it loosely.\n\n"
         "Step 3 — Closing\n"
@@ -947,6 +949,12 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
             "  2. As soon as they say YES / हां / confirm: call FetchCategorySchema(srchterm=\"<new product in English>\") IMMEDIATELY.\n"
             "     Do NOT continue asking questions from the old schema.\n"
             "  3. When the function returns: say the 'instruction' field, then ask Question 1 from the new schema.\n"
+            "  SCHEMA RELEVANCE — MANDATORY: Before asking any schema question after a product change, verify it makes sense for the EXACT variant the buyer described.\n"
+            "  Examples of irrelevant questions to skip (mark Not Sure, move on):\n"
+            "    • Vehicle type (Sedan/SUV/Truck) when buyer wants a home appliance motor\n"
+            "    • Cooling capacity / star rating when buyer wants a replacement motor part, not a full AC unit\n"
+            "    • Any field that is clearly for a different sub-category than what the buyer said\n"
+            "  When in doubt: ask the buyer one sentence — 'Sellers आपको guide करेंगे इसमें' — mark Not Sure, continue.\n"
             "If they reconfirm the original product: continue without calling the function.\n\n"
             "⚠ SELLER / MANUFACTURER BLOCK — HARD RULE (takes priority over product change):\n"
             "If the user says they MAKE, MANUFACTURE, PRODUCE, SELL, or SUPPLY any product —\n"
@@ -1422,6 +1430,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # True when Gemini's first turn was a connection probe ("क्या आप line पर हैं?")
             # instead of the product greeting — agent progression is unreliable for such calls.
             "wrong_opener_detected": _wrong_opener_detected,
+            "turn_count": _turn_counter,
             "tagged": False,
             "tagged_at": None,
             "created_at": datetime.now(timezone.utc),
@@ -1480,8 +1489,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 "buyer_name": (_lead.get("buyer_details") or {}).get("buyer_name", ""),
                 "buyer_city": (_lead.get("buyer_details") or {}).get("buyer_city", ""),
                 "call_outcome_desc": "",
+                "turn_count": _turn_counter,
+                "no_user_response": (_turn_counter == 0 and status == "disconnected"),
             },
-            "tags": [status],
+            "tags": (
+                [status, "no_response"]
+                if _turn_counter == 0 and status == "disconnected"
+                else [status]
+            ),
             "sentiment": "neutral",
         }
         await save_call_log_to_backend(call_log_payload)
@@ -2289,7 +2304,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if _is_closing_phrase(_closing_buffer):
                 _closing_triggered = True
                 call_state["ended_naturally"] = True
-                if _is_not_interested_close(_closing_buffer):
+                if _is_not_interested_close(text):
                     _close_status = "not_interested"
                     _log.info("[CLOSE DETECT] Not-interested close detected — status=not_interested")
                 else:
@@ -2341,6 +2356,21 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             )
             if _call_ended:
                 return
+            # Zero-speech guard: if our local VAD captured no audio above the RMS
+            # threshold in this window AND the PCM buffer is empty, Gemini is
+            # transcribing audio that arrived before the current mic-ON window
+            # (e.g. a sound that triggered the PARTIAL just before the mic was
+            # muted for the bot's speaking turn). No real user audio → reject.
+            if speech_ms_now == 0 and not _current_window_pcm:
+                _log.info(
+                    f"[GEMINI] Rejected zero-speech FINAL {transcript_text!r} "
+                    f"— speech_ms=0 and window_pcm empty (pre-mute echo)"
+                )
+                _turn_counter -= 1
+                if _live_transcript and _live_transcript[-1].get("role") == "user":
+                    _live_transcript.pop()
+                _silero_rejected_turns.add(transcript_text)
+                return
             _early_inject_done = False  # reset for next turn
             _had_partial = bool(_pending_user_text)
             _pending_user_text = ""
@@ -2358,17 +2388,24 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     # voiced frames and often fall below the Silero threshold. Gemini's
                     # own transcription is strong evidence — if speech_ms >= 150 ms AND
                     # Gemini produced a non-empty transcript, trust it over Silero here.
-                    if speech_ms_now >= _gemini_silero_fallback_speech_ms:
+                    # GUARD: also require voiced_ms >= 60 OR voiced/speech ratio >= 8%.
+                    # IVR carrier audio has very high speech_ms but almost zero voiced_ms
+                    # (e.g. voiced=32ms in speech=1110ms = 2.9%) — reject that pattern.
+                    _voiced_ratio = _voiced / speech_ms_now if speech_ms_now > 0 else 0.0
+                    if speech_ms_now >= _gemini_silero_fallback_speech_ms and (
+                        _voiced >= 60 or _voiced_ratio >= 0.08
+                    ):
                         _log.info(
                             f"[GEMINI] Silero weak but speech_ms sufficient — accepting "
                             f"{transcript_text!r} (voiced_ms={_voiced:.0f} < "
-                            f"min={_sarvam_silero_min_speech_ms}, speech_ms={speech_ms_now:.0f})"
+                            f"min={_sarvam_silero_min_speech_ms}, speech_ms={speech_ms_now:.0f}, "
+                            f"ratio={_voiced_ratio:.2%})"
                         )
                     else:
                         _log.info(
                             f"[GEMINI] Silero rejected FINAL {transcript_text!r} — "
                             f"voiced_ms={_voiced:.0f} < min={_sarvam_silero_min_speech_ms} "
-                            f"(speech_ms={speech_ms_now:.0f})"
+                            f"(speech_ms={speech_ms_now:.0f}, ratio={_voiced_ratio:.2%})"
                         )
                         # Remove any partial placeholder that was already added for this turn
                         if _live_transcript and _live_transcript[-1]["role"] == "user":
@@ -2713,6 +2750,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             _log.info(
                                 f"[MUTED-CAPTURE] post-greeting inject skipped — bare phone-pickup signal: {text!r}"
                             )
+                            if _muted_transcript_log and _muted_transcript_log[-1] == text:
+                                _muted_transcript_log.pop()
                             _muted_inject["text"] = ""
                             return
                         if _rt is None or getattr(_rt, "_active_session", None) is None:
