@@ -2540,7 +2540,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if _stale_partial_task and not _stale_partial_task.done():
                 _stale_partial_task.cancel()
             if _greeting_done and not _call_ended and not _closing_triggered:
-                _stale_partial_task = asyncio.create_task(_stale_partial_watchdog(transcript_text))
+                _stale_partial_task = asyncio.create_task(
+                    _stale_partial_watchdog(transcript_text, speaking_count_at_start=_speaking_turns_completed)
+                )
 
             # Early-inject: for short monosyllabic responses (जी, हाँ, ना, ok…)
             # PARTIAL == FINAL 100% of the time. Inject now so Gemini has a
@@ -2641,7 +2643,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         except Exception as e:
             _log.warning(f"[GEMINI-WATCHDOG] re-inject failed: {e}")
 
-    async def _stale_partial_watchdog(text: str, timeout: float = 6.0) -> None:
+    async def _stale_partial_watchdog(text: str, timeout: float = 6.0, speaking_count_at_start: int = 0) -> None:
         """Force-inject a PARTIAL to Gemini if no FINAL arrives within `timeout` s.
         Covers the case where the user speaks continuously (no clear pause) so Soniox
         never commits a FINAL — the bot would stay silent until the caller hangs up."""
@@ -2652,6 +2654,21 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if _pending_user_text != text:
             return  # a newer partial already arrived; its timer handles it
         if not _rt or getattr(_rt, "_active_session", None) is None:
+            return
+        # If Gemini already started speaking in response to the user audio, injecting
+        # the same text again would interrupt the live response and cause a duplicate
+        # (agent starts saying something, gets cut off, repeats from scratch).
+        try:
+            _agent_s_val = getattr(session.agent_state, "value", None) or str(session.agent_state)
+            if _agent_s_val == "speaking":
+                _log.info(f"[STALE-PARTIAL] Bot already speaking — suppressing re-inject for {text!r}")
+                return
+        except Exception:
+            pass
+        # If any bot speaking turn completed since the partial arrived, Gemini already
+        # answered — re-injecting would generate a duplicate response.
+        if _speaking_turns_completed > speaking_count_at_start:
+            _log.info(f"[STALE-PARTIAL] Bot already responded (turns_completed={_speaking_turns_completed}) — suppressing re-inject for {text!r}")
             return
         _log.warning(
             f"[STALE-PARTIAL] No FINAL in {timeout:.0f}s — force-injecting: {text!r}"
