@@ -2529,7 +2529,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
             # Reset stale-partial watchdog: if FINAL doesn't arrive within 6 s of the
             # last PARTIAL, force-inject current text to Gemini so the bot can respond.
-            nonlocal _stale_partial_task
             if _stale_partial_task and not _stale_partial_task.done():
                 _stale_partial_task.cancel()
             if _greeting_done and not _call_ended and not _closing_triggered:
