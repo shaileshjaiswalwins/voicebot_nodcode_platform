@@ -2489,7 +2489,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # handler below restarts this watchdog with a 1 s window once the current
             # speaking turn ends, but only when the turn was short (micro-ack); a long
             # turn means Gemini already gave a full answer and no re-inject is needed.
-            nonlocal _bot_resp_watchdog_task, _last_user_final_text, _last_user_final_turn
+            nonlocal _bot_resp_watchdog_task, _last_user_final_text, _last_user_final_turn, _stale_partial_task
+            # FINAL arrived — cancel the stale-partial watchdog (no longer needed)
+            if _stale_partial_task and not _stale_partial_task.done():
+                _stale_partial_task.cancel()
+                _stale_partial_task = None
             _last_user_final_text = transcript_text
             _last_user_final_turn = _turn_counter
             if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
@@ -2522,6 +2526,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _live_transcript[-1]["text"] = transcript_text
             else:
                 _live_transcript.append({"role": "user", "text": transcript_text})
+
+            # Reset stale-partial watchdog: if FINAL doesn't arrive within 6 s of the
+            # last PARTIAL, force-inject current text to Gemini so the bot can respond.
+            nonlocal _stale_partial_task
+            if _stale_partial_task and not _stale_partial_task.done():
+                _stale_partial_task.cancel()
+            if _greeting_done and not _call_ended and not _closing_triggered:
+                _stale_partial_task = asyncio.create_task(_stale_partial_watchdog(transcript_text))
 
             # Early-inject: for short monosyllabic responses (जी, हाँ, ना, ok…)
             # PARTIAL == FINAL 100% of the time. Inject now so Gemini has a
@@ -2570,6 +2582,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _speaking_start_time: float = 0.0   # monotonic time when current speaking turn began
     _speaking_turns_completed: int = 0  # incremented each time speaking→listening fires
     _early_inject_done: bool = False     # True if this PARTIAL was already early-injected
+    _stale_partial_task: asyncio.Task | None = None  # fires if PARTIAL goes 6s without FINAL
 
     # Short terminal tokens: PARTIAL == FINAL for these 100% of the time.
     # Safe to treat the PARTIAL as FINAL and inject early so Gemini gets
@@ -2605,6 +2618,39 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             )
         except Exception as e:
             _log.warning(f"[GEMINI-WATCHDOG] re-inject failed: {e}")
+
+    async def _stale_partial_watchdog(text: str, timeout: float = 6.0) -> None:
+        """Force-inject a PARTIAL to Gemini if no FINAL arrives within `timeout` s.
+        Covers the case where the user speaks continuously (no clear pause) so Soniox
+        never commits a FINAL — the bot would stay silent until the caller hangs up."""
+        nonlocal _bot_resp_watchdog_task, _last_user_final_text, _last_user_final_turn
+        await asyncio.sleep(timeout)
+        if _call_ended or _closing_triggered or not _greeting_done:
+            return
+        if _pending_user_text != text:
+            return  # a newer partial already arrived; its timer handles it
+        if not _rt or getattr(_rt, "_active_session", None) is None:
+            return
+        _log.warning(
+            f"[STALE-PARTIAL] No FINAL in {timeout:.0f}s — force-injecting: {text!r}"
+        )
+        try:
+            _rt._send_client_event(
+                types.LiveClientContent(
+                    turns=[types.Content(parts=[types.Part(text=text)], role="user")],
+                    turn_complete=True,
+                )
+            )
+            _last_user_final_text = text
+            _last_user_final_turn = _turn_counter
+            if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
+                _bot_resp_watchdog_task.cancel()
+            _bot_resp_watchdog_task = asyncio.create_task(
+                _bot_response_watchdog(text, _turn_counter,
+                                       speaking_count_at_start=_speaking_turns_completed)
+            )
+        except Exception as e:
+            _log.warning(f"[STALE-PARTIAL] force-inject failed: {e}")
 
     def _set_mic(enabled: bool, reason: str = "") -> None:
         nonlocal _mic_enabled
@@ -2697,9 +2743,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             #     FINAL quickly.
             #   • Long turn (≥ 3 s) → Gemini already gave a complete response to the
             #     partial; do NOT re-inject or we produce a duplicate bot turn.
-            #   • Barge-in turn (any duration) → the long speaking was the OLD response
-            #     being cut short, not a response to the user's barge-in utterance.
-            #     Always restart watchdog so Gemini gets the text if audio was insufficient.
+            #   • Barge-in turn (any duration) — if speaking was long (≥ 3 s), Gemini
+            #     already gave a complete answer via real-time audio even if the user
+            #     interrupted. Re-injecting would produce a duplicate bot turn.
+            #     The stale-partial watchdog handles any truly missed turn.
             speaking_duration = asyncio.get_event_loop().time() - _speaking_start_time
             _speaking_turns_completed += 1
             if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
@@ -2707,7 +2754,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _bot_resp_watchdog_task = None
             if (not _call_ended and not _closing_triggered
                     and _last_user_final_text
-                    and (speaking_duration < 3.0 or _barge_in_fired)):
+                    and speaking_duration < 3.0):
                 _bot_resp_watchdog_task = asyncio.create_task(
                     _bot_response_watchdog(_last_user_final_text, _last_user_final_turn, timeout=1.0,
                                            speaking_count_at_start=_speaking_turns_completed)
