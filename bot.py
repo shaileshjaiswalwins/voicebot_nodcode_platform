@@ -333,7 +333,8 @@ _HARDCODED_BOT_CONFIG: dict = {
         "• English closing line (use ONLY when language has been switched to English): 'Alright, I have all the details. The relevant sellers will contact you soon. Thank you for your time.'\n"
         "• English timeout line (use ONLY when language has been switched to English): 'I only have permission to talk for 5 minutes. The sellers will contact you soon based on what we discussed. Thank you for your time. Goodbye!'\n"
         "• Hindi timeout line (use when language is Hindi, i.e. the default): 'जी, मुझे सिर्फ 5 मिनट तक बात करने की permission है. जो भी details मिली हैं, sellers जल्द ही आपसे contact करेंगे. आपका समय देने के लिए धन्यवाद. अलविदा!'\n"
-        "CRITICAL: If the call has NOT been explicitly switched to English by the caller, ALWAYS use the Hindi timeout/closing lines — even if you heard English words from an IVR or voicemail system.\n\n"
+        "CRITICAL: If the call has NOT been explicitly switched to English by the caller, ALWAYS use the Hindi timeout/closing lines — even if you heard English words from an IVR or voicemail system.\n"
+        "SYSTEM CONTROL — NEVER SELF-TRIGGER TIMEOUT: The timeout lines above are delivered ONLY when the system timer (5 minutes) has actually expired — they are injected by the system as an explicit directive, not a conversational choice. NEVER say the timeout line on your own initiative. If the conversation is stuck (repeated hellos, unclear responses, same question asked twice with no answer), use the NOT-INTERESTED close ('ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.') — never the 5-minute timeout line.\n\n"
 
         "TONE\n\n"
         "Warm, natural, efficient — a real person doing their job well, not a script-reader.\n"
@@ -1581,12 +1582,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _nudge_count = 0
             _inactivity_task = None
             # Race-condition guard: user may have spoken in the last instant before
-            # this timer fired. If any live transcript exists or a partial is pending,
-            # reset and let the normal flow continue — don't end a live conversation.
-            if _turn_counter > 0 or _pending_user_text:
+            # this timer fired. Only suppress if speech was within 2 s — a wider window
+            # would permanently prevent call-end for anyone who spoke earlier in the call.
+            _now = asyncio.get_event_loop().time()
+            _just_spoke = _last_user_turn_time > 0 and (_now - _last_user_turn_time) < 2.0
+            if _just_spoke or _pending_user_text:
                 _log.info(
                     f"[INACTIVITY] end suppressed — user just spoke "
-                    f"(turn_counter={_turn_counter}, pending={_pending_user_text!r})"
+                    f"(since={_now - _last_user_turn_time:.1f}s ago, pending={_pending_user_text!r})"
                 )
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
                 return
@@ -1614,11 +1617,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _inactivity_status = "completed" if _turn_counter > 0 else "disconnected"
             asyncio.create_task(_save_and_close(_inactivity_status))
         else:
-            # Skip nudge if user just spoke (race: timer fired as user was responding)
-            if _turn_counter > 0 or _pending_user_text:
+            # Skip nudge if user spoke very recently (race: timer fired as user was responding).
+            # Use a 5s recency window — NOT _turn_counter > 0 which permanently suppresses nudges
+            # after the first user turn, leaving mid-call silence unhandled.
+            _now = asyncio.get_event_loop().time()
+            _recent_user_speech = _last_user_turn_time > 0 and (_now - _last_user_turn_time) < 5.0
+            if _recent_user_speech or _pending_user_text:
                 _log.info(
-                    f"[INACTIVITY] nudge suppressed — user just spoke "
-                    f"(turn_counter={_turn_counter}, pending={_pending_user_text!r})"
+                    f"[INACTIVITY] nudge suppressed — user spoke recently "
+                    f"(since={_now - _last_user_turn_time:.1f}s ago, pending={_pending_user_text!r})"
                 )
                 _nudge_count = 0
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
@@ -2481,6 +2488,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _live_transcript[-1] = _user_entry
             else:
                 _live_transcript.append(_user_entry)
+            _last_user_turn_time = asyncio.get_event_loop().time()
             # Start watchdog: if Gemini doesn't begin speaking within 8 s, re-inject.
             # When the FINAL arrives while the bot is already speaking (barge-in path),
             # do NOT inject immediately — that causes Gemini to queue a second generation
@@ -2489,7 +2497,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # handler below restarts this watchdog with a 1 s window once the current
             # speaking turn ends, but only when the turn was short (micro-ack); a long
             # turn means Gemini already gave a full answer and no re-inject is needed.
-            nonlocal _bot_resp_watchdog_task, _last_user_final_text, _last_user_final_turn, _stale_partial_task
+            nonlocal _bot_resp_watchdog_task, _last_user_final_text, _last_user_final_turn, _stale_partial_task, _last_user_turn_time
             # FINAL arrived — cancel the stale-partial watchdog (no longer needed)
             if _stale_partial_task and not _stale_partial_task.done():
                 _stale_partial_task.cancel()
@@ -2582,6 +2590,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _speaking_turns_completed: int = 0  # incremented each time speaking→listening fires
     _early_inject_done: bool = False     # True if this PARTIAL was already early-injected
     _stale_partial_task: asyncio.Task | None = None  # fires if PARTIAL goes 6s without FINAL
+    _last_user_turn_time: float = 0.0  # monotonic time of last accepted user FINAL (for inactivity recency check)
 
     # Short terminal tokens: PARTIAL == FINAL for these 100% of the time.
     # Safe to treat the PARTIAL as FINAL and inject early so Gemini gets
@@ -2603,6 +2612,20 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         # gave a real answer (early-inject response) — re-injecting would duplicate it.
         if _speaking_turns_completed > speaking_count_at_start:
             return
+        # If the bot is currently mid-speech, the answer is already in progress.
+        # Re-injecting now queues a duplicate generation on top of the live turn.
+        # This covers long bot responses (>= 8s) where _speaking_turns_completed hasn't
+        # incremented yet when the watchdog fires — seen as triple-Q1 in Call 1.
+        try:
+            _agent_s = session.agent_state
+            _agent_s_val = getattr(_agent_s, "value", None) or str(_agent_s)
+            if _agent_s_val == "speaking":
+                _log.info(
+                    f"[GEMINI-WATCHDOG] Bot currently speaking — suppressing re-inject (turn={turn})"
+                )
+                return
+        except Exception:
+            pass
         if _rt is None or getattr(_rt, "_active_session", None) is None:
             return
         _log.warning(
@@ -2751,9 +2774,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
                 _bot_resp_watchdog_task.cancel()
                 _bot_resp_watchdog_task = None
+            # Only restart watchdog for true micro-acks (< 1.5 s TTS, e.g. "अच्छा जी").
+            # Turns 1.5 s+ are complete responses (re-asks, questions) — re-injecting them
+            # caused spurious double-responses and the fake 5-min timeout bug in Call 2/3.
             if (not _call_ended and not _closing_triggered
                     and _last_user_final_text
-                    and speaking_duration < 3.0):
+                    and speaking_duration < 1.5):
                 _bot_resp_watchdog_task = asyncio.create_task(
                     _bot_response_watchdog(_last_user_final_text, _last_user_final_turn, timeout=1.0,
                                            speaking_count_at_start=_speaking_turns_completed)
