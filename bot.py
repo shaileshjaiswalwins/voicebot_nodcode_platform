@@ -395,7 +395,8 @@ _HARDCODED_BOT_CONFIG: dict = {
         "  • City/place field: answer is a greeting or farewell word — 'dhanyavad', 'okay bye', 'shukriya', 'theek hai', 'namaste' are NOT city names → re-ask once\n"
         "  • City/place field: answer is a product description, size, spec, or anything that is clearly NOT a city name (e.g. '80mm wali', 'CCTV wala', 'bada wala') → re-ask once. NEVER infer or assume a city. NEVER fill in a city from context, lead data, or training knowledge. If still no city after one re-ask → mark Not Sure, move on.\n"
         "  • Quantity field: answer is a word that cannot be a number — 'kal', 'haan', 'achha', 'theek' → re-ask once with unit reminder\n"
-        "    (STT mis-transcribes Hindi numbers: 'सौ' → 'So'/'To', 'चार' → 'For', 'दस' → 'बस'/'das'/'dash', 'तीन' → 'teen'/'tin', 'पाँच' → 'punch'/'panch' — if an English word or Devanagari word appears that looks like a mis-transcribed number, accept it as that number rather than re-asking)\n"
+        "    (STT mis-transcribes Hindi numbers: 'सौ' → 'So'/'To', 'चार' → 'For', 'दस' → 'बस'/'das'/'dash', 'तीन' → 'teen'/'tin', 'पाँच' → 'punch'/'panch' — if an English word or Devanagari word appears that looks like a mis-transcribed number, accept it as that number rather than re-asking. "
+        "EXCEPTION: if 'to' appears BETWEEN two numbers (e.g. '30 to 50'), it is a RANGE connector, NOT 'सौ'/hundred — read it as 'between 30 and 50', never as 3050 or 3250.)\n"
         "  • Budget field: clearly non-numeric and not a 'not sure' variant — re-ask once\n"
         "  • Answer is an obvious non-answer — sarcasm, a counter-question about something unrelated, gibberish\n"
         "  • Sarcastic/indirect: 'paidal lene aa jaana' ≠ delivery/pickup — re-ask\n\n"
@@ -415,7 +416,9 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Budget question:\n"
         "Accept any number or range. If genuinely vague ('thoda', 'reasonable') — re-ask once. Then Not Sure.\n\n"
         "Quantity question:\n"
-        "Accept any digit or Hindi number word. If the answer is a non-numeric word that cannot be a number — re-ask once with the unit.\n\n"
+        "Accept any digit, Hindi number word, OR a quantity range ('30 to 50', '30 se 50', '20–40', 'between 20 and 40'). "
+        "If the buyer gives a range, record it as-is (e.g. '30–50 units') — NEVER concatenate the two numbers into one (\"30 to 50\" is a range of 30–50, NOT the number 3250). "
+        "If the answer is a non-numeric word that cannot be a number — re-ask once with the unit.\n\n"
         "NEW BUYER / FIRST TIME / 'I DON'T KNOW' (CRITICAL):\n"
         "Signals: 'main naya hoon', 'bilkul naya hoon', 'pehli baar le raha hoon', 'mujhe kuch pata nahi', 'aap hi batao', 'jo accha ho wahi chahiye', 'mujhe kaise pata hoga', 'samajh nahi aata'.\n"
         "→ DO NOT re-ask the same question. That is the worst thing you can do to a new buyer.\n"
@@ -457,6 +460,10 @@ _HARDCODED_BOT_CONFIG: dict = {
 
         "━━━ HIGH-QUANTITY → BUSINESS GATE (HARD RULE) ━━━\n\n"
         "If the buyer answers a QUANTITY question with a number ≥ 100 of a BULK or COUNT unit — treat as BUSINESS automatically. Do NOT ask \"business या personal?\" ever for this caller.\n\n"
+        "RANGE ANSWERS: If the buyer gives a quantity range (e.g. '30 to 50 units', '50 se 100 kg', '20–40 boxes', 'between 30 and 50'), "
+        "use the HIGHER number for the ≥ 100 gate check. CRITICAL: NEVER concatenate or merge the two numbers — "
+        "\"30 to 50\" means between 30 and 50 (NOT 3250), \"20 to 40\" means between 20 and 40 (NOT 2040). "
+        "Record the full range as given (e.g. '30–50 units').\n\n"
         "BULK / COUNT units where ≥ 100 triggers the gate:\n"
         "  pieces / pcs / units / numbers / sets / boxes / cartons / packets / bags / dozen / rolls\n"
         "  kg / kilogram / litre / liter / ton / tonne / quintal / bori / nag / sack / drum\n\n"
@@ -1004,6 +1011,7 @@ BUSINESS GATE — triggers when buyer gives a high-quantity answer or uses a bus
 
 Triggers:
   • Quantity ≥ 100 of a BULK or COUNT unit: pieces / pcs / units / sets / boxes / cartons / packets / bags / dozen / rolls / kg / litre / ton / quintal / bori / nag / sack / drum
+  • RANGE ANSWERS: If buyer gives a range (e.g. "30 to 50 units", "50 se 100 kg"), use the HIGHER number for the ≥ 100 check. NEVER concatenate the two numbers — "30 to 50" = range of 30–50 (NOT 3250). Record the full range as given.
   • NOT triggered by small-measure units: gram / gm / mg / ml / cc / cm / mm / inch / feet — "500 ml" or "100 gram" is personal-scale.
   • Also triggers on keywords (any quantity):
       English: "wholesale", "bulk", "shop", "dukaan", "factory", "warehouse", "godown", "B2B", "resale", "retail sale", "food service", "catering", "restaurant", "hotel", "canteen", "office", "commercial", "hospital", "school", "institution"
