@@ -1627,14 +1627,50 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _nudge_count = 0
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
                 return
-            # Skip nudge if audio RMS shows active input — caller on noisy line
+            # Skip nudge if audio RMS shows active input but Gemini gave no transcript —
+            # try Sarvam to rescue the missed utterance.
             if _user_audio["speech_ms"] > 200:
                 _log.info(
                     f"[INACTIVITY] speech_ms={_user_audio['speech_ms']:.0f} — "
-                    "active audio detected, skipping nudge"
+                    "Gemini silent on live audio — attempting Sarvam rescue"
                 )
                 _nudge_count = 0
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
+                _turn_at_start = _turn_counter
+                _speaking_at_start = _speaking_turns_completed
+                async def _sarvam_rescue(
+                    _t=_turn_at_start, _s=_speaking_at_start
+                ) -> None:
+                    text = await _sarvam_stt_fallback()
+                    if not text or _call_ended:
+                        return
+                    if _turn_counter > _t:
+                        _log.info(f"[SARVAM-RESCUE] Gemini caught up — skipping inject ({text!r})")
+                        return
+                    if _speaking_turns_completed > _s:
+                        _log.info(f"[SARVAM-RESCUE] Bot already responded — skipping inject ({text!r})")
+                        return
+                    if _pending_user_text:
+                        _log.info(f"[SARVAM-RESCUE] Gemini partial in flight — skipping inject ({text!r})")
+                        return
+                    try:
+                        _agent_s = getattr(session.agent_state, "value", None) or str(session.agent_state)
+                        if _agent_s == "speaking":
+                            _log.info(f"[SARVAM-RESCUE] Bot currently speaking — skipping inject ({text!r})")
+                            return
+                    except Exception:
+                        pass
+                    _log.info(f"[SARVAM-RESCUE] Gemini missed — injecting via Sarvam: {text!r}")
+                    try:
+                        _rt._send_client_event(
+                            types.LiveClientContent(
+                                turns=[types.Content(parts=[types.Part(text=text)], role="user")],
+                                turn_complete=True,
+                            )
+                        )
+                    except Exception as e:
+                        _log.warning(f"[SARVAM-RESCUE] inject failed: {e}")
+                asyncio.create_task(_sarvam_rescue())
                 return
             nudge = INACTIVITY_PHRASE
             _log.info(f"[INACTIVITY] {sleep_secs:.0f}s silence — nudge {_nudge_count}: {nudge!r}")
