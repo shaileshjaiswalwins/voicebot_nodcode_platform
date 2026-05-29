@@ -222,9 +222,6 @@ SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
 _SARVAM_AUDIO_MAX_BYTES = 16000 * 2 * 30  # 30 s at 16 kHz, 16-bit, mono
 
-SONIOX_API_KEY = os.getenv("SONIOX_API_KEY", "")
-# REST endpoint for one-shot file transcription — verify at https://soniox.com/docs
-SONIOX_STT_URL = "https://api.soniox.com/v1/transcribe"
 
 _http_session: aiohttp.ClientSession | None = None
 
@@ -1941,49 +1938,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         )
         return [t for t in cleaned.split() if t]
 
-    async def _soniox_transcribe(wav_bytes: bytes, context: str = "") -> str | None:
-        """Call Soniox REST file-transcription. Returns transcript on success,
-        None on any failure (HTTP error, empty body, timeout).
-        Caller falls back to Sarvam on None."""
-        if not SONIOX_API_KEY:
-            return None
-        form = aiohttp.FormData()
-        form.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/wav")
-        # TODO: confirm exact model name from https://soniox.com/docs
-        form.add_field("model", "stt-async-preview")
-        form.add_field("enable_language_identification", "true")
-        if context:
-            form.add_field("context", context)
-        try:
-            async with _get_http_session().post(
-                SONIOX_STT_URL,
-                headers={"Authorization": f"Bearer {SONIOX_API_KEY}"},
-                data=form,
-                timeout=aiohttp.ClientTimeout(total=5),
-            ) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    _log.warning(
-                        f"[SONIOX] HTTP {resp.status} — falling back to Sarvam | {body[:100]}"
-                    )
-                    return None
-                result = await resp.json()
-                # Soniox returns {"text": "..."} or {"transcript": "..."} — handle both
-                text = (
-                    result.get("text") or result.get("transcript") or ""
-                ).strip()
-                if not text:
-                    _log.info("[SONIOX] empty transcript — falling back to Sarvam")
-                    return None
-                return text
-        except Exception as e:
-            _log.warning(f"[SONIOX] error: {e} — falling back to Sarvam")
-            return None
-
     async def _sarvam_stt_fallback() -> str | None:
-        """Transcribe the WAV file written by _buffer_user_audio.
-        Tries Soniox first (multilingual, domain-biased); falls back to Sarvam.
-        Silero VAD gates both paths — only invoked when genuine human voice is present."""
+        """Transcribe the WAV file written by _buffer_user_audio using Sarvam.
+        Silero VAD gates the path — only invoked when genuine human voice is present."""
         if not _user_audio["has_audio"]:
             return None
         speech_ms = _user_audio["speech_ms"]
@@ -2014,7 +1971,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             wav_data = buf.getvalue()
         if not wav_data:
             return None
-        # Silero VAD gate — applies to both Soniox and Sarvam paths.
+        # Silero VAD gate
         try:
             with wave.open(io.BytesIO(wav_data), "rb") as wf:
                 pcm_bytes = wf.readframes(wf.getnframes())
@@ -2031,24 +1988,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 )
                 return None
             _log.info(f"[STT] Silero — speech confirmed (voiced_ms={voiced_ms:.0f})")
-        # Build context for Soniox domain biasing
-        _lead = call_state.get("lead_record") or {}
-        _catname = _lead.get("catname", "")
-        _buyer_name = (_lead.get("buyer_details") or {}).get("buyer_name", "")
-        _ctx = f"{_catname} {_buyer_name}".strip()
-        # Try Soniox first
-        text = await _soniox_transcribe(wav_data, context=_ctx)
-        if text is not None:
-            if _is_ivr_message(text):
-                _log.info(f"[IVR] busy-line in Soniox fallback — dropping {text!r}")
-                return None
-            tokens = _normalize_stt_tokens(text)
-            if tokens and all(t in _SARVAM_FILLER_HALLUCINATIONS for t in tokens):
-                _log.info(f"[SONIOX] dropped all-filler {text!r}")
-                return None
-            _log.info(f"[STT-CASCADE] soniox=ok: {text!r} (speech_ms={speech_ms:.0f})")
-            return text
-        # Soniox failed — fall back to Sarvam
         if not SARVAM_API_KEY:
             return None
         try:
@@ -2075,7 +2014,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             )
                             return None
                         _log.info(
-                            f"[STT-CASCADE] soniox=miss, sarvam=ok: {text!r} "
+                            f"[STT] sarvam=ok: {text!r} "
                             f"(speech_ms={speech_ms:.0f})"
                         )
                         return text
@@ -2088,12 +2027,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     async def _transcribe_muted_period(frames: list, speech_ms: float) -> None:
         """Transcribe audio captured during a muted window (bot speaking turn + post-hold).
-        Tries Soniox first (multilingual + domain-biased); falls back to Sarvam.
-        No Silero gate here — we want everything the user said, even brief."""
+        Uses Sarvam for transcription. No Silero gate — we want everything the user said, even brief."""
         nonlocal _call_ended
         if not frames:
             return
-        if not SONIOX_API_KEY and not SARVAM_API_KEY:
+        if not SARVAM_API_KEY:
             _log.warning("[MUTED-CAPTURE] no STT API key set — skipping transcription")
             return
         try:
@@ -2109,41 +2047,31 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         except Exception as e:
             _log.warning(f"[MUTED-CAPTURE] WAV build error: {e}")
             return
-        # Build Soniox context from lead data for domain vocabulary biasing
-        _lead = call_state.get("lead_record") or {}
-        _catname = _lead.get("catname", "")
-        _buyer_name = (_lead.get("buyer_details") or {}).get("buyer_name", "")
-        _ctx = f"{_catname} {_buyer_name}".strip()
-        # Try Soniox first
-        text = await _soniox_transcribe(wav_data, context=_ctx)
-        _cascade_tag = "soniox=ok"
-        if text is None:
-            # Fall back to Sarvam
-            _cascade_tag = "soniox=miss"
-            if SARVAM_API_KEY:
-                try:
-                    form = aiohttp.FormData()
-                    form.add_field("file", wav_data, filename="audio.wav", content_type="audio/wav")
-                    form.add_field("language_code", "hi-IN")
-                    form.add_field("model", "saaras:v3")
-                    form.add_field("mode", "transcribe")
-                    async with _get_http_session().post(
-                        SARVAM_STT_URL,
-                        headers={"api-subscription-key": SARVAM_API_KEY},
-                        data=form,
-                        timeout=aiohttp.ClientTimeout(total=10),
-                    ) as resp:
-                        if resp.status == 200:
-                            result = await resp.json()
-                            text = (result.get("transcript") or "").strip() or None
-                            _cascade_tag = "soniox=miss,sarvam=ok" if text else "soniox=miss,sarvam=empty"
-                        else:
-                            body = await resp.text()
-                            _log.warning(
-                                f"[MUTED-CAPTURE] Sarvam STT failed: {resp.status} {body[:200]}"
-                            )
-                except Exception as e:
-                    _log.warning(f"[MUTED-CAPTURE] Sarvam error: {e}")
+        text = None
+        _cascade_tag = "sarvam=empty"
+        try:
+            form = aiohttp.FormData()
+            form.add_field("file", wav_data, filename="audio.wav", content_type="audio/wav")
+            form.add_field("language_code", "hi-IN")
+            form.add_field("model", "saaras:v3")
+            form.add_field("mode", "transcribe")
+            async with _get_http_session().post(
+                SARVAM_STT_URL,
+                headers={"api-subscription-key": SARVAM_API_KEY},
+                data=form,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    text = (result.get("transcript") or "").strip() or None
+                    _cascade_tag = "sarvam=ok" if text else "sarvam=empty"
+                else:
+                    body = await resp.text()
+                    _log.warning(
+                        f"[MUTED-CAPTURE] Sarvam STT failed: {resp.status} {body[:200]}"
+                    )
+        except Exception as e:
+            _log.warning(f"[MUTED-CAPTURE] Sarvam error: {e}")
         if not text:
             _log.info(f"[MUTED-CAPTURE] empty transcript [{_cascade_tag}] (speech_ms={speech_ms:.0f})")
             return
