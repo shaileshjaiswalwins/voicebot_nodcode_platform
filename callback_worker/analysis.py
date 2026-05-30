@@ -1217,11 +1217,31 @@ STRICT OUTPUT RULES:
                     result["call_outcome_description"] = DISPOSITION_MAP[outcome]
                     result["qna"] = []
 
-                # 5. Duration-aware Interested → Short Hangup for very short calls.
-                #    Calls under 20 s with only bare acknowledgements (हाँ / ji / yes / ok)
-                #    and no valid spec values are almost always Short Hangups — the buyer
-                #    said a reflexive yes and disconnected, not a genuine product confirmation.
-                #    ~10 % of these may be genuine quick yeses; that tradeoff is accepted.
+                # 5a. No live user turns + Interested → Short Hangup.
+                #     Muted-capture content is recorded during the bot's greeting window —
+                #     before the user has heard the product question. Any LLM "Interested"
+                #     based solely on muted content (no live transcript user turn) is
+                #     unreliable. Downgrade to Short Hangup for short calls.
+                if (
+                    outcome == "Interested"
+                    and not non_empty_user_turns
+                    and duration_secs is not None
+                    and duration_secs < 20
+                ):
+                    logger.info(
+                        f"[POST-PROC] Interested → Short Hangup: no live user turns, "
+                        f"only muted-capture content, duration={duration_secs:.0f}s < 20s"
+                    )
+                    outcome = "Short Hangup"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+                    result["qna"] = []
+
+                # 5b. Duration-aware Interested → Short Hangup for very short calls.
+                #     Calls under 20 s with only bare acknowledgements (हाँ / ji / yes / ok)
+                #     and no valid spec values are almost always Short Hangups — the buyer
+                #     said a reflexive yes and disconnected, not a genuine product confirmation.
+                #     ~10 % of these may be genuine quick yeses; that tradeoff is accepted.
                 if (
                     outcome == "Interested"
                     and duration_secs is not None

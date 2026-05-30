@@ -608,7 +608,12 @@ HINDI_LANG_CONFIG = {
         "The filler and the question must be ONE continuous utterance with no pause between them. Vary fillers; don't start every response with 'अच्छा'.\n\n"
         "TTS: Write 'डेढ़ ton' not '1.5 ton'. Write 'ढाई ton' not '2.5 ton'.\n\n"
         "NEVER use these overly formal words:\n"
-        "शयनकक्ष, बैठक कक्ष, कार्यालय, स्थापित, आवश्यकता, पर्याप्त, उपयुक्त, उचित, सूचित, प्राप्त, विवरण, अनुसार, सुविधाजनक"
+        "शयनकक्ष, बैठक कक्ष, कार्यालय, स्थापित, आवश्यकता, पर्याप्त, उपयुक्त, उचित, सूचित, प्राप्त, विवरण, अनुसार, सुविधाजनक\n\n"
+        "RELIGIOUS / CULTURAL GREETINGS — STRICT RULE:\n"
+        "Phrases like 'जय जय गुरुदेव', 'जय श्री राम', 'जय माता दी', 'राधे राधे', 'jai gurudev', 'jai shri ram' "
+        "are regional phone-answering greetings — NOT expressions of disinterest or goodbye. "
+        "When the buyer says any such phrase, acknowledge warmly with a short 'जी जी' or 'जी, बिल्कुल' "
+        "and IMMEDIATELY continue the product qualification. NEVER close the call or say 'कोई बात नहीं' in response to these."
     ),
 }
 
@@ -1563,7 +1568,62 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         nonlocal _nudge_count, _inactivity_task, _nudge_in_progress
         # Nudge 1 at 10 s, nudge 2 at 10 s after, close 5 s after nudge 2 (25 s total)
         sleep_secs = 5.0 if _nudge_count >= 2 else 10.0
-        await asyncio.sleep(sleep_secs)
+
+        # Early Sarvam rescue at 4 s — only on the first timer cycle with no live
+        # user turn yet.  Handles "user spoke right after greeting but Gemini missed
+        # it": instead of waiting the full 10 s we detect the missed speech and
+        # rescue at 4 s, preventing user drop-off from 10 s of silence.
+        if _nudge_count == 0 and _greeting_done and _turn_counter == 0:
+            await asyncio.sleep(4.0)
+            if _call_ended or _closing_triggered:
+                return
+            if _turn_counter > 0 or _pending_user_text:
+                # User responded while we were sleeping — reset and let normal flow take over
+                _nudge_count = 0
+                _inactivity_task = asyncio.create_task(_inactivity_timeout())
+                return
+            if _user_audio["speech_ms"] > 200:
+                _log.info(
+                    f"[INACTIVITY] speech_ms={_user_audio['speech_ms']:.0f} at 4s — "
+                    "early Sarvam rescue (Gemini missed initial response)"
+                )
+                _nudge_count = 0
+                _inactivity_task = asyncio.create_task(_inactivity_timeout())
+                _turn_at_start_e = _turn_counter
+                _speaking_at_start_e = _speaking_turns_completed
+                async def _early_sarvam_rescue(
+                    _t=_turn_at_start_e, _s=_speaking_at_start_e
+                ) -> None:
+                    text = await _sarvam_stt_fallback()
+                    if not text or _call_ended:
+                        return
+                    if _turn_counter > _t or _speaking_turns_completed > _s or _pending_user_text:
+                        _log.info(f"[SARVAM-RESCUE] early rescue — already handled, skipping ({text!r})")
+                        return
+                    try:
+                        _agent_s = getattr(session.agent_state, "value", None) or str(session.agent_state)
+                        if _agent_s == "speaking":
+                            _log.info(f"[SARVAM-RESCUE] early rescue — bot speaking, skipping ({text!r})")
+                            return
+                    except Exception:
+                        pass
+                    _log.info(f"[SARVAM-RESCUE] early rescue — Gemini missed — injecting: {text!r}")
+                    try:
+                        _rt._send_client_event(
+                            types.LiveClientContent(
+                                turns=[types.Content(parts=[types.Part(text=text)], role="user")],
+                                turn_complete=True,
+                            )
+                        )
+                    except Exception as e:
+                        _log.warning(f"[SARVAM-RESCUE] early rescue inject failed: {e}")
+                asyncio.create_task(_early_sarvam_rescue())
+                return
+            # No early rescue needed — continue to full 10 s nudge cycle
+            await asyncio.sleep(6.0)
+        else:
+            await asyncio.sleep(sleep_secs)
+
         _nudge_count += 1
         if _call_ended:
             return
@@ -2789,7 +2849,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     async def _post_greeting_inject() -> None:
                         # Wait for Sarvam to finish + buffer for live speech to arrive first.
                         # If the user already responded live, _turn_counter > 0 and we skip.
-                        await asyncio.sleep(2.5)
+                        await asyncio.sleep(0.8)
                         if _call_ended or _closing_triggered or _turn_counter > 0:
                             return
                         text = _muted_inject.get("text", "")
