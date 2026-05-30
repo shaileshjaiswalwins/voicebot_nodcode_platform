@@ -374,7 +374,14 @@ async def generate_call_analysis(
         "zaroorat ho toh",
     ]
     _last_agent_text = (_agent_turns_with_text[-1].get("text") or "").lower() if _agent_turns_with_text else ""
-    if any(m.lower() in _last_agent_text for m in _NI_AGENT_MARKERS):
+    # Guard: the approved closing also contains "कोई बात नहीं जी" as a filler before
+    # "sellers आपको सब guide कर लेंगे / सारी details मिल गईं / relevant sellers".
+    # Only fire the NI short-circuit when the approved closing markers are absent.
+    _approved_closing_present = (
+        "सारी details मिल गईं" in _last_agent_text
+        or "relevant sellers" in _last_agent_text
+    )
+    if not _approved_closing_present and any(m.lower() in _last_agent_text for m in _NI_AGENT_MARKERS):
         return {
             "call_outcome": "Not Interested",
             "call_outcome_description": DISPOSITION_MAP["Not Interested"],

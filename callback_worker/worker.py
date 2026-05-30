@@ -65,9 +65,23 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
     ok = await send_callback(payload, http_session, CALLBACK_API_URL)
 
     if ok:
+        saved_analysis = {
+            "call_outcome": analysis.get("call_outcome", ""),
+            "call_outcome_description": analysis.get("call_outcome_description", ""),
+            "call_summary": analysis.get("call_summary", ""),
+            "is_business": analysis.get("is_business", ""),
+            "business_name": analysis.get("business_name", ""),
+            "business_city": analysis.get("business_city", ""),
+            "qna": analysis.get("qna") or [],
+            "product_change": analysis.get("product_change") or {},
+            "rescheduled_to": analysis.get("rescheduled_to", "") or "",
+            "deal_value": b2b_score.get("deal_value", ""),
+            "lead_intent_score": b2b_score.get("lead_intent_score", ""),
+            "urgency_flag": b2b_score.get("urgency_flag", "no"),
+        }
         await loop.run_in_executor(None, lambda: collection.update_one(
             {"_id": doc_id},
-            {"$set": {"tagged": True, "tagged_at": datetime.utcnow()}},
+            {"$set": {"tagged": True, "tagged_at": datetime.utcnow(), "analysis": saved_analysis}},
         ))
         logger.info(f"[WORKER] Tagged doc {doc_id} | lead_id={lead_id!r}")
     else:
