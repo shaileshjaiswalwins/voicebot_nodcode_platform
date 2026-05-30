@@ -38,6 +38,9 @@ _BARE_CALL_SIGNAL_TOKENS: frozenset = frozenset(
     for phrase in {
         # hello / hi variants
         "hello", "हेलो", "helo", "halo", "हैलो", "hi", "हाय",
+        # Gujarati/Marathi phone-answer greeting — "Om" / "Jai Shree Krishna" shortened
+        # "Om Hello" is purely a phone-pickup reflex, not product confirmation
+        "om", "ом",
         # haan / ji / yes variants
         "हाँ", "हां", "haan", "ha", "han", "ji", "jee",
         # "go ahead / speak" — call-answering phrases, NOT product confirmation
@@ -1245,12 +1248,14 @@ STRICT OUTPUT RULES:
                 if (
                     outcome == "Interested"
                     and duration_secs is not None
-                    and duration_secs < 20
+                    and duration_secs < 25
                 ):
                     _BARE_ACK_SET = {
                         "haan", "ha", "han", "ji", "jee", "yes", "okay", "ok",
                         "हाँ", "हां", "हा", "जी", "ठीक", "theek", "bilkul",
                         "haan ji", "ji haan", "sahi", "acha", "achha", "accha",
+                        # Gujarati/Marathi phone-answer greeting — never a product confirmation
+                        "om", "hello", "hi", "हेलो", "हाय",
                     }
                     _bare_ack_nfc = {unicodedata.normalize("NFC", w) for w in _BARE_ACK_SET}
                     _all_user_words: set[str] = set()
@@ -1268,7 +1273,7 @@ STRICT OUTPUT RULES:
                                 _all_user_words.add(_clean)
                     if not _all_user_words or not (_all_user_words - _bare_ack_nfc):
                         logger.info(
-                            f"[POST-PROC] Interested → Short Hangup: duration={duration_secs:.0f}s < 20s, "
+                            f"[POST-PROC] Interested → Short Hangup: duration={duration_secs:.0f}s < 25s, "
                             f"user signal is bare acknowledgement only: {_all_user_words}"
                         )
                         outcome = "Short Hangup"

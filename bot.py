@@ -1594,11 +1594,19 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 async def _early_sarvam_rescue(
                     _t=_turn_at_start_e, _s=_speaking_at_start_e
                 ) -> None:
-                    text = await _sarvam_stt_fallback()
+                    text = await _sarvam_stt_fallback(min_speech_ms=200)
                     if not text or _call_ended:
                         return
                     if _turn_counter > _t or _speaking_turns_completed > _s or _pending_user_text:
                         _log.info(f"[SARVAM-RESCUE] early rescue — already handled, skipping ({text!r})")
+                        return
+                    # Skip if muted-capture already injected this turn — dual injection confuses Gemini
+                    _now_e = asyncio.get_event_loop().time()
+                    if _muted_inject_sent_time > 0 and (_now_e - _muted_inject_sent_time) < 8.0:
+                        _log.info(
+                            f"[SARVAM-RESCUE] early rescue — muted-capture inject already sent "
+                            f"{_now_e - _muted_inject_sent_time:.1f}s ago — skipping ({text!r})"
+                        )
                         return
                     try:
                         _agent_s = getattr(session.agent_state, "value", None) or str(session.agent_state)
@@ -1701,7 +1709,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 async def _sarvam_rescue(
                     _t=_turn_at_start, _s=_speaking_at_start
                 ) -> None:
-                    text = await _sarvam_stt_fallback()
+                    text = await _sarvam_stt_fallback(min_speech_ms=200)
                     if not text or _call_ended:
                         return
                     if _turn_counter > _t:
@@ -1712,6 +1720,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         return
                     if _pending_user_text:
                         _log.info(f"[SARVAM-RESCUE] Gemini partial in flight — skipping inject ({text!r})")
+                        return
+                    # Skip if muted-capture already injected this turn — dual injection confuses Gemini
+                    _now_r = asyncio.get_event_loop().time()
+                    if _muted_inject_sent_time > 0 and (_now_r - _muted_inject_sent_time) < 8.0:
+                        _log.info(
+                            f"[SARVAM-RESCUE] muted-capture inject already sent "
+                            f"{_now_r - _muted_inject_sent_time:.1f}s ago — skipping ({text!r})"
+                        )
                         return
                     try:
                         _agent_s = getattr(session.agent_state, "value", None) or str(session.agent_state)
@@ -1797,6 +1813,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # Holds the last muted-window transcript (Sarvam capture while mic was OFF).
     # Never sent to Gemini — combined with the next live user FINAL for Mongo/analysis.
     _muted_inject: dict = {"text": ""}
+    # Timestamp (loop time) when the post-greeting muted-capture inject was last sent to Gemini.
+    # Used by Sarvam rescue functions to avoid sending a second competing injection.
+    _muted_inject_sent_time: float = 0.0
     # Cumulative log of every muted-window Sarvam transcript across the call.
     # Saved to Mongo as a separate field so the analysis LLM can see what the user
     # said during bot speaking turns even when those turns were discarded from _live_transcript.
@@ -2034,14 +2053,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         )
         return [t for t in cleaned.split() if t]
 
-    async def _sarvam_stt_fallback() -> str | None:
+    async def _sarvam_stt_fallback(min_speech_ms: int | None = None) -> str | None:
         """Transcribe the WAV file written by _buffer_user_audio using Sarvam.
-        Silero VAD gates the path — only invoked when genuine human voice is present."""
+        Silero VAD gates the path — only invoked when genuine human voice is present.
+        min_speech_ms overrides the global threshold (used by rescue paths to accept
+        short confirmatory words like हेलो/यस that the global 500ms would reject)."""
         if not _user_audio["has_audio"]:
             return None
         speech_ms = _user_audio["speech_ms"]
-        if speech_ms < _sarvam_min_speech_ms:
-            _log.info(f"[STT] skipped — speech_ms={speech_ms:.0f} < min={_sarvam_min_speech_ms}")
+        _effective_min = min_speech_ms if min_speech_ms is not None else _sarvam_min_speech_ms
+        if speech_ms < _effective_min:
+            _log.info(f"[STT] skipped — speech_ms={speech_ms:.0f} < min={_effective_min}")
             return None
         wav_path = _wav_paths[0]
         wav_data: bytes | None = None
@@ -2869,6 +2891,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             "haan", "ha", "han", "ji", "jee", "okay", "ok",
                             "हाँ", "हां", "बोलो", "bol", "bolo",
                             "बोला", "bola",  # past-tense "spoke" — reflexive phone-pickup, not a yes
+                            "om",            # Gujarati/Marathi phone-answer greeting (Jai Shree Krishna)
                         })
                         if _inject_tokens and not (_inject_tokens - _BARE_GREETING_TOKENS):
                             _log.info(
@@ -2889,13 +2912,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                                     turn_complete=True,
                                 )
                             )
-                            # Watchdog: if Gemini doesn't start speaking within 5 s, re-inject.
+                            nonlocal _muted_inject_sent_time
+                            _muted_inject_sent_time = asyncio.get_event_loop().time()
+                            # Watchdog: if Gemini doesn't start speaking within 3 s, re-inject.
                             # Handles silent Gemini failures after muted-capture injection.
                             # Snapshot speaking count so we don't re-inject if Gemini already responded.
                             _injected_text = text
                             _speaking_count_at_inject = _speaking_turns_completed
                             async def _post_greeting_watchdog() -> None:
-                                await asyncio.sleep(5.0)
+                                await asyncio.sleep(3.0)
                                 if _call_ended or _closing_triggered or _turn_counter > 0:
                                     return
                                 # Bot already spoke at least once since inject — no need to re-inject.
@@ -2906,7 +2931,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                                 if _s_val == "speaking":
                                     return
                                 _log.warning(
-                                    f"[GEMINI-WATCHDOG] post-greeting inject no response in 5s "
+                                    f"[GEMINI-WATCHDOG] post-greeting inject no response in 3s "
                                     f"— re-injecting {_injected_text!r}"
                                 )
                                 try:
