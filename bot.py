@@ -1594,7 +1594,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 async def _early_sarvam_rescue(
                     _t=_turn_at_start_e, _s=_speaking_at_start_e
                 ) -> None:
-                    text = await _sarvam_stt_fallback(min_speech_ms=200)
+                    _buffered = _muted_inject.get("text", "")
+                    if _buffered:
+                        text = _buffered
+                        _muted_inject["text"] = ""
+                        _log.info(f"[SARVAM-RESCUE] early rescue — using buffered muted-capture: {text!r}")
+                    else:
+                        text = await _sarvam_stt_fallback(min_speech_ms=200)
                     if not text or _call_ended:
                         return
                     if _turn_counter > _t or _speaking_turns_completed > _s or _pending_user_text:
@@ -1709,7 +1715,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 async def _sarvam_rescue(
                     _t=_turn_at_start, _s=_speaking_at_start
                 ) -> None:
-                    text = await _sarvam_stt_fallback(min_speech_ms=200)
+                    _buffered = _muted_inject.get("text", "")
+                    if _buffered:
+                        text = _buffered
+                        _muted_inject["text"] = ""
+                        _log.info(f"[SARVAM-RESCUE] using buffered muted-capture: {text!r}")
+                    else:
+                        text = await _sarvam_stt_fallback(min_speech_ms=200)
                     if not text or _call_ended:
                         return
                     if _turn_counter > _t:
@@ -1816,6 +1828,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # Timestamp (loop time) when the post-greeting muted-capture inject was last sent to Gemini.
     # Used by Sarvam rescue functions to avoid sending a second competing injection.
     _muted_inject_sent_time: float = 0.0
+    # Monotonic time when the last muted-capture Sarvam call returned empty.
+    # Echo guard uses this: if Gemini fires a new speaking turn within 200 ms of this
+    # timestamp the response is almost certainly a PSTN echo, not real user speech.
+    _muted_capture_empty_time: float = 0.0
     # Cumulative log of every muted-window Sarvam transcript across the call.
     # Saved to Mongo as a separate field so the analysis LLM can see what the user
     # said during bot speaking turns even when those turns were discarded from _live_transcript.
@@ -2146,7 +2162,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     async def _transcribe_muted_period(frames: list, speech_ms: float) -> None:
         """Transcribe audio captured during a muted window (bot speaking turn + post-hold).
         Uses Sarvam for transcription. No Silero gate — we want everything the user said, even brief."""
-        nonlocal _call_ended
+        nonlocal _call_ended, _muted_capture_empty_time
         if not frames:
             return
         if not SARVAM_API_KEY:
@@ -2192,6 +2208,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _log.warning(f"[MUTED-CAPTURE] Sarvam error: {e}")
         if not text:
             _log.info(f"[MUTED-CAPTURE] empty transcript [{_cascade_tag}] (speech_ms={speech_ms:.0f})")
+            _muted_capture_empty_time = asyncio.get_event_loop().time()
             return
         # IVR / voicemail check — captured during muted window (greeting)
         if _is_ivr_message(text):
@@ -2751,7 +2768,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _barge_in_fired, _bot_resp_watchdog_task, _speaking_start_time, _speaking_turns_completed
+        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _barge_in_fired, _bot_resp_watchdog_task, _speaking_start_time, _speaking_turns_completed, _muted_capture_empty_time, _last_user_final_text
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
@@ -2787,6 +2804,24 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 if _muted_transcript_log and _muted_transcript_log[-1] == _muted_inject["text"]:
                     _muted_transcript_log.pop()
                 _muted_inject["text"] = ""
+            # Echo guard: if Gemini fires a new speaking turn within 200 ms of an empty
+            # muted-capture result, it is almost certainly reacting to its own TTS echoing
+            # back through the PSTN path — not real user speech. Interrupt immediately so
+            # the user's actual response can be heard.
+            _now_eg = asyncio.get_event_loop().time()
+            if (_greeting_done
+                    and _muted_capture_empty_time > 0
+                    and (_now_eg - _muted_capture_empty_time) < 0.20):
+                _log.warning(
+                    f"[ECHO-GUARD] new speaking turn {(_now_eg - _muted_capture_empty_time)*1000:.0f}ms "
+                    "after empty muted-capture — suspected TTS echo, interrupting"
+                )
+                _muted_capture_empty_time = 0.0
+                _last_user_final_text = ""   # prevent stale watchdog re-inject after interrupt
+                _barge_in_fired = True       # keeps mic ON through the post-speech-hold that follows
+                session.interrupt()
+                return
+            _muted_capture_empty_time = 0.0
             # Mute mic at the start of every bot speaking turn.
             # For mid-call turns: unmute after 4 s so the user can interrupt.
             # Greeting turn: unmute after 5 s so Gemini warms up to the audio
