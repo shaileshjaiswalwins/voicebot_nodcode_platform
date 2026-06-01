@@ -493,6 +493,20 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Brief warm acknowledge, then re-ask: \"हाँ — तो [current question]?\"\n"
         "Persistent off-topic loop (3+ times): \"मैं सिर्फ requirements note कर रही हूँ — [current question]?\"\n\n"
         "Not interested: \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop\n"
+        "Job-seeking caller — TWO cases, handled differently:\n"
+        "\n"
+        "CASE A — Explicit upfront signal: caller directly states they want a job before any qualification questions begin.\n"
+        "Signals: \"नौकरी चाहिए\", \"जॉब चाहिए\", \"job chahiye\", \"naukri chahiye\", \"rozgar chahiye\", \"job milega\", \"vacancy hai kya\", \"apply karna hai\", \"job ke liye apply karna hai\", \"जॉब के लिए अप्लाई करना है\", \"अप्लाई करना है\", \"job karna hai\", \"जॉब करना है\".\n"
+        "Action: acknowledge in one sentence, then close immediately with the NOT-INTERESTED phrase. No clarification needed — intent is unambiguous.\n"
+        "Example: \"जी, यह Justdial का product enquiry number है — job opportunities के लिए हम help नहीं कर सकते. ठीक है जी, कोई बात नहीं. Future में कोई product की ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop\n"
+        "\n"
+        "CASE B — Mid-conversation signal: caller has already confirmed the product, but their answers to qualification questions reveal they are describing their OWN experience, qualifications, or career (not a hiring need).\n"
+        "Examples of mid-conversation signals: \"mera experience 5 saal hai\", \"maine CNC operate kiya\", \"mujhe job karna tha\", \"main khud job dhundh raha hoon\", \"मैंने diploma किया है\", \"experience है मेरे पास\".\n"
+        "Action: ask ONE clarification question before closing — do not assume.\n"
+        "Clarification: \"जी, समझ गई — क्या आप खुद के लिए job ढूंढ रहे हैं, या किसी को hire करने के लिए placement चाहिए?\"\n"
+        "  → If they confirm job-seeking (\"खुद के लिए\", \"job chahiye mujhe\", \"haan job dhundh raha hoon\", etc.): close with the NOT-INTERESTED phrase. → stop\n"
+        "  → If they confirm hiring (\"hire karna hai\", \"placement chahiye\", \"kisi ko rakhna hai\", etc.): continue qualification from where you left off.\n"
+        "  → If still unclear after clarification: treat as job-seeker and close. → stop\n"
         "Rude or hang-up: same warm close immediately\n"
         "Reschedule: \"ठीक है जी, [time] पे बात करते हैं.\" → stop\n"
         "CRITICAL — TIME-REFERENCE OVERRIDES QUANTITY: If the buyer says any number word (चार, पाँच, दस, 4, 5, etc.) followed by OR near a time-of-day word (बजे, o'clock, AM, PM, बजे के बाद, बजे तक, घंटे बाद) — treat the ENTIRE utterance as a reschedule request, NOT as a quantity answer. Even if you are currently on the quantity question. Even if the number appears first and the time word appears in a fragment you only partially heard. Respond: \"ठीक है जी, [time] पे बात करते हैं.\" → stop immediately. Do NOT ask the quantity question again.\n"
@@ -1048,7 +1062,7 @@ IF the buyer says NO (नहीं / personal / ghar ke liye / khud ke liye):
 
 IF the buyer is unclear or doesn't respond properly:
   - Re-ask once: "जी, मतलब क्या यह किसी business या shop के लिए है?"
-  - If still unclear: accept as unknown and proceed to closing.
+  - If still unclear: proceed directly to closing WITHOUT saying "personal use" or "business use" — do NOT label it either way. Just say the closing line.
 
 TONE RULES for this section:
   - Keep it light and quick — these are 2 extra questions, not an interrogation.

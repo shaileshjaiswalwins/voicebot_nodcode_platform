@@ -390,6 +390,72 @@ async def generate_call_analysis(
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
+    # Pre-LLM: detect job-seeking caller intent.
+    # When the buyer explicitly states they are looking for a job/employment, this call is
+    # not a product inquiry. Short-circuit to Not Interested before the LLM can misclassify
+    # the engagement (e.g. treating "naukri chahiye" as product confirmation).
+    # Only scan user turns — the bot itself never uses job-seeking phrases.
+    _JOB_SEEKING_PATTERNS = [
+        # Hindi — "नौकरी" exclusively means "job/employment"
+        "नौकरी चाहिए", "नोकरी चाहिए",
+        "नौकरी है", "नोकरी है",
+        "नौकरी मिलेगी", "नोकरी मिलेगी",
+        "नौकरी दे", "नोकरी दे",
+        "नौकरी ढूंढ", "नोकरी ढूंढ",
+        "नौकरी के लिए", "नोकरी के लिए",
+        "नौकरी मिलना", "नोकरी मिलना",
+        "नौकरी लगवा", "नोकरी लगवा",
+        # Devanagari "जॉब" — STT commonly transcribes "job" in Devanagari script
+        "जॉब चाहिए", "जॉब मिलेगा", "जॉब मिलेगी",
+        "जॉब के लिए", "जॉब्स के लिए",
+        "जॉब ढूंढ", "जॉब दिला", "जॉब करना",
+        "जॉब करना था", "जॉब करना है",
+        "जॉब मिलना", "जॉब लगवा",
+        # Devanagari "अप्लाई" — STT transcription of "apply"
+        "अप्लाई करना है", "अप्लाई करना था",
+        "अप्लाई करना चाहता", "अप्लाई करना चाहती",
+        "अप्लाई कर सकते", "अप्लाई कैसे",
+        # Mixed-script apply patterns
+        "apply करना है", "apply करना था",
+        "apply karna hai", "apply karna tha",
+        "apply karna chahta", "apply karna chahti",
+        "job ke liye apply", "jobs ke liye apply",
+        "job mein apply", "job apply karna",
+        # Job-doing intent (wanting to work, not buy)
+        "job karna hai", "job karna tha", "job karni hai",
+        "job karna chahta", "job karna chahti",
+        "mujhe job karna", "mujhe job chahiye",
+        # Romanised / Hinglish
+        "naukri chahiye", "naukri chaahiye",
+        "naukri milegi", "naukri milega",
+        "naukri hai",
+        "naukri ke liye",
+        "job chahiye", "job chaahiye",
+        "job milega", "job milegi",
+        "job ke liye call", "job ke liye phone",
+        "job dhundh", "job ki talash",
+        "job dila", "job lena hai",
+        "rozgar chahiye", "rojgar chahiye",
+        "rozgar milega", "rojgar milega",
+        "employment chahiye",
+        "hiring ho rahi hai", "hiring chal raha",
+        "vacancy hai kya", "vacancy chahiye",
+    ]
+    _user_text_for_job = unicodedata.normalize("NFC", " ".join(
+        (t.get("text") or "").lower() for t in non_empty_user_turns
+    ))
+    if any(
+        unicodedata.normalize("NFC", pat.lower()) in _user_text_for_job
+        for pat in _JOB_SEEKING_PATTERNS
+    ):
+        return {
+            "call_outcome": "Not Interested",
+            "call_outcome_description": DISPOSITION_MAP["Not Interested"],
+            "call_summary": "Caller is seeking employment/job opportunities — this is not a product inquiry.",
+            "is_business": "", "business_city": "", "business_name": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
+
     # Transfer-to-someone-else: receptionist/assistant answered and offered to connect
     # to the actual decision maker, OR user handed the phone to another person mid-call.
     # No product confirmation possible → Could Not Confirm.
@@ -436,6 +502,39 @@ async def generate_call_analysis(
             "call_outcome": "Short Hangup",
             "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
             "call_summary": "No product engagement — buyer responded only with bare call-presence signals.",
+            "is_business": "", "business_city": "", "business_name": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
+
+    # Pre-LLM: agent stuck on opening question — never progressed to spec questions.
+    # Pattern: last agent turn is still a re-ask of the opening product confirmation
+    # ("तो क्या आपको X चाहिए?") AND the user gave only bare call-presence signals
+    # (or nothing at all).  Multiple re-asks of the opening look like agent "progression"
+    # to the LLM inference rules, producing false Interested classifications.
+    # "तो क्या आपको" is the bot's specific re-ask phrasing — spec questions never use it.
+    _last_agent_is_opening_reask = (
+        "तो क्या आपको" in _last_agent_text
+        or "to kya aapko" in _last_agent_text
+    )
+    _all_user_bare_or_empty = not non_empty_user_turns or all(
+        not (
+            {_strip_punct(w) for w in (t.get("text") or "").split() if w.strip()}
+            - _BARE_CALL_SIGNAL_TOKENS
+        )
+        for t in non_empty_user_turns
+    )
+    if _last_agent_is_opening_reask and _all_user_bare_or_empty:
+        _muted_note = (
+            f" Muted capture: {'; '.join(muted_transcript)}." if muted_transcript else ""
+        )
+        return {
+            "call_outcome": "Short Hangup",
+            "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
+            "call_summary": (
+                "Agent re-asked the opening product-confirmation question and received no "
+                "substantive response — buyer gave only a bare call-presence signal or "
+                f"nothing at all.{_muted_note}"
+            ),
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
@@ -593,11 +692,13 @@ async def generate_call_analysis(
     _reask_opening_note = (
         "\n⚠ AGENT RE-ASKED THE OPENING QUESTION: The agent's second turn re-asked the "
         "product confirmation question, meaning the bot did NOT accept the first user "
-        "response as a valid product confirmation. If the second user response is also "
-        "off-topic, ambiguous, or background noise (e.g. talking to someone nearby, "
-        "side conversation, generic filler), GP-7 Case A applies — the bot may have "
-        "advanced incorrectly a second time. Do NOT rely on agent progression alone as "
-        "structural proof of product_confirmed = TRUE. Evaluate from the buyer's actual words."
+        "response as a valid product confirmation. GP-7 Case A applies — the bot may have "
+        "advanced incorrectly. Do NOT rely on agent progression alone as structural proof "
+        "of product_confirmed = TRUE. Evaluate from the buyer's actual words.\n"
+        "CRITICAL — if the buyer's only captured speech is a bare call-presence signal "
+        "(हेलो / हाँ / जी / ok) or there is no live buyer turn at all: product_confirmed = FALSE. "
+        "The agent's multiple turns are all re-asks of the same opening question — NOT "
+        "progression to spec questions. → Short Hangup."
         if _agent_reask_opening else ""
     )
     _wrong_opener_note = (
