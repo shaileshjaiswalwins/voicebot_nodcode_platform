@@ -362,8 +362,9 @@ async def generate_call_analysis(
 
     # Pre-LLM: detect agent's not-interested closing phrase.
     # The bot emits "कोई बात नहीं जी, future में ज़रूरत हो तो Justdial पे call कर सकते हैं"
-    # ONLY when the buyer explicitly rejected the product. This is a hard structural signal —
-    # the agent would not say this if the buyer had shown any interest.
+    # most commonly when the buyer rejected the product, but also (incorrectly) when the
+    # buyer is a seller/distributor or has already spoken to a seller. Bypass the short-circuit
+    # for those cases so the LLM can assign the correct outcome.
     _NI_AGENT_MARKERS = [
         "कोई बात नहीं",
         "future में ज़रूरत",
@@ -381,7 +382,58 @@ async def generate_call_analysis(
         "सारी details मिल गईं" in _last_agent_text
         or "relevant sellers" in _last_agent_text
     )
-    if not _approved_closing_present and any(m.lower() in _last_agent_text for m in _NI_AGENT_MARKERS):
+    # Bypass patterns: if user turns contain seller-side signals, fall through to LLM so it
+    # can classify as Seller Intent instead of Not Interested.
+    _NI_SELLER_BYPASS = [
+        "खुद डिस्ट्रीब्यूट", "khud distribute", "hum distribute", "हम डिस्ट्रीब्यूट",
+        "apne aap distribute",
+        "खुद बेचते", "khud bechte", "hum bechte", "हम बेचते",
+        "हम सप्लायर", "hum supplier", "supplier hain", "supplier hai",
+        "हम manufacturer", "hum manufacturer", "manufacturer hain", "manufacturer hai",
+        "हम बनाते", "hum banate",
+        "खुद supply", "hum supply", "हम supply करते",
+        "हम dealer", "hum dealer", "dealer hain", "dealer hai",
+        "हम distributor", "hum distributor", "distributor hain", "distributor hai",
+        "हम vendor", "hum vendor", "vendor hain", "vendor hai",
+        "खुद produce", "hum produce", "हम produce",
+        "खुद इंक्वायरी", "khud inquiry", "khud enquiry",
+    ]
+    # Bypass patterns: if user turns contain already-spoken signals, fall through to LLM so
+    # it can classify as Already Spoken instead of Not Interested.
+    _NI_ALREADY_SPOKEN_BYPASS = [
+        "बातचीत हो गई", "baatcheet ho gayi", "baat cheet ho gayi",
+        "बात हो गई", "baat ho gayi", "बात हो चुकी", "baat ho chuki",
+        "बात कर दी", "baat kar di", "बात कर ली", "baat kar li",
+        "कॉल आ गया था", "call aa gaya tha", "call aaya tha",
+        "उनका कॉल", "unka call",
+        "already spoken", "already baat", "already hua",
+        "already ho gaya", "already le liya", "already purchase",
+        "already connected", "already deal",
+        "kaam ho gaya", "काम हो गया", "khatam ho gaya", "खत्म हो गया",
+        "pura ho gaya", "पूरा हो गया", "poora ho gaya",
+        "le liya", "ले लिया",
+        "kisi ne baat ki", "किसी ने बात की",
+        "seller ne call", "seller ka call", "seller se baat",
+        "idar se baat", "इधर से बात", "idhar se baat",
+        "sorted", "ho gaya kaam",
+    ]
+    _user_text_ni_check = unicodedata.normalize("NFC", " ".join(
+        (t.get("text") or "").lower() for t in non_empty_user_turns
+    ))
+    _ni_seller_bypass = any(
+        unicodedata.normalize("NFC", p.lower()) in _user_text_ni_check
+        for p in _NI_SELLER_BYPASS
+    )
+    _ni_already_spoken_bypass = any(
+        unicodedata.normalize("NFC", p.lower()) in _user_text_ni_check
+        for p in _NI_ALREADY_SPOKEN_BYPASS
+    )
+    if (
+        not _approved_closing_present
+        and any(m.lower() in _last_agent_text for m in _NI_AGENT_MARKERS)
+        and not _ni_seller_bypass
+        and not _ni_already_spoken_bypass
+    ):
         return {
             "call_outcome": "Not Interested",
             "call_outcome_description": DISPOSITION_MAP["Not Interested"],
