@@ -66,6 +66,8 @@ _BARE_CALL_SIGNAL_TOKENS: frozenset = frozenset(
         # function word "है" appearing alone is a filler, not substantive content
         # e.g. "हाँ हाँ है है" from Sarvam rescue injections on silence
         "है",
+        # Marathi/regional reflexive phone-pickup "yes" — not product confirmation
+        "हो", "हो जी", "होजी", "हाँ हो",
     }
     for word in phrase.split()
     if word.strip()
@@ -501,6 +503,12 @@ async def generate_call_analysis(
         "employment chahiye",
         "hiring ho rahi hai", "hiring chal raha",
         "vacancy hai kya", "vacancy chahiye",
+        # "related" / "se related" patterns — STT commonly produces these for job-seeker callers
+        "job se related", "job se releted", "job related", "job releted",
+        "जॉब से रिलेटेड", "जॉब रिलेटेड", "job se riletad", "job riletad",
+        "naukri se related", "naukri related",
+        "employment se related", "employment related",
+        "work se related", "work related dekh",
     ]
     _user_text_for_job = unicodedata.normalize("NFC", " ".join(
         (t.get("text") or "").lower() for t in non_empty_user_turns

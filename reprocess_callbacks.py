@@ -26,7 +26,7 @@ from callback_worker.callback import send_callback_update
 
 # All leads that were incorrectly classified (these are lead_ids, not _ids)
 LEAD_IDS: list[str] = [
-    "6a1e9ac564fb55256d06c11b",  # misclassified as interested; should be short_hangup / not_interested
+    "6a1eda7a4866a90ff9285624",  # Office Container — analysis was null (N/A); job seeker "जॉब से रिलेटेड" → Not Interested
 ]
 
 

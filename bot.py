@@ -1287,6 +1287,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _sarvam_silero_min_speech_ms      = int(_bot_config.get("sarvam_silero_min_speech_ms") or 400)
     _gemini_silero_fallback_speech_ms = int(_bot_config.get("gemini_silero_fallback_speech_ms") or 150)
     _post_speech_hold_ms             = int(_bot_config.get("post_speech_hold_ms") or 800)
+    # Inactivity timer knobs — configurable so production can tune without redeploy.
+    # Total first-nudge latency = first_rescue_secs + first_nudge_gap_secs (default 8s).
+    _inactivity_first_rescue_secs    = float(_bot_config.get("inactivity_first_rescue_secs")    or 4.0)
+    _inactivity_first_nudge_gap_secs = float(_bot_config.get("inactivity_first_nudge_gap_secs") or 4.0)  # was 6.0 → total 8s
+    _inactivity_nudge_secs           = float(_bot_config.get("inactivity_nudge_secs")           or 10.0)
+    _inactivity_close_secs           = float(_bot_config.get("inactivity_close_secs")           or 5.0)
     _functions: list[dict] = _bot_config.get("functions") or []
     _function_calling   = bool(_bot_config.get("function_calling", False)) and bool(_functions)
     _lang_cfg           = HINDI_LANG_CONFIG
@@ -1579,15 +1585,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     async def _inactivity_timeout() -> None:
         nonlocal _nudge_count, _inactivity_task, _nudge_in_progress
-        # Nudge 1 at 10 s, nudge 2 at 10 s after, close 5 s after nudge 2 (25 s total)
-        sleep_secs = 5.0 if _nudge_count >= 2 else 10.0
+        # Nudge 1 at (first_rescue + first_nudge_gap) s (default 8 s),
+        # nudge 2 at nudge_secs after (default 10 s), close at close_secs after nudge 2 (default 5 s).
+        sleep_secs = _inactivity_close_secs if _nudge_count >= 2 else _inactivity_nudge_secs
 
-        # Early Sarvam rescue at 4 s — only on the first timer cycle with no live
+        # Early Sarvam rescue checkpoint — only on the first timer cycle with no live
         # user turn yet.  Handles "user spoke right after greeting but Gemini missed
-        # it": instead of waiting the full 10 s we detect the missed speech and
-        # rescue at 4 s, preventing user drop-off from 10 s of silence.
+        # it": detect missed speech early and rescue, then fire the nudge after the
+        # gap (default: 4s rescue + 4s gap = 8s total to first nudge).
         if _nudge_count == 0 and _greeting_done and _turn_counter == 0:
-            await asyncio.sleep(4.0)
+            await asyncio.sleep(_inactivity_first_rescue_secs)
             if _call_ended or _closing_triggered:
                 return
             if _turn_counter > 0 or _pending_user_text:
@@ -1646,8 +1653,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         _log.warning(f"[SARVAM-RESCUE] early rescue inject failed: {e}")
                 asyncio.create_task(_early_sarvam_rescue())
                 return
-            # No early rescue needed — continue to full 10 s nudge cycle
-            await asyncio.sleep(6.0)
+            # No early rescue needed — wait the remaining gap then nudge
+            await asyncio.sleep(_inactivity_first_nudge_gap_secs)
         else:
             await asyncio.sleep(sleep_secs)
 
@@ -1772,6 +1779,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     except Exception as e:
                         _log.warning(f"[SARVAM-RESCUE] inject failed: {e}")
                 asyncio.create_task(_sarvam_rescue())
+                return
+            # Guard: a muted-capture text was injected recently (within 8 s) — Gemini is
+            # likely still processing it.  Suppressing the nudge here prevents double-engagement
+            # when the caller spoke during the greeting window and the post-greeting watchdog
+            # is still running.  This race window grew when we shortened the first-nudge gap.
+            _now2 = asyncio.get_event_loop().time()
+            if _muted_inject.get("text") or (
+                _muted_inject_sent_time > 0 and (_now2 - _muted_inject_sent_time) < 8.0
+            ):
+                _log.info("[INACTIVITY] nudge suppressed — muted-capture inject in flight/recent")
+                _nudge_count = 0
+                _inactivity_task = asyncio.create_task(_inactivity_timeout())
                 return
             nudge = INACTIVITY_PHRASE
             _log.info(f"[INACTIVITY] {sleep_secs:.0f}s silence — nudge {_nudge_count}: {nudge!r}")
@@ -2976,6 +2995,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             "हाँ", "हां", "बोलो", "bol", "bolo",
                             "बोला", "bola",  # past-tense "spoke" — reflexive phone-pickup, not a yes
                             "om",            # Gujarati/Marathi phone-answer greeting (Jai Shree Krishna)
+                            "हो", "हो जी", "होजी", "हाँ हो",  # Marathi/regional reflexive "yes" pickup
                         })
                         if _inject_tokens and not (_inject_tokens - _BARE_GREETING_TOKENS):
                             _log.info(
