@@ -343,25 +343,24 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Sound like a conversation, not a form being filled in.\n\n"
 
         "CONVERSATION FLOW\n\n"
-        "Step 1 — Opening (HARD GATE — do not skip)\n"
+        "Step 1 — Opening (HARD GATE — two sub-steps, do not skip either)\n"
         "Say the opening line from CALL CONTEXT exactly. Then stop and wait.\n"
-        "CRITICAL: Speak the opening line exactly ONCE. After delivering it, wait silently for the buyer to respond — do NOT repeat, rephrase, or re-deliver it if there is a pause. Never generate a second greeting.\n"
-        "Do not ask Question 1 until the customer confirms they need the product.\n\n"
-        "YES (haan, bilkul, theek hai, chahiye, etc.):\n"
-        "→ Bridge: \"अच्छा जी, आपको सही sellers से connect कराने के लिए थोड़ी details चाहिए.\" → Ask Q1.\n"
-        "CRITICAL: 'hello', 'haan', 'ji', 'ha' alone as the FIRST response is NOT a product confirmation — the buyer is just acknowledging the call. Re-ask the opening: \"जी, तो क्या आपको [product] चाहिए?\"\n\n"
-        "NO:\n"
-        "→ \"कोई और product देख रहे हैं?\"\n"
+        "CRITICAL: Speak the opening line exactly ONCE. After delivering it, wait silently for the buyer to respond — do NOT repeat, rephrase, or re-deliver it if there is a pause. Never generate a second greeting.\n\n"
+
+        "Step 1a — Awareness check (opening question: 'क्या आप ये [product] देख रहे हैं?')\n"
+        "You are confirming the buyer was actively looking — not yet confirming their need.\n"
+        "YES (हाँ / bilkul / haan / ji / ha / yes / dekh raha hoon, etc.) → Ask Step 1b immediately: \"आपको [product] की requirement है ना?\"\n"
+        "CRITICAL: 'hello', 'haan', 'ji', 'ha' as the VERY FIRST word alone (single word, nothing else) is a phone-answer reflex — the buyer is just picking up the call, not answering the question. Re-ask: \"जी, क्या आप [product] देख रहे हैं?\"\n"
+        "NO (नहीं / galti se / wrong number, etc.) → \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop\n"
+        "Unintelligible / garbled / noise → Re-ask once: \"जी, क्या आप [product] देख रहे हैं?\" → if still no clear answer → close and stop.\n\n"
+
+        "Step 1b — Requirement confirmation (follow-up: 'आपको [product] की requirement है ना?')\n"
+        "Do NOT ask Question 1 until this step returns a clear YES.\n"
+        "YES (हाँ / chahiye / bilkul / zaroor / hai / etc.) → Bridge: \"अच्छा जी, आपको सही sellers से connect कराने के लिए थोड़ी details चाहिए.\" → Ask Q1.\n"
+        "NO → \"कोई और product देख रहे हैं?\"\n"
         "→ Different product → treat as product change\n"
-        "→ Nothing needed → \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop\n\n"
-        "Unclear / partial / side question:\n"
-        "→ Read intent. If clearly interested: bridge and ask Q1.\n"
-        "→ If unclear: \"जी, तो क्या आपको [product] चाहिए?\"\n"
-        "→ Q1 gate: do not pass until explicit confirmation.\n\n"
-        "Unintelligible / garbled / clearly not a yes-no response:\n"
-        "→ Do NOT treat silence, noise, STT gibberish, or an unrelated fragment as a yes.\n"
-        "→ Re-ask the opening once: \"जी, तो क्या आपको [product] चाहिए?\"\n"
-        "→ If still no clear answer after one re-ask → \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop.\n\n"
+        "→ Nothing needed → \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop\n"
+        "Unclear → Re-ask once: \"जी, मतलब क्या अभी [product] की ज़रूरत है?\" → if still unclear → close and stop.\n\n"
         "Step 2 — Questions\n"
         "In order. ONE question per turn — this is a hard rule with no exceptions.\n"
         "HARD RULE: If you find yourself writing 'और', 'or', 'साथ में', 'also', or any conjunction that links two questions — DELETE the second question. Ask it next turn.\n"
@@ -520,7 +519,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "4. Have ALL questions been answered? If not — do not close, no matter how natural it feels.\n"
         "5. Does my response sound like a real person mid-conversation, or like a form-filler?"
     ),
-    "initial_message": "हेलो, मैं Simran बोल रही हूँ Justdial से — आपको {product} की requirement है ना?",
+    "initial_message": "हेलो, मैं Simran बोल रही हूँ Justdial से — क्या आप {product} देख रहे हैं?",
     "call_end_text": "ठीक है जी, सारी details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए शुक्रिया.",
     "function_calling": True,
     "functions": [
@@ -1006,7 +1005,7 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
 
     mandatory_opening = (
         f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
-        f"आपको {product_name} की requirement है ना?"
+        f"क्या आप {product_name} देख रहे हैं?"
     )
 
     questions_block = build_questions_text(schema, is_business=is_business if is_business == "" else None)
@@ -1846,6 +1845,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # Echo guard uses this: if Gemini fires a new speaking turn within 200 ms of this
     # timestamp the response is almost certainly a PSTN echo, not real user speech.
     _muted_capture_empty_time: float = 0.0
+    # Monotonic time when the last muted-capture filler/hallucination was dropped.
+    # Filler guard uses this: if Gemini fires a new speaking turn within 1.5 s of this
+    # timestamp it heard the filler via the live audio path (after the 4 s unmute) and
+    # should be interrupted — the user said nothing substantive.
+    _muted_filler_dropped_time: float = 0.0
     # Cumulative log of every muted-window Sarvam transcript across the call.
     # Saved to Mongo as a separate field so the analysis LLM can see what the user
     # said during bot speaking turns even when those turns were discarded from _live_transcript.
@@ -2176,7 +2180,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     async def _transcribe_muted_period(frames: list, speech_ms: float) -> None:
         """Transcribe audio captured during a muted window (bot speaking turn + post-hold).
         Uses Sarvam for transcription. No Silero gate — we want everything the user said, even brief."""
-        nonlocal _call_ended, _muted_capture_empty_time
+        nonlocal _call_ended, _muted_capture_empty_time, _muted_filler_dropped_time
         if not frames:
             return
         if not SARVAM_API_KEY:
@@ -2242,6 +2246,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         tokens = _normalize_stt_tokens(text)
         if tokens and all(t in _SARVAM_FILLER_HALLUCINATIONS for t in tokens):
             _log.info(f"[MUTED-CAPTURE] dropped all-filler {text!r} [{_cascade_tag}]")
+            _muted_filler_dropped_time = asyncio.get_event_loop().time()
             return
         # Sarvam/Soniox hallucination: same token repeated 2+ times (e.g. "हाँ हाँ",
         # "हाँ हाँ हाँ") from background audio bleed or line noise.  A genuine
@@ -2250,6 +2255,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _log.info(
                 f"[MUTED-CAPTURE] repeated-token hallucination {text!r} [{_cascade_tag}] — dropped"
             )
+            _muted_filler_dropped_time = asyncio.get_event_loop().time()
             return
         _log.info(
             f"[MUTED-CAPTURE] captured user speech [{_cascade_tag}]: {text!r} "
@@ -2782,7 +2788,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _barge_in_fired, _bot_resp_watchdog_task, _speaking_start_time, _speaking_turns_completed, _muted_capture_empty_time, _last_user_final_text
+        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _barge_in_fired, _bot_resp_watchdog_task, _speaking_start_time, _speaking_turns_completed, _muted_capture_empty_time, _muted_filler_dropped_time, _last_user_final_text
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
@@ -2836,6 +2842,24 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 session.interrupt()
                 return
             _muted_capture_empty_time = 0.0
+            # Filler guard: if Gemini fires a new speaking turn within 1.5 s of a dropped
+            # filler/hallucination, it heard the filler via the live audio path (after the
+            # 4 s unmute) — the user said nothing substantive. Interrupt so the user can
+            # respond properly. 1.5 s covers Sarvam latency (~180 ms) + Gemini generation
+            # time (~400-800 ms). Separate from echo guard to avoid changing its 200 ms window.
+            if (_greeting_done
+                    and _muted_filler_dropped_time > 0
+                    and (_now_eg - _muted_filler_dropped_time) < 1.5):
+                _log.warning(
+                    f"[FILLER-GUARD] new speaking turn {(_now_eg - _muted_filler_dropped_time)*1000:.0f}ms "
+                    "after dropped filler — Gemini heard filler via live path, interrupting"
+                )
+                _muted_filler_dropped_time = 0.0
+                _last_user_final_text = ""
+                _barge_in_fired = True
+                session.interrupt()
+                return
+            _muted_filler_dropped_time = 0.0
             # Mute mic at the start of every bot speaking turn.
             # For mid-call turns: unmute after 4 s so the user can interrupt.
             # Greeting turn: unmute after 5 s so Gemini warms up to the audio

@@ -61,6 +61,11 @@ _BARE_CALL_SIGNAL_TOKENS: frozenset = frozenset(
         "haan ji", "ji haan",
         "जी", "जी हाँ", "हाँ जी", "जी हां", "हां जी",  # Devanagari ji variants
         "sahi", "सही",                  # Devanagari sahi
+        # exclamations / filler — NOT product confirmation
+        "वाह", "वाह वाह", "wah", "arrey", "अरे",
+        # function word "है" appearing alone is a filler, not substantive content
+        # e.g. "हाँ हाँ है है" from Sarvam rescue injections on silence
+        "है",
     }
     for word in phrase.split()
     if word.strip()
@@ -202,7 +207,11 @@ async def generate_call_analysis(
     )
     _greeting_has_product_q = any(
         kw in _first_agent_text_lower
-        for kw in ("requirement", "है ना", "चाहिए", "chahiye", "zaroorat")
+        for kw in (
+            "requirement", "है ना", "चाहिए", "chahiye", "zaroorat",
+            # new 2-step greeting: Step 1a
+            "देख रहे", "dekh rahe", "dekh rhe",
+        )
     )
     _truncated_greeting = _greeting_start and not _greeting_has_product_q
     _wrong_opener = (
@@ -543,11 +552,19 @@ async def generate_call_analysis(
     # (greeting accepted as a response), so `_agent_progressed` is NOT a reliable guard
     # when every captured user turn is a bare signal.
     # NFC-normalise each token so Devanagari vowel marks compare correctly.
+    # Split on hyphens/dashes first so "हाँ-हाँ" is treated as two tokens ["हाँ", "हाँ"]
+    # rather than the single concatenated string "हाँहाँ" which would miss the set lookup.
+    def _tokenize_bare(text: str) -> set[str]:
+        tokens = set()
+        for part in re.split(r'[-–—]', text):
+            for w in part.split():
+                t = _strip_punct(w)
+                if t:
+                    tokens.add(t)
+        return tokens
+
     if non_empty_user_turns and all(
-        not ({
-            _strip_punct(w)
-            for w in (t.get("text") or "").split() if w.strip()
-        } - _BARE_CALL_SIGNAL_TOKENS)
+        not (_tokenize_bare(t.get("text") or "") - _BARE_CALL_SIGNAL_TOKENS)
         for t in non_empty_user_turns
     ):
         return {
@@ -687,6 +704,10 @@ async def generate_call_analysis(
     _bot_reask_patterns = (
         "तो क्या आपको", "to kya aapko", "क्या आपको", "kya aapko",
         "do you need", "do you still need", "क्या आप",
+        # Step 1b of new 2-step greeting — agent asking requirement after search confirmation
+        "की requirement है ना", "requirement hai na",
+        # Step 1a re-ask
+        "देख रहे हैं", "dekh rahe hain",
     )
     _agent_reask_opening = any(p in _second_agent_text for p in _bot_reask_patterns)
     # Also block the note when the buyer's first turn contains an explicit "नहीं" —
@@ -1400,15 +1421,35 @@ STRICT OUTPUT RULES:
                     result["call_outcome_description"] = DISPOSITION_MAP[outcome]
                     result["qna"] = []
 
+                # 5a-2. Hard sub-20s Interested → Short Hangup regardless of live turns.
+                #       The 2-step greeting alone takes 5+ seconds; in < 20s the bot
+                #       cannot complete Step 1a + Step 1b + even start Q1. Any "Interested"
+                #       returned for a sub-20s call is either a phone-answer reflex or
+                #       Sarvam/post-call STT noise that fooled the LLM — not real engagement.
+                if (
+                    outcome == "Interested"
+                    and duration_secs is not None
+                    and duration_secs < 20
+                ):
+                    logger.info(
+                        f"[POST-PROC] Interested → Short Hangup: hard sub-20s rule, "
+                        f"duration={duration_secs:.0f}s (live turns present but call too short "
+                        f"for genuine qualification)"
+                    )
+                    outcome = "Short Hangup"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+                    result["qna"] = []
+
                 # 5b. Duration-aware Interested → Short Hangup for very short calls.
-                #     Calls under 20 s with only bare acknowledgements (हाँ / ji / yes / ok)
+                #     Calls under 30 s with only bare acknowledgements (हाँ / ji / yes / ok)
                 #     and no valid spec values are almost always Short Hangups — the buyer
                 #     said a reflexive yes and disconnected, not a genuine product confirmation.
                 #     ~10 % of these may be genuine quick yeses; that tradeoff is accepted.
                 if (
                     outcome == "Interested"
                     and duration_secs is not None
-                    and duration_secs < 25
+                    and duration_secs < 30
                 ):
                     _BARE_ACK_SET = {
                         "haan", "ha", "han", "ji", "jee", "yes", "okay", "ok",
@@ -1416,6 +1457,10 @@ STRICT OUTPUT RULES:
                         "haan ji", "ji haan", "sahi", "acha", "achha", "accha",
                         # Gujarati/Marathi phone-answer greeting — never a product confirmation
                         "om", "hello", "hi", "हेलो", "हाय",
+                        # exclamations / filler — not product confirmation
+                        "वाह", "wah", "अरे", "arrey",
+                        # function word appearing alone in rescue-injection noise
+                        "है",
                     }
                     _bare_ack_nfc = {unicodedata.normalize("NFC", w) for w in _BARE_ACK_SET}
                     _all_user_words: set[str] = set()
