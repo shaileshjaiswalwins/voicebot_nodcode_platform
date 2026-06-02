@@ -573,9 +573,20 @@ async def generate_call_analysis(
         "apply", "karna", "related", "riletad", "lena", "dila",
         "seeking", "seeker",
     })
+    # Bigrams that look like job-seeking but are actually manufacturing/B2B terms.
+    # If any of these appear in a user turn, don't count "job" as an employment indicator.
+    _JOB_WORK_EXCLUSIONS = frozenset({
+        "job work",       # contract machining / manufacturing (e.g. "CNC job work ke liye")
+        "job ka kaam",    # same concept in Hindi
+        "job order",      # factory job order
+        "job sheet",      # manufacturing job sheet
+    })
     _job_seeker_cooccur = False
     for _ut in _all_user_text_parts:
         _ut_nfc = unicodedata.normalize("NFC", _ut)
+        # Skip turns where "job" appears as a manufacturing bigram, not an employment word
+        if any(excl in _ut_nfc for excl in _JOB_WORK_EXCLUSIONS):
+            continue
         _words = {unicodedata.normalize("NFC", w.strip(".,!?।॥ ").lower())
                   for w in _ut_nfc.split() if w.strip(".,!?।॥ ")}
         if _words & _JOB_CORE and _words & _SEEKING_CONTEXT:
