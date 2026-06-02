@@ -503,20 +503,85 @@ async def generate_call_analysis(
         "employment chahiye",
         "hiring ho rahi hai", "hiring chal raha",
         "vacancy hai kya", "vacancy chahiye",
-        # "related" / "se related" patterns — STT commonly produces these for job-seeker callers
+        # "related" / "se related" — STT commonly produces these for job-seeker callers
         "job se related", "job se releted", "job related", "job releted",
         "जॉब से रिलेटेड", "जॉब रिलेटेड", "job se riletad", "job riletad",
         "naukri se related", "naukri related",
         "employment se related", "employment related",
         "work se related", "work related dekh",
+        # Active job-searching phrases
+        "job search kar", "job search karna", "job search kar raha", "job search kar rahi",
+        "job dhundh raha", "job dhundh rahi", "job dhundh rha", "job dhundh rhi",
+        "naukri dhundh raha", "naukri dhundh rahi", "naukri dhundha", "nokri dhundh",
+        "main khud job", "main khud naukri", "khud ke liye job", "apne liye job",
+        "mujhe job chahiye tha", "mujhe naukri chahiye thi",
+        "job ki talash", "naukri ki talash", "kaam ki talash",
+        "job ढूंढ रहा", "job ढूंढ रही", "नौकरी ढूंढ रहा", "नौकरी ढूंढ रही",
+        # Interview / application signals
+        "interview ke liye", "interview chahiye", "interview dena",
+        "interview dena chahta", "interview dena chahti", "interview dena tha",
+        "interview ke liye call", "interview ke liye phone",
+        # Resume / CV submission
+        "resume bheja", "resume bheja tha", "resume diya", "resume send",
+        "cv bheja", "cv diya", "cv send", "cv bheja tha",
+        # Identity signals — caller is a freshers / job-applicant
+        "fresher hoon", "fresher hu", "fresher hai main", "main fresher",
+        "main job seeker", "job seeker hoon", "job seeker hu",
+        # Part-time / full-time job requests
+        "part time job", "part time kaam", "full time job", "full time kaam",
+        "part time chahiye", "full time chahiye",
+        # Work-from-home job requests
+        "work from home job", "work from home chahiye", "ghar se kaam chahiye",
+        "घर से काम चाहिए", "घर बैठकर काम",
+        # काम ढूंढ variants (work-searching, not task-related)
+        "kaam dhundh raha", "kaam dhundh rahi", "kaam dhundha", "kaam dhundhi",
+        "काम ढूंढ रहा", "काम ढूंढ रही", "काम की तलाश", "कामकी तलाश",
+        "mujhe kaam chahiye", "mujhe koi kaam chahiye",
+        # Salary/package asking in job-seeker context (not B2B pricing)
+        "salary kitni milegi", "salary kya milegi", "salary kitni milega",
+        "kitni salary milegi", "stipend kitna", "stipend kya milega",
+        # Additional STT variants (STT often drops/merges syllables)
+        "nokri chahiye", "naukari chahiye", "naukari milegi", "naukari ke liye",
+        "rozgaar chahiye", "rojgaar chahiye",
+        # Describing personal employment status/history (mid-call Case B signals)
+        "mujhe job chahiye thi", "job chahiye thi mujhe",
+        "main job kar raha tha", "main job kar rahi thi",
+        "pehle job thi", "pehle job tha", "job chali gayi", "job chhut gayi",
     ]
-    _user_text_for_job = unicodedata.normalize("NFC", " ".join(
+    # Scan live user turns AND muted-transcript (user may say job signal during bot's speaking window)
+    _all_user_text_parts = [
         (t.get("text") or "").lower() for t in non_empty_user_turns
-    ))
-    if any(
+    ] + [
+        (m or "").lower() for m in (muted_transcript or []) if (m or "").strip()
+    ]
+    _user_text_for_job = unicodedata.normalize("NFC", " ".join(_all_user_text_parts))
+    _job_seeker_literal = any(
         unicodedata.normalize("NFC", pat.lower()) in _user_text_for_job
         for pat in _JOB_SEEKING_PATTERNS
-    ):
+    )
+    # Token co-occurrence fallback: if ANY user turn contains a job-indicator word AND a
+    # seeking-context word, it's a job-seeker signal even if the exact phrase isn't listed.
+    # This catches novel STT outputs and regional phrasings without exhaustive enumeration.
+    _JOB_CORE = frozenset(unicodedata.normalize("NFC", w) for w in {
+        "job", "जॉब", "naukri", "naukari", "nokri", "नौकरी", "नोकरी",
+        "rozgar", "rojgar", "rozgaar", "rojgaar", "employment",
+        "vacancy", "interview", "fresher", "resume",
+    })
+    _SEEKING_CONTEXT = frozenset(unicodedata.normalize("NFC", w) for w in {
+        "chahiye", "chaahiye", "chahiye", "dhundh", "ढूंढ", "ढूंढ़", "dhundha",
+        "talash", "तलाश", "search", "milega", "milegi", "milni",
+        "apply", "karna", "related", "riletad", "lena", "dila",
+        "seeking", "seeker",
+    })
+    _job_seeker_cooccur = False
+    for _ut in _all_user_text_parts:
+        _ut_nfc = unicodedata.normalize("NFC", _ut)
+        _words = {unicodedata.normalize("NFC", w.strip(".,!?।॥ ").lower())
+                  for w in _ut_nfc.split() if w.strip(".,!?।॥ ")}
+        if _words & _JOB_CORE and _words & _SEEKING_CONTEXT:
+            _job_seeker_cooccur = True
+            break
+    if _job_seeker_literal or _job_seeker_cooccur:
         return {
             "call_outcome": "Not Interested",
             "call_outcome_description": DISPOSITION_MAP["Not Interested"],

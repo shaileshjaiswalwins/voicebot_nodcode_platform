@@ -343,24 +343,25 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Sound like a conversation, not a form being filled in.\n\n"
 
         "CONVERSATION FLOW\n\n"
-        "Step 1 — Opening (HARD GATE — two sub-steps, do not skip either)\n"
+        "Step 1 — Opening (HARD GATE — do not skip)\n"
         "Say the opening line from CALL CONTEXT exactly. Then stop and wait.\n"
-        "CRITICAL: Speak the opening line exactly ONCE. After delivering it, wait silently for the buyer to respond — do NOT repeat, rephrase, or re-deliver it if there is a pause. Never generate a second greeting.\n\n"
-
-        "Step 1a — Awareness check (opening question: 'क्या आप ये [product] देख रहे हैं?')\n"
-        "You are confirming the buyer was actively looking — not yet confirming their need.\n"
-        "YES (हाँ / bilkul / haan / ji / ha / yes / dekh raha hoon, etc.) → Ask Step 1b immediately: \"आपको [product] की requirement है ना?\"\n"
-        "CRITICAL: 'hello', 'haan', 'ji', 'ha' as the VERY FIRST word alone (single word, nothing else) is a phone-answer reflex — the buyer is just picking up the call, not answering the question. Re-ask: \"जी, क्या आप [product] देख रहे हैं?\"\n"
-        "NO (नहीं / galti se / wrong number, etc.) → \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop\n"
-        "Unintelligible / garbled / noise → Re-ask once: \"जी, क्या आप [product] देख रहे हैं?\" → if still no clear answer → close and stop.\n\n"
-
-        "Step 1b — Requirement confirmation (follow-up: 'आपको [product] की requirement है ना?')\n"
-        "Do NOT ask Question 1 until this step returns a clear YES.\n"
-        "YES (हाँ / chahiye / bilkul / zaroor / hai / etc.) → Bridge: \"अच्छा जी, आपको सही sellers से connect कराने के लिए थोड़ी details चाहिए.\" → Ask Q1.\n"
-        "NO → \"कोई और product देख रहे हैं?\"\n"
+        "CRITICAL: Speak the opening line exactly ONCE. After delivering it, wait silently for the buyer to respond — do NOT repeat, rephrase, or re-deliver it if there is a pause. Never generate a second greeting.\n"
+        "Do not ask Question 1 until the customer confirms they need the product.\n\n"
+        "YES (haan, bilkul, theek hai, chahiye, etc.):\n"
+        "→ Bridge: \"अच्छा जी, आपको सही sellers से connect कराने के लिए थोड़ी details चाहिए.\" → Ask Q1.\n"
+        "CRITICAL: 'hello', 'haan', 'ji', 'ha' alone as the FIRST response is NOT a product confirmation — the buyer is just acknowledging the call. Re-ask the opening: \"जी, तो क्या आपको [product] चाहिए?\"\n\n"
+        "NO:\n"
+        "→ \"कोई और product देख रहे हैं?\"\n"
         "→ Different product → treat as product change\n"
-        "→ Nothing needed → \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop\n"
-        "Unclear → Re-ask once: \"जी, मतलब क्या अभी [product] की ज़रूरत है?\" → if still unclear → close and stop.\n\n"
+        "→ Nothing needed → \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop\n\n"
+        "Unclear / partial / side question:\n"
+        "→ Read intent. If clearly interested: bridge and ask Q1.\n"
+        "→ If unclear: \"जी, तो क्या आपको [product] चाहिए?\"\n"
+        "→ Q1 gate: do not pass until explicit confirmation.\n\n"
+        "Unintelligible / garbled / clearly not a yes-no response:\n"
+        "→ Do NOT treat silence, noise, STT gibberish, or an unrelated fragment as a yes.\n"
+        "→ Re-ask the opening once: \"जी, तो क्या आपको [product] चाहिए?\"\n"
+        "→ If still no clear answer after one re-ask → \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop.\n\n"
         "Step 2 — Questions\n"
         "In order. ONE question per turn — this is a hard rule with no exceptions.\n"
         "HARD RULE: If you find yourself writing 'और', 'or', 'साथ में', 'also', or any conjunction that links two questions — DELETE the second question. Ask it next turn.\n"
@@ -495,8 +496,9 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Job-seeking caller — TWO cases, handled differently:\n"
         "\n"
         "CASE A — Explicit upfront signal: caller directly states they want a job before any qualification questions begin.\n"
-        "Signals: \"नौकरी चाहिए\", \"जॉब चाहिए\", \"job chahiye\", \"naukri chahiye\", \"rozgar chahiye\", \"job milega\", \"vacancy hai kya\", \"apply karna hai\", \"job ke liye apply karna hai\", \"जॉब के लिए अप्लाई करना है\", \"अप्लाई करना है\", \"job karna hai\", \"जॉब करना है\".\n"
-        "Action: acknowledge in one sentence, then close immediately with the NOT-INTERESTED phrase. No clarification needed — intent is unambiguous.\n"
+        "Signals (common examples — not exhaustive): \"नौकरी चाहिए\", \"जॉब चाहिए\", \"job chahiye\", \"naukri chahiye\", \"rozgar chahiye\", \"job milega\", \"vacancy hai kya\", \"apply karna hai\", \"job ke liye apply\", \"job se related hoon\", \"जॉब से रिलेटेड\", \"job search kar raha/rahi hoon\", \"job dhundh raha/rahi hoon\", \"interview ke liye call\", \"resume bheja tha\", \"fresher hoon\", \"part time job chahiye\", \"ghar se kaam chahiye\".\n"
+        "Core rule: if the caller's first substantive response makes clear they are personally seeking employment — not buying a product — close immediately. Do NOT ask a clarifying question for Case A.\n"
+        "Action: acknowledge in one sentence, then close immediately with the NOT-INTERESTED phrase.\n"
         "Example: \"जी, यह Justdial का product enquiry number है — job opportunities के लिए हम help नहीं कर सकते. ठीक है जी, कोई बात नहीं. Future में कोई product की ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop\n"
         "\n"
         "CASE B — Mid-conversation signal: caller has already confirmed the product, but their answers to qualification questions reveal they are describing their OWN experience, qualifications, or career (not a hiring need).\n"
@@ -519,7 +521,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "4. Have ALL questions been answered? If not — do not close, no matter how natural it feels.\n"
         "5. Does my response sound like a real person mid-conversation, or like a form-filler?"
     ),
-    "initial_message": "हेलो, मैं Simran बोल रही हूँ Justdial से — क्या आप {product} देख रहे हैं?",
+    "initial_message": "हेलो, मैं Simran बोल रही हूँ Justdial से — आपको {product} की requirement है ना?",
     "call_end_text": "ठीक है जी, सारी details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए शुक्रिया.",
     "function_calling": True,
     "functions": [
@@ -1005,7 +1007,7 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
 
     mandatory_opening = (
         f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
-        f"क्या आप {product_name} देख रहे हैं?"
+        f"आपको {product_name} की requirement है ना?"
     )
 
     questions_block = build_questions_text(schema, is_business=is_business if is_business == "" else None)
