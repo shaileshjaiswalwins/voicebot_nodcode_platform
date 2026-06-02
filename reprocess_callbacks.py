@@ -1,6 +1,7 @@
 """One-time script: re-analyse misclassified leads and send corrected callbacks."""
 import asyncio
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -25,11 +26,11 @@ from callback_worker.callback import send_callback_update
 
 # All leads that were incorrectly classified (these are lead_ids, not _ids)
 LEAD_IDS: list[str] = [
-    "6a1eafaf0374cd2e89d7bb79",  # 9974351103 Wheel Chair — background noise hallucinated as "अरे मैं बे ले रहा हूँ"; 18.1s call
+    "6a1e9ac564fb55256d06c11b",  # misclassified as interested; should be short_hangup / not_interested
 ]
 
 
-async def reprocess_doc(doc: dict, http_session: aiohttp.ClientSession) -> None:
+async def reprocess_doc(doc: dict, http_session: aiohttp.ClientSession, collection) -> None:
     doc_id = str(doc["_id"])
     lead_id = doc.get("lead_id")
 
@@ -91,6 +92,25 @@ async def reprocess_doc(doc: dict, http_session: aiohttp.ClientSession) -> None:
     ok = await send_callback_update(doc_id, str(lead_id), updates, http_session)
     if ok:
         logger.info(f"[REPROCESS] ✓ Corrected callback sent for {doc_id}")
+        saved_analysis = {
+            "call_outcome": analysis.get("call_outcome", ""),
+            "call_outcome_description": analysis.get("call_outcome_description", ""),
+            "call_summary": analysis.get("call_summary", ""),
+            "is_business": analysis.get("is_business", ""),
+            "business_name": analysis.get("business_name", ""),
+            "business_city": analysis.get("business_city", ""),
+            "qna": analysis.get("qna") or [],
+            "product_change": analysis.get("product_change") or {},
+            "rescheduled_to": analysis.get("rescheduled_to", "") or "",
+            "deal_value": (b2b_score or {}).get("deal_value", ""),
+            "lead_intent_score": (b2b_score or {}).get("lead_intent_score", ""),
+            "urgency_flag": (b2b_score or {}).get("urgency_flag", "no"),
+        }
+        collection.update_one(
+            {"_id": doc["_id"]},
+            {"$set": {"analysis": saved_analysis, "reprocessed_at": datetime.now(timezone.utc)}},
+        )
+        logger.info(f"[REPROCESS] ✓ MongoDB analysis field updated for {doc_id}")
     else:
         logger.error(f"[REPROCESS] ✗ Failed to send update for {doc_id}")
 
@@ -106,7 +126,7 @@ async def main() -> None:
             if not doc:
                 logger.warning(f"[REPROCESS] No doc found for lead_id={lead_id}")
                 continue
-            await reprocess_doc(doc, http_session)
+            await reprocess_doc(doc, http_session, collection)
 
     client.close()
     logger.info("[REPROCESS] Done")

@@ -75,15 +75,17 @@ async def process_lead(
     for _file, lines in (logs_raw.get("results") or {}).items():
         log_lines.extend(lines)
 
+    _doc = mongo_doc or {}
+    _analysis = _doc.get("analysis") or {}
     result = {
         "lead_id": lead_id,
         "mobile": (logs_raw.get("mobiles_found") or [None])[0],
         # ── Key fields from MongoDB ───────────────────────────────────────────
-        "call_outcome": (mongo_doc or {}).get("call_outcome"),
-        "call_summary": (mongo_doc or {}).get("call_summary"),
-        "call_duration_sec": (mongo_doc or {}).get("call_duration_sec"),
-        "status": (mongo_doc or {}).get("status"),
-        "category": ((mongo_doc or {}).get("lead_record") or {}).get("catname"),
+        "call_outcome": _analysis.get("call_outcome") or _doc.get("call_outcome"),
+        "call_summary": _analysis.get("call_summary") or _doc.get("call_summary"),
+        "call_duration_sec": _doc.get("call_duration_sec"),
+        "status": _doc.get("status"),
+        "category": (_doc.get("lead_record") or {}).get("catname"),
         # ── Transcript ───────────────────────────────────────────────────────
         "transcript": (mongo_doc or {}).get("transcript", []),
         "muted_transcript": (mongo_doc or {}).get("muted_transcript", []),

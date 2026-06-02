@@ -1613,7 +1613,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         _muted_inject["text"] = ""
                         _log.info(f"[SARVAM-RESCUE] early rescue — using buffered muted-capture: {text!r}")
                     else:
-                        text = await _sarvam_stt_fallback(min_speech_ms=200)
+                        text = await _sarvam_stt_fallback(min_speech_ms=200, silero_min_ms=60)
                     if not text or _call_ended:
                         return
                     if _turn_counter > _t or _speaking_turns_completed > _s or _pending_user_text:
@@ -1734,7 +1734,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         _muted_inject["text"] = ""
                         _log.info(f"[SARVAM-RESCUE] using buffered muted-capture: {text!r}")
                     else:
-                        text = await _sarvam_stt_fallback(min_speech_ms=200)
+                        text = await _sarvam_stt_fallback(min_speech_ms=200, silero_min_ms=60)
                     if not text or _call_ended:
                         return
                     if _turn_counter > _t:
@@ -2087,11 +2087,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         )
         return [t for t in cleaned.split() if t]
 
-    async def _sarvam_stt_fallback(min_speech_ms: int | None = None) -> str | None:
+    async def _sarvam_stt_fallback(min_speech_ms: int | None = None, silero_min_ms: int | None = None) -> str | None:
         """Transcribe the WAV file written by _buffer_user_audio using Sarvam.
         Silero VAD gates the path — only invoked when genuine human voice is present.
-        min_speech_ms overrides the global threshold (used by rescue paths to accept
-        short confirmatory words like हेलो/यस that the global 500ms would reject)."""
+        min_speech_ms overrides the speech_ms threshold (rescue paths use 200 ms).
+        silero_min_ms overrides the Silero voiced_ms gate (rescue paths use 60 ms to
+        catch monosyllabic Hindi words that have low voiced energy)."""
         if not _user_audio["has_audio"]:
             return None
         speech_ms = _user_audio["speech_ms"]
@@ -2133,10 +2134,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             voiced_ms = await asyncio.get_running_loop().run_in_executor(
                 None, _silero_voiced_ms, pcm_bytes, _sarvam_silero_threshold
             )
-            if voiced_ms < _sarvam_silero_min_speech_ms:
+            _silero_gate = silero_min_ms if silero_min_ms is not None else _sarvam_silero_min_speech_ms
+            if voiced_ms < _silero_gate:
                 _log.info(
                     f"[STT] Silero — no speech (voiced_ms={voiced_ms:.0f} < "
-                    f"min={_sarvam_silero_min_speech_ms}), skipping"
+                    f"min={_silero_gate}), skipping"
                 )
                 return None
             _log.info(f"[STT] Silero — speech confirmed (voiced_ms={voiced_ms:.0f})")
@@ -2477,6 +2479,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # Silero sanity-check: Gemini occasionally fires on background audio (TV,
             # nearby conversation). If Silero finds < min voiced ms in the window PCM,
             # discard the transcript rather than letting background noise reach Mongo.
+            _voiced = 0  # initialised here so the noise filter below can reference it
             if _silero_session is not None and _current_window_pcm:
                 _voiced = _silero_voiced_ms(
                     bytes(_current_window_pcm), _sarvam_silero_threshold
@@ -2510,6 +2513,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             _live_transcript.pop()
                         # Block _on_item_added from re-inserting this text
                         _silero_rejected_turns.add(transcript_text)
+                        # Save to muted_transcript so there is at least a record in Mongo
+                        # that the user said something (even if unconfirmed by Silero).
+                        _muted_transcript_log.append(f"[low-confidence] {transcript_text}")
                         return
                 _log.info(
                     f"[GEMINI] Silero confirmed FINAL (voiced_ms={_voiced:.0f})"
@@ -2526,19 +2532,24 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # Short noise filter: single-token transcripts below 350 ms that are
             # known noise patterns (throat-clears, breathing, junk syllables).
             # "हाँ", "ना", "ओके" are NOT in the set so valid monosyllabics pass.
+            # Guard: only reject if Silero found essentially no voiced frames (_voiced < 30).
+            # A real "हूं"/"हूँ" from a user will have some voiced energy even if weak;
+            # bg noise transcribed as these tokens typically has voiced_ms near 0.
             if speech_ms_now < 350:
                 _short_toks = _normalize_stt_tokens(_norm_transcript)
                 if (
                     len(_short_toks) == 1
                     and unicodedata.normalize("NFC", _short_toks[0]) in _GEMINI_SHORT_NOISE_TOKENS
+                    and _voiced < 30
                 ):
                     _log.info(
                         f"[NOISE] Short noise token rejected: {transcript_text!r} "
-                        f"(speech_ms={speech_ms_now:.0f})"
+                        f"(speech_ms={speech_ms_now:.0f}, voiced_ms={_voiced:.0f})"
                     )
                     if _live_transcript and _live_transcript[-1]["role"] == "user":
                         _live_transcript.pop()
                     _silero_rejected_turns.add(transcript_text)
+                    _muted_transcript_log.append(f"[noise-filtered] {transcript_text}")
                     return
             # Bystander filter: drop turns that are clearly a nearby person talking
             # to a third party, not to the bot (e.g. "यह लोग एक और किलो वाला…").
