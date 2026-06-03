@@ -43,6 +43,12 @@ _BARE_CALL_SIGNAL_TOKENS: frozenset = frozenset(
         "om", "ом",
         # haan / ji / yes variants
         "हाँ", "हां", "haan", "ha", "han", "ji", "jee",
+        # Devanagari "yes" (STT sometimes transcribes English "yes" in Devanagari script)
+        "यस",
+        # Devanagari "all right" — common Hindi phone-filler / acknowledgement
+        "ऑल राइट", "ऑल",
+        # Phone-answer honorifics — "सर", "मैडम" etc. appearing alone or with bare ack
+        "सर", "sir", "मैडम", "madam", "ma'am",
         # "go ahead / speak" — call-answering phrases, NOT product confirmation
         "haan bolo", "ha bolo", "हाँ बोलो", "हां बोलो",
         "bolo", "बोलो", "bol", "बोल",
@@ -271,7 +277,8 @@ async def generate_call_analysis(
         _muted_words = {
             _nfc(w.strip(".,!? ।").lower())
             for m in (muted_transcript or [])
-            for w in (_nfc(m or "")).split()
+            # Strip STT confidence tags like "[low-confidence]" before tokenising
+            for w in re.sub(r'\[.*?\]', '', _nfc(m or '')).split()
             if w.strip(".,!? ।")
         }
         if _muted_words and not (_muted_words - _BARE_CALL_SIGNAL_TOKENS):
@@ -403,6 +410,7 @@ async def generate_call_analysis(
     # Only fire the NI short-circuit when the approved closing markers are absent.
     _approved_closing_present = (
         "सारी details मिल गईं" in _last_agent_text
+        or "सारी डिटेल्स मिल गई" in _last_agent_text   # Devanagari variant emitted by bot
         or "relevant sellers" in _last_agent_text
     )
     # Bypass patterns: if user turns contain seller-side signals, fall through to LLM so it
@@ -637,6 +645,46 @@ async def generate_call_analysis(
             "call_summary": (
                 "Buyer explicitly identified and dismissed this as an automated/computer call "
                 "— no product engagement obtained."
+            ),
+            "is_business": "", "business_city": "", "business_name": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
+
+    # Pre-LLM: detect caller who dialled to contact a company/seller directly
+    # rather than to purchase through Justdial sellers.
+    # "बात करना था" / "contact karna tha" = "I wanted to talk TO [company]"
+    # combined with an opening rejection ("ना"/"नहीं") signals the caller was
+    # trying to reach the company directly — not a product purchase intent.
+    _DIRECT_CONTACT_PATTERNS = [
+        "बात करना था", "baat karna tha",
+        "बात करनी थी", "baat karni thi",
+        "से बात करना था", "se baat karna tha",
+        "से बात करनी थी", "se baat karni thi",
+        "contact karna tha", "contact karni thi",
+        "संपर्क करना था", "sampark karna tha",
+    ]
+    _user_text_for_contact = unicodedata.normalize("NFC", " ".join(
+        (t.get("text") or "").lower() for t in non_empty_user_turns
+    ))
+    _first_live_turn_text = (non_empty_user_turns[0].get("text") or "") if non_empty_user_turns else ""
+    _first_user_text_nfc = unicodedata.normalize("NFC", _first_live_turn_text.lower().strip())
+    _first_turn_has_na_rejection = (
+        "नहीं" in _first_user_text_nfc
+        or _first_user_text_nfc.startswith("ना ")
+        or _first_user_text_nfc.startswith("ना,")
+        or _first_user_text_nfc.startswith("ना।")
+    )
+    _direct_contact_intent = _first_turn_has_na_rejection and any(
+        unicodedata.normalize("NFC", pat.lower()) in _user_text_for_contact
+        for pat in _DIRECT_CONTACT_PATTERNS
+    )
+    if _direct_contact_intent:
+        return {
+            "call_outcome": "Could Not Confirm",
+            "call_outcome_description": DISPOSITION_MAP["Could Not Confirm"],
+            "call_summary": (
+                "Caller's intent was to contact the company/seller directly — "
+                "this was not a product purchase inquiry through Justdial."
             ),
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
@@ -1164,9 +1212,12 @@ valid_spec_value      — a concrete, operationally useful answer: named option,
                         intent and context; the agent's echo-confirmation in the next turn
                         is the strongest signal.
 
-closing_line_spoken   — BOTH of the following substrings appear in the LAST assistant turn:
-                          1. "सारी details मिल गईं"    2. "relevant sellers"
-                        Both must be present simultaneously. No other phrasing qualifies.
+closing_line_spoken   — ALL of the following conditions are met:
+                          1. The LAST assistant turn contains "relevant sellers"
+                          2. The LAST assistant turn also contains EITHER
+                               "सारी details मिल गईं"  (mixed Hindi+English form)
+                             OR "सारी डिटेल्स मिल गई" (full Devanagari form)
+                        Both conditions must be satisfied simultaneously. No other phrasing qualifies.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 EVALUATION ORDER
@@ -1614,14 +1665,15 @@ STRICT OUTPUT RULES:
                     result["qna"] = []
 
                 # 5b. Duration-aware Interested → Short Hangup for very short calls.
-                #     Calls under 30 s with only bare acknowledgements (हाँ / ji / yes / ok)
+                #     Calls at or under 30 s with only bare acknowledgements (हाँ / ji / yes / ok)
                 #     and no valid spec values are almost always Short Hangups — the buyer
                 #     said a reflexive yes and disconnected, not a genuine product confirmation.
                 #     ~10 % of these may be genuine quick yeses; that tradeoff is accepted.
+                #     Boundary is inclusive (≤ 30) to catch exact-30s boundary cases.
                 if (
                     outcome == "Interested"
                     and duration_secs is not None
-                    and duration_secs < 30
+                    and duration_secs <= 30
                 ):
                     _BARE_ACK_SET = {
                         "haan", "ha", "han", "ji", "jee", "yes", "okay", "ok",
@@ -1633,6 +1685,10 @@ STRICT OUTPUT RULES:
                         "वाह", "wah", "अरे", "arrey",
                         # function word appearing alone in rescue-injection noise
                         "है",
+                        # Devanagari "yes" — STT sometimes renders English "yes" in Devanagari
+                        "यस",
+                        # Devanagari "all right" — common Hindi phone filler
+                        "ऑल", "राइट",
                     }
                     _bare_ack_nfc = {unicodedata.normalize("NFC", w) for w in _BARE_ACK_SET}
                     _all_user_words: set[str] = set()

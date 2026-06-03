@@ -974,7 +974,7 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
             "You have access to the FetchCategorySchema function.\n"
             "When the user confirms they want a DIFFERENT product:\n"
             "  1. Ask once to confirm: \"जी, आपको [original] चाहिए या [new product]?\"\n"
-            "  2. As soon as they say YES / हां / confirm: call FetchCategorySchema(srchterm=\"<new product in English>\") IMMEDIATELY.\n"
+            "  2. As soon as they say YES / हां / confirm: say EXACTLY 'जी, एक second जी — देख रहे हैं.' (nothing more), then IMMEDIATELY call FetchCategorySchema(srchterm=\"<new product in English>\").\n"
             "     Do NOT continue asking questions from the old schema.\n"
             "  3. When the function returns: say the 'instruction' field, then ask Question 1 from the new schema.\n"
             "  SCHEMA RELEVANCE — MANDATORY: Before asking any schema question after a product change, verify it makes sense for the EXACT variant the buyer described.\n"
