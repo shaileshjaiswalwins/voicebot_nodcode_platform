@@ -360,6 +360,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "→ Q1 gate: do not pass until explicit confirmation.\n\n"
         "Unintelligible / garbled / clearly not a yes-no response:\n"
         "→ Do NOT treat silence, noise, STT gibberish, or an unrelated fragment as a yes.\n"
+        "→ CRITICAL: 'info', 'इनफो', 'information', 'jankari', 'details', 'bata do', 'batao' alone are NOT product confirmations — the caller is asking what this call is about, not saying they need the product. Re-ask: \"जी, तो क्या आपको [product] चाहिए?\"\n"
         "→ Re-ask the opening once: \"जी, तो क्या आपको [product] चाहिए?\"\n"
         "→ If still no clear answer after one re-ask → \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop.\n\n"
         "Step 2 — Questions\n"
@@ -392,6 +393,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "PROBE ONCE — only when the answer is genuinely suspicious:\n"
         "  • City/place field: answer is a greeting or farewell word — 'dhanyavad', 'okay bye', 'shukriya', 'theek hai', 'namaste' are NOT city names → re-ask once\n"
         "  • City/place field: answer is a product description, size, spec, or anything that is clearly NOT a city name (e.g. '80mm wali', 'CCTV wala', 'bada wala') → re-ask once. NEVER infer or assume a city. NEVER fill in a city from context, lead data, or training knowledge. If still no city after one re-ask → mark Not Sure, move on.\n"
+        "  • Multiple-choice spec question (any question that lists named options like type/material/brand-preference/etc.): if the buyer responds with ONLY a bare acknowledgment — 'हाँ', 'हां', 'ha', 'haan', 'yes', 'ji', 'okay', 'theek hai', 'bilkul' — without naming any of the listed options, they did NOT select an option. Re-ask once, listing the options: \"जी — [option1], [option2], [option3]? कौन सा?\"\n"
         "  • Quantity field: answer is a word that cannot be a number — 'kal', 'haan', 'achha', 'theek' → re-ask once with unit reminder\n"
         "    (STT mis-transcribes Hindi numbers: 'सौ' → 'So'/'To', 'चार' → 'For', 'दस' → 'बस'/'das'/'dash', 'तीन' → 'teen'/'tin', 'पाँच' → 'punch'/'panch' — if an English word or Devanagari word appears that looks like a mis-transcribed number, accept it as that number rather than re-asking. "
         "EXCEPTION: if 'to' appears BETWEEN two numbers (e.g. '30 to 50'), it is a RANGE connector, NOT 'सौ'/hundred — read it as 'between 30 and 50', never as 3050 or 3250.)\n"
@@ -582,8 +584,8 @@ _HARDCODED_BOT_CONFIG: dict = {
     "language": "hindi",
     "temperature": 0.7,
     "gemini_start_sensitivity": "START_SENSITIVITY_HIGH",
-    "gemini_end_sensitivity": "END_SENSITIVITY_HIGH",
-    "gemini_silence_duration_ms": 800,
+    "gemini_end_sensitivity": "END_SENSITIVITY_LOW",
+    "gemini_silence_duration_ms": 1500,
     "gemini_prefix_padding_ms": 200,
     "max_call_duration": 300,
     "sarvam_min_rms": 600,
@@ -1651,6 +1653,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                                 turn_complete=True,
                             )
                         )
+                        nonlocal _muted_inject_sent_time
+                        _muted_inject_sent_time = asyncio.get_event_loop().time()
                     except Exception as e:
                         _log.warning(f"[SARVAM-RESCUE] early rescue inject failed: {e}")
                 asyncio.create_task(_early_sarvam_rescue())
@@ -1778,6 +1782,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                                 turn_complete=True,
                             )
                         )
+                        nonlocal _muted_inject_sent_time
+                        _muted_inject_sent_time = asyncio.get_event_loop().time()
                     except Exception as e:
                         _log.warning(f"[SARVAM-RESCUE] inject failed: {e}")
                 asyncio.create_task(_sarvam_rescue())
@@ -2986,10 +2992,29 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         # captured mid-greeting. These are reflexive phone-answer responses,
                         # not product confirmations — injecting them causes Gemini to treat
                         # them as "yes I need the product" and skip to spec questions.
+                        #
+                        # Guard 1: duration — genuine answers to the requirement question take
+                        # >800 ms; anything shorter is almost certainly a phone-pickup reflex.
+                        if _greeting_captured_ms < 800:
+                            _log.info(
+                                f"[MUTED-CAPTURE] post-greeting inject skipped — too short "
+                                f"({_greeting_captured_ms:.0f}ms): {text!r}"
+                            )
+                            if _muted_transcript_log and _muted_transcript_log[-1] == text:
+                                _muted_transcript_log.pop()
+                            _muted_inject["text"] = ""
+                            return
+                        # Guard 2: content — strip only Unicode punctuation/symbols (NOT [^\w]
+                        # which incorrectly removes Devanagari matras/vowel-signs) so that
+                        # "हाँ।" → "हाँ" and "हेलो।" → "हेलो" correctly match the token set.
                         _inject_tokens = {
-                            unicodedata.normalize("NFC", re.sub(r"[^\w]", "", w.lower()))
+                            unicodedata.normalize("NFC", "".join(
+                                c for c in w.lower()
+                                if unicodedata.category(c)[0] not in ("P", "S", "Z")
+                            ))
                             for w in text.split() if w.strip()
                         }
+                        _inject_tokens.discard("")
                         _BARE_GREETING_TOKENS = frozenset(unicodedata.normalize("NFC", w) for w in {
                             "हाँ", "हां", "हा", "जी", "हाँजी", "हांजी",
                             "हेलो", "hello", "हैलो", "hi", "हाय",
