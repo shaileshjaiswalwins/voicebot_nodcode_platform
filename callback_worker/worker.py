@@ -1,6 +1,7 @@
 """Long-running callback worker — polls MongoDB for untagged transcripts, runs analysis, sends callback."""
 
 import asyncio
+import os
 import signal
 from datetime import datetime
 
@@ -10,7 +11,18 @@ from pymongo import ASCENDING, MongoClient
 
 from .analysis import fallback_analysis, generate_b2b_score, generate_call_analysis
 from .callback import CALLBACK_API_URL, build_callback_payload, send_callback
-from .config import BATCH_LIMIT, MONGO_COLLECTION, MONGO_DB, MONGO_URI, POLL_INTERVAL_SEC
+from .config import BATCH_LIMIT, LOG_DIR, MONGO_COLLECTION, MONGO_DB, MONGO_URI, POLL_INTERVAL_SEC
+
+os.makedirs(LOG_DIR, exist_ok=True)
+logger.add(
+    os.path.join(LOG_DIR, "{time:YYYY-MM-DD}.log"),
+    rotation="00:00",
+    retention="30 days",
+    compression="gz",
+    level="INFO",
+    enqueue=True,
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<7} | {message}\n",
+)
 
 _stop = asyncio.Event()
 
@@ -61,27 +73,33 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
         analysis = fallback_analysis(status)
         b2b_score = {"deal_value": "", "lead_intent_score": "", "urgency_flag": "no"}
 
+    saved_analysis = {
+        "call_outcome": analysis.get("call_outcome", ""),
+        "call_outcome_description": analysis.get("call_outcome_description", ""),
+        "call_summary": analysis.get("call_summary", ""),
+        "is_business": analysis.get("is_business", ""),
+        "business_name": analysis.get("business_name", ""),
+        "business_city": analysis.get("business_city", ""),
+        "qna": analysis.get("qna") or [],
+        "product_change": analysis.get("product_change") or {},
+        "rescheduled_to": analysis.get("rescheduled_to", "") or "",
+        "deal_value": b2b_score.get("deal_value", ""),
+        "lead_intent_score": b2b_score.get("lead_intent_score", ""),
+        "urgency_flag": b2b_score.get("urgency_flag", "no"),
+    }
+    # Persist analysis immediately — regardless of callback outcome so it's never lost on retry.
+    await loop.run_in_executor(None, lambda: collection.update_one(
+        {"_id": doc_id},
+        {"$set": {"analysis": saved_analysis}},
+    ))
+
     payload = build_callback_payload(doc, analysis, b2b_score)
     ok = await send_callback(payload, http_session, CALLBACK_API_URL)
 
     if ok:
-        saved_analysis = {
-            "call_outcome": analysis.get("call_outcome", ""),
-            "call_outcome_description": analysis.get("call_outcome_description", ""),
-            "call_summary": analysis.get("call_summary", ""),
-            "is_business": analysis.get("is_business", ""),
-            "business_name": analysis.get("business_name", ""),
-            "business_city": analysis.get("business_city", ""),
-            "qna": analysis.get("qna") or [],
-            "product_change": analysis.get("product_change") or {},
-            "rescheduled_to": analysis.get("rescheduled_to", "") or "",
-            "deal_value": b2b_score.get("deal_value", ""),
-            "lead_intent_score": b2b_score.get("lead_intent_score", ""),
-            "urgency_flag": b2b_score.get("urgency_flag", "no"),
-        }
         await loop.run_in_executor(None, lambda: collection.update_one(
             {"_id": doc_id},
-            {"$set": {"tagged": True, "tagged_at": datetime.utcnow(), "analysis": saved_analysis}},
+            {"$set": {"tagged": True, "tagged_at": datetime.utcnow()}},
         ))
         logger.info(f"[WORKER] Tagged doc {doc_id} | lead_id={lead_id!r}")
     else:

@@ -24,3 +24,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_ANALYSIS_API_KEY")
 
 POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "60"))
 BATCH_LIMIT = int(os.getenv("BATCH_LIMIT", "50"))
+
+LOG_DIR = os.path.join(
+    os.environ.get("BOT_LOG_DIR", "/home/yogeshv_10011835/voicebot_nodcode_platform/logs/"),
+    "analysis_logs",
+)
