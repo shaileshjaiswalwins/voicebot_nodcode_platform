@@ -1618,6 +1618,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 async def _early_sarvam_rescue(
                     _t=_turn_at_start_e, _s=_speaking_at_start_e
                 ) -> None:
+                    nonlocal _muted_inject_sent_time
                     _buffered = _muted_inject.get("text", "")
                     if _buffered:
                         text = _buffered
@@ -1653,7 +1654,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                                 turn_complete=True,
                             )
                         )
-                        nonlocal _muted_inject_sent_time
                         _muted_inject_sent_time = asyncio.get_event_loop().time()
                     except Exception as e:
                         _log.warning(f"[SARVAM-RESCUE] early rescue inject failed: {e}")
@@ -1741,6 +1741,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 async def _sarvam_rescue(
                     _t=_turn_at_start, _s=_speaking_at_start
                 ) -> None:
+                    nonlocal _muted_inject_sent_time
                     _buffered = _muted_inject.get("text", "")
                     if _buffered:
                         text = _buffered
@@ -1782,7 +1783,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                                 turn_complete=True,
                             )
                         )
-                        nonlocal _muted_inject_sent_time
                         _muted_inject_sent_time = asyncio.get_event_loop().time()
                     except Exception as e:
                         _log.warning(f"[SARVAM-RESCUE] inject failed: {e}")
