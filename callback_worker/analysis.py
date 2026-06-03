@@ -73,6 +73,18 @@ _BARE_CALL_SIGNAL_TOKENS: frozenset = frozenset(
     if word.strip()
 )
 
+# Tokens that mean "tell me what this call is about" — the caller is seeking context,
+# NOT confirming they need the product. Used to extend the all-bare-signals guard so
+# that an "इनफो" / "info" response doesn't fall through to LLM as a potential Enriched.
+_INFO_REQUEST_TOKENS: frozenset = frozenset(
+    unicodedata.normalize("NFC", w.lower())
+    for w in {
+        "info", "इनफो",
+        "information",
+        "jankari", "jankaari", "जानकारी",
+    }
+)
+
 # Phrases Gemini sometimes generates as its FIRST turn instead of the real greeting.
 # When detected, agent progression cannot be used to infer product confirmation.
 _WRONG_OPENER_PHRASES: tuple[str, ...] = (
@@ -601,6 +613,35 @@ async def generate_call_analysis(
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
+    # Buyer explicitly identifies this call as automated/computer/robot and dismisses it.
+    # "कंप्यूटर कॉल" / "computer call" is the caller saying "I know this is a bot" —
+    # they are rejecting the call, not engaging with the product. Deterministically
+    # Short Hangup unless the approved closing already fired (all specs collected before
+    # the dismissal), in which case the approved closing is the authoritative outcome.
+    _ROBOT_CALL_SIGNALS = [
+        "कंप्यूटर कॉल", "computer call", "computer ka call",
+        "robot call", "machine call", "automated call", "bot call",
+        "recorded call", "auto call",
+    ]
+    _user_text_combined = unicodedata.normalize("NFC", " ".join(
+        (t.get("text") or "").lower() for t in non_empty_user_turns
+    ))
+    _buyer_dismissed_as_robot = any(
+        unicodedata.normalize("NFC", sig.lower()) in _user_text_combined
+        for sig in _ROBOT_CALL_SIGNALS
+    )
+    if _buyer_dismissed_as_robot and not _approved_closing_present:
+        return {
+            "call_outcome": "Short Hangup",
+            "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
+            "call_summary": (
+                "Buyer explicitly identified and dismissed this as an automated/computer call "
+                "— no product engagement obtained."
+            ),
+            "is_business": "", "business_city": "", "business_name": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
+
     # Transfer-to-someone-else: receptionist/assistant answered and offered to connect
     # to the actual decision maker, OR user handed the phone to another person mid-call.
     # No product confirmation possible → Could Not Confirm.
@@ -648,13 +689,26 @@ async def generate_call_analysis(
         return tokens
 
     if non_empty_user_turns and all(
-        not (_tokenize_bare(t.get("text") or "") - _BARE_CALL_SIGNAL_TOKENS)
+        not (_tokenize_bare(t.get("text") or "") - _BARE_CALL_SIGNAL_TOKENS - _INFO_REQUEST_TOKENS)
         for t in non_empty_user_turns
     ):
+        # Distinguish: if all tokens are info-request words (and no bare call-presence signal
+        # overlap), the buyer was asking "what is this call about?" — prefer a Short Hangup
+        # summary that reflects the info-seeking intent.
+        _all_tokens = set().union(
+            *(_tokenize_bare(t.get("text") or "") for t in non_empty_user_turns)
+        )
+        _info_only = bool(_all_tokens - _BARE_CALL_SIGNAL_TOKENS)  # tokens beyond bare set
+        _summary_bare = (
+            "No product engagement — buyer asked what the call was about ('info'/'जानकारी') "
+            "but did not confirm the product."
+            if _info_only else
+            "No product engagement — buyer responded only with bare call-presence signals."
+        )
         return {
             "call_outcome": "Short Hangup",
             "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
-            "call_summary": "No product engagement — buyer responded only with bare call-presence signals.",
+            "call_summary": _summary_bare,
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
@@ -818,6 +872,26 @@ async def generate_call_analysis(
         for t in non_empty_user_turns
     )
 
+    # Detect identity / origin question in the buyer's FIRST turn.
+    # When a caller responds to the product greeting with a question like
+    # "आप कहां से बोल रहे हो?" or "कंप्यूटर कॉल?" alongside a bare "हां", the bot
+    # may have advanced on the reflex "हां", not on a genuine product confirmation.
+    # Suppress _product_confirmed_note so the LLM evaluates the call freely.
+    _IDENTITY_Q_PATTERNS = [
+        "कहां से", "कहाँ से", "kahan se", "kaha se",          # "where are you calling from?"
+        "कौन बोल", "kaun bol",                                  # "who is speaking?"
+        "आप कौन", "aap kaun",                                   # "who are you?"
+        "कौन सी company", "kaun si company", "kaunsi company",  # "which company?"
+        "कंप्यूटर कॉल", "computer call", "computer ka call",   # "is this a computer call?"
+        "machine call", "robot call", "automated call",
+        "कहाँ से आप", "aap kahan se",
+        "कहाँ से call", "kahan se call",
+    ]
+    _first_turn_has_identity_q = any(
+        unicodedata.normalize("NFC", p.lower()) in unicodedata.normalize("NFC", _first_user_text.lower())
+        for p in _IDENTITY_Q_PATTERNS
+    )
+
     _product_confirmed_note = (
         f"\n⚠ PRODUCT CONFIRMED: The agent asked specification questions (progressed past "
         f"the greeting), which means the buyer confirmed the product. Do NOT classify as "
@@ -829,6 +903,7 @@ async def generate_call_analysis(
         and not _agent_reask_opening
         and not _first_turn_has_explicit_no
         and not _user_asks_for_agent
+        and not _first_turn_has_identity_q   # "हां" bundled with who-are-you/where-from is a reflex
         else ""
     )
     # Phantom signal: user asked to be connected to the agent they are already talking to.
@@ -841,6 +916,19 @@ async def generate_call_analysis(
         "NOT a product confirmation. GP-7 Case E applies. "
         "Evaluate as Could Not Confirm or Short Hangup."
         if _user_asks_for_agent else ""
+    )
+    # Identity / origin question in first turn — "हाँ, आप कहां से बोल रहे हो?" is a
+    # phone-pickup reflex, not product confirmation. The bot may have mis-advanced on the
+    # bare "हाँ" component. The LLM must not treat agent progression as structural proof.
+    _identity_q_note = (
+        "\n⚠ IDENTITY QUESTION IN FIRST BUYER TURN: The buyer's first response contained "
+        "an identity or origin question ('आप कहां से?', 'कंप्यूटर कॉल?', 'कौन बोल रहा है?', "
+        "etc.) alongside or instead of a product confirmation. The bot may have advanced on "
+        "the reflexive 'हाँ/हेलो' component of that turn, NOT on genuine product interest. "
+        "GP-7 Case A applies — evaluate product_confirmed from the buyer's actual words across "
+        "all turns. If the buyer never gave a clear product-specific confirmation → Could Not "
+        "Confirm or Short Hangup."
+        if _first_turn_has_identity_q else ""
     )
     # When the agent re-asked the opening product question the bot itself rejected the
     # first response as insufficient. If the post-reask user turn is ALSO off-topic or
@@ -954,7 +1042,7 @@ QnA EXTRACTION when buyer turns are absent:
         else:
             _duration_note = f"\n📞 CALL DURATION: {_dur_label}."
 
-    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_wrong_opener_note}{_truncated_greeting_note}{_phantom_connect_note}{_reask_opening_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}
+    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_wrong_opener_note}{_truncated_greeting_note}{_phantom_connect_note}{_identity_q_note}{_reask_opening_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}
 
 Current date/time (IST, GMT+5:30): {current_dt_str}
 
