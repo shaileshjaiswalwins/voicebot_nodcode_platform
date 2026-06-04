@@ -459,11 +459,21 @@ async def generate_call_analysis(
         unicodedata.normalize("NFC", p.lower()) in _user_text_ni_check
         for p in _NI_ALREADY_SPOKEN_BYPASS
     )
+    # Bypass when the agent progressed through all enrichment questions: the buyer may have
+    # answered every spec question and then said "not interested" at the end. In that case
+    # the data is still valuable (→ Approved) and the LLM must evaluate. We detect this by
+    # checking that the agent made more turns than schema questions + 1 (greeting + product Q).
+    _schema_q_count = len(schema.get("question", [])) if schema else 0
+    _ni_enrichment_complete_bypass = (
+        _schema_q_count > 0
+        and len(_agent_turns_with_text) > _schema_q_count + 1
+    )
     if (
         not _approved_closing_present
         and any(m.lower() in _last_agent_text for m in _NI_AGENT_MARKERS)
         and not _ni_seller_bypass
         and not _ni_already_spoken_bypass
+        and not _ni_enrichment_complete_bypass
     ):
         return {
             "call_outcome": "Not Interested",
@@ -1308,6 +1318,8 @@ CALL RESCHEDULED
   Condition: buyer asked to be called at a SPECIFIC date and/or time.
   Strict: "baad mein / call later / abhi busy hoon" without a specific time → Could Not
     Confirm (Tier 4), NOT this outcome.
+  EXCEPTION: if valid_spec_count ≥ 1 AND product_confirmed — do NOT use this outcome.
+    The enrichment data is complete and valuable. Evaluate Tier 3 (Enriched/Approved) instead.
   → "Call Rescheduled"
 
 ALTERNATE NUMBER
@@ -1378,6 +1390,7 @@ COULD NOT CONFIRM
     c) call dropped before any product confirmation and no other rule matched
     d) buyer's responses were off-topic with no product engagement detected
   NOT ALLOWED IF: buyer said "हाँ/yes" or gave any spec detail → use Interested.
+  NOT ALLOWED IF: valid_spec_count ≥ 1 AND product_confirmed → use Tier 3 outcome (Enriched/Approved). A "call me later" after completing enrichment does not undo the collected data.
   NOT ALLOWED IF: buyer clearly rejected → use Not Interested.
   NOT ALLOWED IF: the agent asked ANY qualification question from the schema listed above
     (see GP-7 — agent progression structurally proves product_confirmed is TRUE; Could Not
@@ -1423,8 +1436,9 @@ Valid outcome values (use EXACT strings only):
 CONSISTENCY CHECK (mandatory before emitting JSON)
 ━━━━━━━━━━━━━━━━━━━━━━━━
 After completing Step 2 (qna extraction), self-verify:
-• valid_spec_count ≥ 1 AND product_confirmed → outcome MUST be Enriched or Approved (never Interested).
-• valid_spec_count == 0 AND product_confirmed → outcome MUST be Interested (never Enriched or Approved).
+• valid_spec_count ≥ 1 AND product_confirmed → outcome MUST be Enriched or Approved (never Interested, never Not Interested, never Call Rescheduled, never Could Not Confirm — spec data is complete and valuable regardless of any late buyer statement).
+• valid_spec_count == 0 AND product_confirmed AND NO explicit buyer rejection → outcome MUST be Interested (never Enriched or Approved).
+• valid_spec_count == 0 AND product_confirmed AND buyer explicitly rejected → outcome MUST be Not Interested (never Interested or Enriched).
 • closing_line_spoken AND product_confirmed AND valid_spec_count ≥ 1 → outcome MUST be Approved.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1598,6 +1612,45 @@ STRICT OUTPUT RULES:
                     logger.info(
                         f"[POST-PROC] Enriched → Approved: all schema question IDs "
                         f"{schema_ids} have valid answers"
+                    )
+                    outcome = "Approved"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+
+            # 2c. Not Interested → Approved when all schema question IDs have valid answers.
+            #     The buyer answered every enrichment question and then explicitly rejected
+            #     at the end. The collected data is complete and valuable — treat as Approved.
+            if outcome == "Not Interested" and questions:
+                _ni_schema_ids = {str(q.get("id", "")) for q in questions if q.get("id")}
+                _ni_answered_ids = {
+                    str(e.get("id", ""))
+                    for e in qna
+                    if str(e.get("id", "")) in _ni_schema_ids
+                    and (e.get("answ") or "").strip().lower() not in ("not sure", "")
+                }
+                if _ni_schema_ids and _ni_answered_ids >= _ni_schema_ids:
+                    logger.info(
+                        f"[POST-PROC] Not Interested → Approved: all schema question IDs "
+                        f"{_ni_schema_ids} have valid answers (buyer rejected after completing enrichment)"
+                    )
+                    outcome = "Approved"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+
+            # 2d. Call Rescheduled / Could Not Confirm → Approved when all schema questions answered.
+            #     Buyer said "call me later" after completing enrichment — data is complete/valuable.
+            if outcome in ("Call Rescheduled", "Could Not Confirm") and questions:
+                _cr_schema_ids = {str(q.get("id", "")) for q in questions if q.get("id")}
+                _cr_answered_ids = {
+                    str(e.get("id", ""))
+                    for e in qna
+                    if str(e.get("id", "")) in _cr_schema_ids
+                    and (e.get("answ") or "").strip().lower() not in ("not sure", "")
+                }
+                if _cr_schema_ids and _cr_answered_ids >= _cr_schema_ids:
+                    logger.info(
+                        f"[POST-PROC] {outcome} → Approved: all schema question IDs "
+                        f"{_cr_schema_ids} have valid answers (buyer said call-later after enrichment)"
                     )
                     outcome = "Approved"
                     result["call_outcome"] = outcome

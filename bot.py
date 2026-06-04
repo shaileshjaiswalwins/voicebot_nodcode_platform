@@ -513,6 +513,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "  → If still unclear after clarification: treat as job-seeker and close. → stop\n"
         "Rude or hang-up: same warm close immediately\n"
         "Reschedule: \"ठीक है जी, [time] पे बात करते हैं.\" → stop\n"
+        "EXCEPTION — enrichment complete: if ALL qualification questions are already answered (every question has a real answer or Not Sure), do NOT use the reschedule phrase regardless of whether a specific time was given. Instead say the success closing: \"ठीक है जी, सारी details मिल गईं — relevant sellers आपको directly call करेंगे. आपका समय देने के लिए शुक्रिया.\" → stop\n"
         "CRITICAL — TIME-REFERENCE OVERRIDES QUANTITY: If the buyer says any number word (चार, पाँच, दस, 4, 5, etc.) followed by OR near a time-of-day word (बजे, o'clock, AM, PM, बजे के बाद, बजे तक, घंटे बाद) — treat the ENTIRE utterance as a reschedule request, NOT as a quantity answer. Even if you are currently on the quantity question. Even if the number appears first and the time word appears in a fragment you only partially heard. Respond: \"ठीक है जी, [time] पे बात करते हैं.\" → stop immediately. Do NOT ask the quantity question again.\n"
         "Example: buyer says 'मैम, चार बजे बात कर रहे हैं' or just 'चार बजे' or 'four बजे' while you are asking about quantity → this is reschedule, not an answer of 4 units.\n\n"
 
