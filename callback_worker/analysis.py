@@ -127,6 +127,8 @@ _VALID_OUTCOMES = set(DISPOSITION_MAP.keys())
 
 
 def status_to_outcome(status: str) -> str:
+    if status == "abusive":
+        return "Abusive Lead"
     return "Could Not Confirm"
 
 
@@ -194,6 +196,30 @@ async def generate_call_analysis(
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
+
+    # Deterministic abusive-language check — scan every user turn before hitting the LLM.
+    # The LLM occasionally misses or refuses to flag explicit Hindi profanity; this is a
+    # hard override so abusive leads are never mis-classified as Interested/Approved.
+    _ABUSIVE_PATTERNS = (
+        "मां चोद", "माँ चोद", "मादरचोद", "madarchod", "maadarchod",
+        "बहन चोद", "बहनचोद", "भेनचोद", "behenchod", "bhenchod",
+        "चुतिया", "chutiya", "bhosdike", "bhosdika", "bhosdiki",
+        "रंडी", "randi", "रांड", "haraami",
+        "gaand maar", "गांड मार", "gaand mara",
+    )
+    for _t in transcript:
+        if _t.get("role") != "user":
+            continue
+        _n = unicodedata.normalize("NFC", (_t.get("text") or "")).lower()
+        if any(p.lower() in _n for p in _ABUSIVE_PATTERNS):
+            logger.info(f"[ANALYSIS] Abusive language detected in transcript — forcing 'Abusive Lead'")
+            return {
+                "call_outcome": "Abusive Lead",
+                "call_outcome_description": DISPOSITION_MAP["Abusive Lead"],
+                "call_summary": "Caller used explicit profanity or abusive language during the call.",
+                "is_business": "", "business_city": "", "business_name": "",
+                "qna": [], "product_change": {}, "rescheduled_to": "",
+            }
 
     user_turns = [t for t in transcript if t.get("role") == "user"]
     non_empty_user_turns = [t for t in user_turns if (t.get("text") or "").strip()]
