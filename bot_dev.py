@@ -7,10 +7,11 @@ google.realtime.RealtimeModel.  Same Gemini config, same system prompt,
 same SIP room joining, same hardcoded bot config, same MIS/callback APIs.
 
 Required environment variables (from .env):
-    LIVEKIT_URL         - LiveKit server WebSocket URL (wss://...)
-    LIVEKIT_API_KEY     - LiveKit API key
-    LIVEKIT_API_SECRET  - LiveKit API secret
-    GEMINI_LIVE_API_KEY - Google Gemini API key
+    LIVEKIT_URL              - LiveKit server WebSocket URL (wss://...)
+    LIVEKIT_API_KEY          - LiveKit API key
+    LIVEKIT_API_SECRET       - LiveKit API secret
+    GEMINI_LIVE_API_DEV_KEY  - Google Gemini Live API key (dev)
+    GEMINI_ANALYSIS_DEV_API_KEY - Google Gemini Analysis API key (dev)
 
 Run::
 
@@ -155,17 +156,17 @@ class _SuppressSendStreamWarning(_logging.Filter):
 
 _logging.getLogger("livekit.agents").addFilter(_SuppressSendStreamWarning())
 
-# Build key pool from GEMINI_LIVE_API_KEY, GEMINI_LIVE_API_KEY_2, GEMINI_LIVE_API_KEY_3, …
+# Build key pool from GEMINI_LIVE_API_DEV_KEY, GEMINI_LIVE_API_DEV_KEY_2, GEMINI_LIVE_API_DEV_KEY_3, …
 # Keys are passed explicitly to RealtimeModel (not via env var) so rotation actually works.
 _GEMINI_LIVE_KEYS: list[str] = []
 for _i in range(1, 20):
-    _k = os.environ.get(f"GEMINI_LIVE_API_KEY{'_' + str(_i) if _i > 1 else ''}", "")
+    _k = os.environ.get(f"GEMINI_LIVE_API_DEV_KEY{'_' + str(_i) if _i > 1 else ''}", "")
     if _k:
         _GEMINI_LIVE_KEYS.append(_k)
     elif _i > 1:
         break
 if not _GEMINI_LIVE_KEYS:
-    raise RuntimeError("No GEMINI_LIVE_API_KEY found in environment")
+    raise RuntimeError("No GEMINI_LIVE_API_DEV_KEY found in environment")
 
 _KEY_INDEX_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".gemini_key_index")
 
@@ -219,6 +220,7 @@ MONGO_DB = "ai_lead_qualif_dev"
 MONGO_COLLECTION = "call_transcripts"
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
+GEMINI_ANALYSIS_API_KEY = os.getenv("GEMINI_ANALYSIS_DEV_API_KEY", "")
 SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
 _SARVAM_AUDIO_MAX_BYTES = 16000 * 2 * 30  # 30 s at 16 kHz, 16-bit, mono
 
