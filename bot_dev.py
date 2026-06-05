@@ -210,12 +210,12 @@ def _next_gemini_key() -> str:
 # ---------------------------------------------------------------------------
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
-MIS_API_BASE = "http://192.168.8.67:8000"
+MIS_API_BASE = "http://192.168.14.101:3006"
 CATEGORY_CHANGE_API = f"{MIS_API_BASE}/leads/ai-lead-qualify/search"
 IST = timezone(timedelta(hours=5, minutes=30))
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://192.168.13.65:27017")
-MONGO_DB = "ai_lead_qualify"
+MONGO_DB = "ai_lead_qualif_dev"
 MONGO_COLLECTION = "call_transcripts"
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
@@ -281,7 +281,7 @@ def _silero_voiced_ms(pcm_bytes: bytes, threshold: float = 0.5) -> float:
 # ---------------------------------------------------------------------------
 
 _HARDCODED_BOT_CONFIG: dict = {
-    "assistant_id": "e8c0fd31-2d60-4531-a029-2047b17988c4",
+    "assistant_id": "e8c0fd31-2d60-4531-a029-2047b17987c4",
     "organization_id": "org-demo-123",
     "system_prompt": (
         "ROLE\n"
@@ -532,7 +532,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         {
             "name": "FetchLead",
             "description": "Fetch customer lead details from Justdial MIS API at call start.",
-            "url": "http://192.168.8.67:8000/leads/ai-lead-qualify/mis",
+            "url": "http://192.168.14.101:3006/leads/ai-lead-qualify/mis",
             "method": "GET",
             "headers": {},
             "query_params": {"lead_id": "", "mobile": "", "page": "1", "limit": "1", "ai_partner": "inh-suny-bot"},
@@ -559,7 +559,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         },
     ],
     "api_urls": {
-        "mis_api_base": "http://192.168.8.67:8000",
+        "mis_api_base": "http://192.168.14.101:3006",
         "category_change_api": f"{MIS_API_BASE}/leads/ai-lead-qualify/search",
     },
 "prompt_config": {
@@ -3474,7 +3474,8 @@ if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
-            agent_name="voice-bot-justdial",
+            agent_name="voice-bot-justdial-fallback",
+            port=8082,
             num_idle_processes=3,
         )
     )
