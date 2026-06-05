@@ -511,7 +511,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "  → If they confirm job-seeking (\"खुद के लिए\", \"job chahiye mujhe\", \"haan job dhundh raha hoon\", etc.): close with the NOT-INTERESTED phrase. → stop\n"
         "  → If they confirm hiring (\"hire karna hai\", \"placement chahiye\", \"kisi ko rakhna hai\", etc.): continue qualification from where you left off.\n"
         "  → If still unclear after clarification: treat as job-seeker and close. → stop\n"
-        "Rude or hang-up: same warm close immediately\n"
+        "Rude, abusive, or profane language: close immediately — \"ठीक है जी, शुक्रिया.\" → stop. Do NOT respond to the content of abusive speech.\n"
         "Reschedule: \"ठीक है जी, [time] पे बात करते हैं.\" → stop\n"
         "EXCEPTION — enrichment complete: if ALL qualification questions are already answered (every question has a real answer or Not Sure), do NOT use the reschedule phrase regardless of whether a specific time was given. Instead say the success closing: \"ठीक है जी, सारी details मिल गईं — relevant sellers आपको directly call करेंगे. आपका समय देने के लिए शुक्रिया.\" → stop\n"
         "CRITICAL — TIME-REFERENCE OVERRIDES QUANTITY: If the buyer says any number word (चार, पाँच, दस, 4, 5, etc.) followed by OR near a time-of-day word (बजे, o'clock, AM, PM, बजे के बाद, बजे तक, घंटे बाद) — treat the ENTIRE utterance as a reschedule request, NOT as a quantity answer. Even if you are currently on the quantity question. Even if the number appears first and the time word appears in a fragment you only partially heard. Respond: \"ठीक है जी, [time] पे बात करते हैं.\" → stop immediately. Do NOT ask the quantity question again.\n"
@@ -1236,6 +1236,24 @@ def _is_not_interested_close(closing_buf: str) -> bool:
     return any(m.lower() in n for m in _NOT_INTERESTED_MARKERS)
 
 
+# Hindi/Hinglish profanity patterns for code-level abuse detection.
+# Checked against user transcripts before sending to Gemini so abusive
+# callers are ended immediately regardless of LLM response latency.
+_ABUSIVE_PATTERNS: tuple[str, ...] = (
+    "मां चोद", "माँ चोद", "मादरचोद", "madarchod", "maadarchod",
+    "बहन चोद", "बहनचोद", "भेनचोद", "behenchod", "bhenchod",
+    "चुतिया", "chutiya", "bhosdike", "bhosdika", "bhosdiki",
+    "रंडी", "randi", "रांड", "haraami",
+    "gaand maar", "गांड मार", "gaand mara",
+)
+
+
+def _is_abusive_text(text: str) -> bool:
+    """Return True if the transcript contains explicit profanity or abuse."""
+    n = unicodedata.normalize("NFC", text or "").lower()
+    return any(p.lower() in n for p in _ABUSIVE_PATTERNS)
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
@@ -1883,7 +1901,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # Saved to Mongo as a separate field so the analysis LLM can see what the user
     # said during bot speaking turns even when those turns were discarded from _live_transcript.
     _muted_transcript_log: list = []
-    _close_status = "completed"  # "completed" or "not_interested"; set before _handle_close runs
+    _close_status = "completed"  # "completed", "not_interested", or "abusive"
+    _abusive_detected = False    # set True when profanity is detected; prevents double-trigger
 
     async def _handle_close() -> None:
         nonlocal _call_ended
@@ -2444,7 +2463,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("user_input_transcribed")
     def _on_user_spoke(ev) -> None:
-        nonlocal _turn_counter, _live_transcript, _pending_user_text, _wav_reset_flag, _call_ended, _early_inject_done
+        nonlocal _turn_counter, _live_transcript, _pending_user_text, _wav_reset_flag, _call_ended, _early_inject_done, _abusive_detected, _close_status
         # User spoke — reset inactivity timer (pass from_user_speech=True so nudge count clears)
         if not _call_ended:
             _reset_inactivity(from_user_speech=True)
@@ -2602,6 +2621,20 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     asyncio.create_task(_kick_caller_safe())
                     asyncio.create_task(_save_and_close("ivr_detected"))
                 return
+            # Abuse detection — end the call immediately without passing the text to Gemini.
+            if _is_abusive_text(transcript_text) and not _call_ended and not _abusive_detected:
+                _abusive_detected = True
+                _close_status = "abusive"
+                _log.warning(f"[ABUSE] Abusive language detected in FINAL — ending call: {transcript_text!r}")
+                if _had_partial and _live_transcript and _live_transcript[-1]["role"] == "user":
+                    _live_transcript[-1] = {"role": "user", "text": transcript_text}
+                else:
+                    _live_transcript.append({"role": "user", "text": transcript_text})
+                _call_ended = True
+                _cancel_inactivity()
+                asyncio.create_task(_kick_caller_safe())
+                asyncio.create_task(_save_and_close("abusive"))
+                return
             # Replace the last entry only if it was a partial for THIS same turn.
             # After a barge-in the previous agent turn is skipped, leaving a completed
             # user entry as _live_transcript[-1].  Without the _had_partial guard that
@@ -2619,7 +2652,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # handler below restarts this watchdog with a 1 s window once the current
             # speaking turn ends, but only when the turn was short (micro-ack); a long
             # turn means Gemini already gave a full answer and no re-inject is needed.
-            nonlocal _bot_resp_watchdog_task, _last_user_final_text, _last_user_final_turn, _stale_partial_task, _last_user_turn_time
+            nonlocal _bot_resp_watchdog_task, _last_user_final_text, _last_user_final_turn, _stale_partial_task, _last_user_turn_time, _final_arrived_while_speaking
             _last_user_turn_time = asyncio.get_event_loop().time()
             # FINAL arrived — cancel the stale-partial watchdog (no longer needed)
             if _stale_partial_task and not _stale_partial_task.done():
@@ -2627,6 +2660,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _stale_partial_task = None
             _last_user_final_text = transcript_text
             _last_user_final_turn = _turn_counter
+            # Track whether bot was already speaking when this FINAL arrived.
+            # Used below to suppress the micro-ack watchdog restart: if the bot was
+            # already mid-response to the PARTIAL (early-inject path), the FINAL is
+            # just confirmation — no re-inject needed regardless of speaking duration.
+            try:
+                _cur_state = session.agent_state
+                _cur_state_val = _cur_state.value if hasattr(_cur_state, "value") else str(_cur_state)
+                _final_arrived_while_speaking = (_cur_state_val == "speaking")
+            except Exception:
+                _final_arrived_while_speaking = False
             if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
                 _bot_resp_watchdog_task.cancel()
             _bot_resp_watchdog_task = asyncio.create_task(
@@ -2650,6 +2693,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 call_state["ended_naturally"] = True
                 asyncio.create_task(_kick_caller_safe())
                 asyncio.create_task(_save_and_close("ivr_detected"))
+                return
+            # Abuse detection on PARTIAL: catches abuse before EARLY-INJECT fires.
+            if _is_abusive_text(transcript_text) and not _call_ended and not _abusive_detected:
+                _abusive_detected = True
+                _close_status = "abusive"
+                _log.warning(f"[ABUSE] Abusive language detected in PARTIAL — ending call: {transcript_text!r}")
+                _live_transcript.append({"role": "user", "text": transcript_text})
+                _call_ended = True
+                _cancel_inactivity()
+                asyncio.create_task(_kick_caller_safe())
+                asyncio.create_task(_save_and_close("abusive"))
                 return
             _had_partial = bool(_pending_user_text)
             _pending_user_text = transcript_text
@@ -2716,6 +2770,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _early_inject_done: bool = False     # True if this PARTIAL was already early-injected
     _stale_partial_task: asyncio.Task | None = None  # fires if PARTIAL goes 6s without FINAL
     _last_user_turn_time: float = 0.0  # monotonic time of last accepted user FINAL (for inactivity recency check)
+    _final_arrived_while_speaking: bool = False  # True when FINAL arrives while bot is already speaking
 
     # Short terminal tokens: PARTIAL == FINAL for these 100% of the time.
     # Safe to treat the PARTIAL as FINAL and inject early so Gemini gets
@@ -2828,7 +2883,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
-        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _barge_in_fired, _bot_resp_watchdog_task, _speaking_start_time, _speaking_turns_completed, _muted_capture_empty_time, _muted_filler_dropped_time, _last_user_final_text
+        nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken, _barge_in_fired, _bot_resp_watchdog_task, _speaking_start_time, _speaking_turns_completed, _muted_capture_empty_time, _muted_filler_dropped_time, _last_user_final_text, _final_arrived_while_speaking
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
@@ -2846,7 +2901,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _barge_in_fired = False  # reset at start of each bot turn
             _speaking_start_time = asyncio.get_event_loop().time()
             _cancel_inactivity()
-            # Gemini started speaking — cancel the response watchdog.
+            # Gemini started speaking — cancel the response watchdog and reset the
+            # FINAL-while-speaking flag so a fresh turn starts with a clean slate.
+            _final_arrived_while_speaking = False
             if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
                 _bot_resp_watchdog_task.cancel()
                 _bot_resp_watchdog_task = None
@@ -2953,9 +3010,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # Only restart watchdog for true micro-acks (< 1.5 s TTS, e.g. "अच्छा जी").
             # Turns 1.5 s+ are complete responses (re-asks, questions) — re-injecting them
             # caused spurious double-responses and the fake 5-min timeout bug in Call 2/3.
+            # Also skip if the FINAL arrived while the bot was already speaking: that means
+            # the bot was already mid-response to the PARTIAL (early-inject path) and the
+            # FINAL is just confirmation — re-injecting creates a duplicate second response.
             if (not _call_ended and not _closing_triggered
                     and _last_user_final_text
-                    and speaking_duration < 1.5):
+                    and speaking_duration < 1.5
+                    and not _final_arrived_while_speaking):
                 _bot_resp_watchdog_task = asyncio.create_task(
                     _bot_response_watchdog(_last_user_final_text, _last_user_final_turn, timeout=1.0,
                                            speaking_count_at_start=_speaking_turns_completed)
