@@ -268,6 +268,9 @@ class TestSessionPayload(BaseModel):
     # Optional: pin test to a specific bot version (any state — draft or published).
     # When absent the worker uses the bot's current active (published) version.
     test_bot_version_id: str | None = Field(default=None, max_length=24)
+    # Optional: extra lead fields merged into the lead record for this test call.
+    # Useful for edge-case testing (is_business=True, specific qualification fields, etc.)
+    custom_lead_json: dict | None = Field(default=None)
 
     @field_validator("test_worker_agent_name")
     @classmethod

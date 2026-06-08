@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 from contextlib import asynccontextmanager
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
@@ -40,7 +42,12 @@ from .config_store import (
     publish_version,
     rollback_bot,
     save_draft,
+    set_campaign_status,
+    unpublish_version,
     search_transcripts,
+    export_transcripts_csv,
+    get_outcome_analytics,
+    get_quality_alerts,
     update_bot_meta,
     update_version,
     upsert_campaign,
@@ -411,6 +418,17 @@ def rollback(bot_id: str, payload: RollbackPayload, x_jd_user: str | None = Head
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.post("/api/bots/{bot_id}/unpublish")
+def unpublish(bot_id: str, x_jd_user: str | None = Header(default=None)):
+    _validate_bot_id(bot_id)
+    try:
+        return unpublish_version(bot_id, current_user(x_jd_user))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/bots/{bot_id}/duplicate")
 def duplicate(bot_id: str, x_jd_user: str | None = Header(default=None)):
     _validate_bot_id(bot_id)
@@ -446,6 +464,48 @@ def campaign_detail(campaign_key: str):
     if not doc:
         raise HTTPException(status_code=404, detail="campaign_not_found")
     return doc
+
+
+@app.patch("/api/campaigns/{campaign_key}/status")
+def campaign_set_status(
+    campaign_key: str,
+    payload: dict[str, Any],
+    x_jd_user: str | None = Header(default=None),
+):
+    new_status = payload.get("status", "")
+    if new_status not in ("active", "paused", "draft", "archived"):
+        raise HTTPException(status_code=400, detail="status must be one of: active, paused, draft, archived")
+    doc = set_campaign_status(campaign_key, new_status, current_user(x_jd_user))
+    if not doc:
+        raise HTTPException(status_code=404, detail="campaign_not_found")
+    return doc
+
+
+@app.get("/api/analytics/outcomes")
+def analytics_outcomes(
+    bot_id: str | None = Query(default=None),
+    campaign_id: str | None = Query(default=None),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    hours: int | None = Query(default=None, ge=1, le=720),
+):
+    """Aggregate call outcome counts. Returns counts by status/outcome for the given window."""
+    return get_outcome_analytics(
+        bot_id=bot_id,
+        campaign_id=campaign_id,
+        start_date=start_date,
+        end_date=end_date,
+        hours=hours,
+    )
+
+
+@app.get("/api/analytics/quality-alerts")
+def analytics_quality_alerts(
+    hours: int = Query(default=1, ge=1, le=24),
+    threshold_pct: float = Query(default=30.0, ge=1.0, le=100.0),
+):
+    """Return alert if disconnected/error calls exceed threshold_pct in the last N hours."""
+    return get_quality_alerts(hours=hours, threshold_pct=threshold_pct)
 
 
 @app.post("/api/bots/{bot_id}/test-session")
@@ -569,8 +629,11 @@ def transcripts(
     call_id: str | None = Query(default=None),
     assistant_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    outcome: str | None = Query(default=None),
     mobile: str | None = Query(default=None),
     text: str | None = Query(default=None),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     skip: int = Query(default=0, ge=0),
 ):
@@ -583,8 +646,11 @@ def transcripts(
             "call_id": call_id,
             "assistant_id": assistant_id,
             "status": status,
+            "outcome": outcome,
             "mobile": mobile,
             "text": text,
+            "start_date": start_date,
+            "end_date": end_date,
         },
         limit=limit,
         skip=skip,
@@ -623,6 +689,48 @@ def call_events(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# NOTE: export.csv MUST be registered before the {transcript_id} routes below.
+# FastAPI resolves routes in registration order — a static path segment ("export.csv")
+# would otherwise be swallowed by the dynamic {transcript_id} pattern.
+@app.get("/api/transcripts/export.csv")
+def transcripts_export(
+    bot_id: str | None = Query(default=None),
+    bot_version_id: str | None = Query(default=None),
+    campaign_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    outcome: str | None = Query(default=None),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    limit: int = Query(default=1000, ge=1, le=5000),
+):
+    rows = export_transcripts_csv(
+        filters={
+            "bot_id": bot_id,
+            "bot_version_id": bot_version_id,
+            "campaign_id": campaign_id,
+            "status": status,
+            "outcome": outcome,
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        limit=limit,
+    )
+    output = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+    else:
+        output.write("no_data\n")
+    output.seek(0)
+    filename = f"transcripts_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/transcripts/{transcript_id}/events")

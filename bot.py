@@ -220,7 +220,7 @@ def _next_gemini_key() -> str:
 # ---------------------------------------------------------------------------
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
-MIS_API_BASE = "http://192.168.8.67:8000"
+MIS_API_BASE = os.getenv("MIS_API_BASE", "http://192.168.8.67:8000")
 CATEGORY_CHANGE_API = f"{MIS_API_BASE}/leads/ai-lead-qualify/search"
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -622,12 +622,12 @@ def normalize_mobile(number: str) -> str:
     return n
 
 
-async def fetch_lead(lead_id: str = "", mobile: str = "", mis_api_base: str = MIS_API_BASE) -> dict | None:
+async def fetch_lead(lead_id: str = "", mobile: str = "", mis_api_base: str = MIS_API_BASE, ai_partner: str = "inh-suny-bot") -> dict | None:
     today = _date.today().strftime("%Y-%m-%d")
     if lead_id:
-        params = f"lead_id={lead_id}&page=1&limit=1&ai_partner=inh-suny-bot&fromdate={today}&todate={today}"
+        params = f"lead_id={lead_id}&page=1&limit=1&ai_partner={ai_partner}&fromdate={today}&todate={today}"
     elif mobile:
-        params = f"mobile={mobile}&page=1&limit=1&ai_partner=inh-suny-bot&fromdate={today}&todate={today}"
+        params = f"mobile={mobile}&page=1&limit=1&ai_partner={ai_partner}&fromdate={today}&todate={today}"
     else:
         return None
 
@@ -956,10 +956,11 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     questions = schema.get("question", [])
     is_business = buyer.get("is_business", "")
 
-    mandatory_opening = (
-        f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
-        f"आपको {product_name} की requirement है ना?"
+    _raw_opening = (
+        _bc.get("initial_message")
+        or "हेलो, मैं Simran बोल रही हूँ Justdial से — आपको {product} की requirement है ना?"
     )
+    mandatory_opening = _raw_opening.replace("{product}", product_name)
 
     questions_block = build_questions_text(schema, is_business=is_business if is_business == "" else None)
     mapping_block = "\n" + _build_question_phrase_rules(questions) + "\n"
@@ -1146,9 +1147,9 @@ _SUCCESS_CLOSE_MARKERS = (
 )
 
 
-def _is_closing_phrase(text: str) -> bool:
+def _is_closing_phrase(text: str, markers: tuple | list = _CLOSE_MARKERS) -> bool:
     normalized = _dedup_words(text or "").lower()
-    return any(marker.lower() in normalized for marker in _CLOSE_MARKERS)
+    return any(marker.lower() in normalized for marker in markers)
 
 
 def _is_not_interested_close(closing_buf: str) -> bool:
@@ -1185,9 +1186,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _log.info(_SEP)
 
     _early_lead_task: asyncio.Task | None = None
+    _early_ai_partner = (
+        str((_room_meta_raw.get("test_bot_config") or {}).get("ai_partner") or "").strip()
+        or str(_room_meta_raw.get("ai_partner") or "").strip()
+        or "inh-suny-bot"
+    )
     if _lead_id_meta or _room_mobile:
         _early_lead_task = asyncio.create_task(
-            fetch_lead(lead_id=_lead_id_meta, mobile=_room_mobile, mis_api_base=MIS_API_BASE)
+            fetch_lead(lead_id=_lead_id_meta, mobile=_room_mobile, mis_api_base=MIS_API_BASE, ai_partner=_early_ai_partner)
         )
 
     await ctx.connect()
@@ -1196,24 +1202,36 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # 2. Resolve bot config and settings
     _assistant_id = _room_meta_raw.get("assistant_id", "")
     _test_version_id = _room_meta_raw.get("test_bot_version_id", "") if _room_meta_raw.get("test_session") else ""
+    _embedded_config = _room_meta_raw.get("test_bot_config") if _room_meta_raw.get("test_session") else None
+
     _config_source = "mongo_active_version"
-    if _test_version_id:
-        _config_source = f"mongo_version_override:{_test_version_id}"
-    _bc = await fetch_bot_config(_assistant_id, version_id=_test_version_id or None) if _assistant_id else None
-    if not _bc:
-        _config_source = "hardcoded_fallback" if _assistant_id else "no_assistant_id"
-        _log.error(
-            f"[CONFIG] Falling back to hardcoded config — assistant_id={_assistant_id!r}, "
-            f"reason={_config_source!r}. Live config lookup did not return an active version."
+    if _embedded_config:
+        # Test session — config was embedded in room metadata by the dashboard API.
+        # No MongoDB round-trip needed; use it directly.
+        _bc = _embedded_config
+        _config_source = f"embedded_test_config:{_test_version_id or 'unknown'}"
+        _log.info(
+            f"[CONFIG] Using embedded test config — "
+            f"assistant_id={_assistant_id!r} version={_test_version_id!r}"
         )
-        _observability.event(
-            "config_fetch_failed",
-            {
-                "room_name": room_name,
-                "assistant_id": _assistant_id,
-                "status": "error",
-            },
-        )
+    else:
+        if _test_version_id:
+            _config_source = f"mongo_version_override:{_test_version_id}"
+        _bc = await fetch_bot_config(_assistant_id, version_id=_test_version_id or None) if _assistant_id else None
+        if not _bc:
+            _config_source = "hardcoded_fallback" if _assistant_id else "no_assistant_id"
+            _log.error(
+                f"[CONFIG] Falling back to hardcoded config — assistant_id={_assistant_id!r}, "
+                f"reason={_config_source!r}. Live config lookup did not return an active version."
+            )
+            _observability.event(
+                "config_fetch_failed",
+                {
+                    "room_name": room_name,
+                    "assistant_id": _assistant_id,
+                    "status": "error",
+                },
+            )
     _bot_config: dict = _bc or _HARDCODED_BOT_CONFIG
     _config_snapshot = deepcopy(_bot_config)
     _config_snapshot["__config_source"] = _config_source
@@ -1257,6 +1275,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     )
 
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
+    # Merge custom_lead_override from test session metadata into the fetched lead record.
+    _custom_lead_override = _room_meta_raw.get("custom_lead_override")
+    if _custom_lead_override and isinstance(_custom_lead_override, dict):
+        if _prefetched_lead is None:
+            _prefetched_lead = {}
+        _prefetched_lead = {**_prefetched_lead, **_custom_lead_override}
+        _log.info(f"[LEAD] custom_lead_override applied: {list(_custom_lead_override.keys())}")
 
     _api_urls = _bot_config.get("api_urls") or {}
     _mis_api_base        = _api_urls.get("mis_api_base") or MIS_API_BASE
@@ -1281,6 +1306,19 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _post_speech_hold_ms             = int(_bot_config.get("post_speech_hold_ms") or 800)
     _functions: list[dict] = _bot_config.get("functions") or []
     _function_calling   = bool(_bot_config.get("function_calling", False)) and bool(_functions)
+    # Config-driven persona & behaviour overrides
+    _agent_name         = str(_bot_config.get("agent_name") or "").strip()
+    _organization_name  = str(_bot_config.get("organization_name") or "").strip()
+    _ai_partner         = str(_bot_config.get("ai_partner") or "inh-suny-bot").strip() or "inh-suny-bot"
+    _inactivity_end_phrase = (
+        str(_bot_config.get("inactivity_end_text") or "").strip()
+        or INACTIVITY_END_PHRASE
+    )
+    _cfg_close_markers  = _bot_config.get("close_markers")
+    _effective_close_markers = (
+        list(_cfg_close_markers) if _cfg_close_markers
+        else list(_CLOSE_MARKERS)
+    )
     try:
         loop = asyncio.get_running_loop()
         _lang_cfg = await loop.run_in_executor(None, get_language_settings, _language)
@@ -1317,8 +1355,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     system_instruction = build_system_prompt(
         _prefetched_lead, lang_key=_language, bot_config=_bot_config
     )
-
-    # 5. RealtimeModel — same Gemini config as the Pipecat bot
+# 5. RealtimeModel — same Gemini config as the Pipecat bot
     _selected_key = _next_gemini_key()
     _incr_key_inflight(_selected_key)
     _log.info(
@@ -1630,7 +1667,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _inactivity_task = None
             _log.info("[INACTIVITY] extended silence — ending call directly")
             call_state["ended_naturally"] = True
-            end_phrase = INACTIVITY_END_PHRASE
+            end_phrase = _inactivity_end_phrase
             await _speak_via_gemini(end_phrase, reason="inactivity-end")
             await asyncio.sleep(2)
             await _kick_caller_safe()
@@ -1740,12 +1777,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _pending_assistant_text = buf
                 if not _early_close_muting and not _closing_triggered:
                     buf_lower = buf.lower()
-                    if any(m in buf_lower for m in (
+                    _stream_close_check = list(_effective_close_markers) + [
                         "details मिल गईं",
-                        "sellers आपसे contact",   # closing line only — not mid-call "relevant sellers से connect"
+                        "sellers आपसे contact",
                         "sellers will contact",
                         "all details",
-                    )):
+                    ]
+                    if any(m.lower() in buf_lower for m in _stream_close_check):
                         _early_close_muting = True
                         _set_mic(False, reason="stream-closing-phrase")
                         _log.info(f"[STREAM-DETECT] Closing phrase in stream — mic muted | buf={buf!r}")
@@ -1943,10 +1981,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # Bot-echo substrings: Sarvam/Soniox can pick up the bot's own voice echoing
     # through the caller's speakerphone during the muted greeting window.
     # Any muted-capture text containing one of these is our own audio — drop it.
+    # Static fallbacks kept; config-driven agent name added dynamically.
     _BOT_ECHO_MARKERS = [
-        "सिमरन बोल रही",   # "Simran bol rahi hoon" — bot identity line
+        "सिमरन बोल रही",
         "simran bol",
     ]
+    if _agent_name:
+        _name_lower = _agent_name.lower()
+        _BOT_ECHO_MARKERS.append(_name_lower + " bol")
+        _BOT_ECHO_MARKERS.append(_name_lower + " speaking")
 
     def _is_bot_echo(text: str) -> bool:
         n = unicodedata.normalize("NFC", text).lower()
@@ -2327,7 +2370,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _early_close_muting = True
                 _set_mic(False, reason="commit-closing-phrase")
                 _log.info("[CLOSE DETECT] Partial closing phrase detected in commit — mic muted")
-        if _is_closing_phrase(_closing_buffer):
+        if _is_closing_phrase(_closing_buffer, _effective_close_markers):
             _closing_triggered = True
             call_state["ended_naturally"] = True
             if _is_not_interested_close(_closing_buffer):
@@ -2875,7 +2918,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     caller_mobile = normalize_mobile(sip_info["caller_number"]) if sip_info["caller_number"] else _room_mobile
 
     if not record and caller_mobile:
-        record = await fetch_lead(mobile=caller_mobile, mis_api_base=_mis_api_base)
+        record = await fetch_lead(mobile=caller_mobile, mis_api_base=_mis_api_base, ai_partner=_ai_partner)
         if record:
             call_state["record_id"] = record.get("_id") or record.get("ref_id")
             call_state["call_id"] = _room_meta_raw.get("call_id") or record.get("call_id") or room_name
@@ -2930,6 +2973,38 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "source": "fallback" if str(call_state.get("record_id") or "").startswith("fallback_") else "lead_api_or_metadata",
         },
     )
+
+    # If the lead was not available when the session was created (prefetch missed),
+    # rebuild the system prompt now and push the updated instructions to Gemini
+    # before the greeting fires, so the bot has the correct qualification questions.
+    if not _prefetched_lead and record and _rt is not None:
+        _updated_prompt = build_system_prompt(
+            record, lang_key=_language, bot_config=_bot_config
+        )
+        if _updated_prompt != system_instruction:
+            _log.info("[PROMPT] Prefetch missed — pushing updated system prompt with lead context")
+            try:
+                # update_instructions() silently skips mid-session update for Gemini 3.1
+                # (mutable_instructions=False). Send the instruction directly as a LiveClientContent
+                # with role=None so the model treats it as a system message update.
+                async with _rt._session_lock:
+                    _session_active = _rt._active_session is not None
+                if _session_active:
+                    _rt._send_client_event(
+                        types.LiveClientContent(
+                            turns=[
+                                types.Content(
+                                    parts=[types.Part(text=_updated_prompt)],
+                                    role=None,
+                                )
+                            ],
+                            turn_complete=False,
+                        )
+                    )
+                else:
+                    await _rt.update_instructions(_updated_prompt)
+            except Exception as _upd_exc:
+                _log.warning(f"[PROMPT] instruction update failed: {_upd_exc}")
 
     # 16. 5-minute hard call timeout
     _DEFAULT_TIMEOUT_MSG = (
@@ -3008,7 +3083,7 @@ if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
-            agent_name=os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial"),
+            agent_name=os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial-test"),
             num_idle_processes=3,
             port=_WORKER_PORT,
         )

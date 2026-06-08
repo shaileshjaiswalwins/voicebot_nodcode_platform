@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -353,6 +353,36 @@ def publish_version(bot_id: str, version_id: str | None, user: str) -> dict[str,
     return serialize_doc(db[BOT_VERSION_COLLECTION].find_one({"_id": version["_id"]}))
 
 
+def unpublish_version(bot_id: str, user: str) -> dict[str, Any]:
+    """Revert the active published version back to draft so it can be edited.
+
+    Clears bot.active_version_id and sets the version state back to 'draft'.
+    New calls will fall back to the hardcoded config until a version is
+    published again. In-flight calls are unaffected (they hold their snapshot).
+    """
+    db = get_db()
+    bot_obj_id = ObjectId(bot_id)
+    bot = db[BOT_COLLECTION].find_one({"_id": bot_obj_id})
+    if not bot:
+        raise KeyError("bot_not_found")
+    active_id = bot.get("active_version_id")
+    if not active_id:
+        raise ValueError("no_active_version")
+    now = _now()
+    db[BOT_VERSION_COLLECTION].update_one(
+        {"_id": active_id},
+        {"$set": {"state": "draft", "unpublished_by": user, "unpublished_at": now}},
+    )
+    db[BOT_COLLECTION].update_one(
+        {"_id": bot_obj_id},
+        {
+            "$set": {"status": "draft", "draft_version_id": active_id, "updated_at": now},
+            "$unset": {"active_version_id": ""},
+        },
+    )
+    return serialize_doc(db[BOT_VERSION_COLLECTION].find_one({"_id": active_id}))
+
+
 def rollback_bot(bot_id: str, version_id: str, user: str) -> dict[str, Any]:
     db = get_db()
     version = db[BOT_VERSION_COLLECTION].find_one(
@@ -460,6 +490,26 @@ def create_test_session(bot_id: str, payload: dict[str, Any], user: str) -> dict
     if not bot_bundle:
         raise KeyError("bot_not_found")
     bot = bot_bundle["bot"]
+    versions = bot_bundle.get("versions", [])
+
+    # Resolve which version config to embed — prefer pinned version, fall back
+    # to active published version, then latest draft.
+    version_id = payload.get("test_bot_version_id")
+    version_obj = None
+    if version_id:
+        version_obj = next((v for v in versions if v["_id"] == version_id), None)
+    if not version_obj:
+        active_id = bot.get("active_version_id")
+        version_obj = next((v for v in versions if v["_id"] == active_id), None)
+    if not version_obj and versions:
+        version_obj = versions[0]
+
+    embedded_config = None
+    if version_obj:
+        embedded_config = serialize_doc(
+            build_runtime_snapshot(bot, version_obj)
+        )
+
     room_metadata = {
         "assistant_id": bot["assistant_id"],
         "campaign_id": payload.get("campaign_id", "test"),
@@ -472,10 +522,14 @@ def create_test_session(bot_id: str, payload: dict[str, Any], user: str) -> dict
         "test_worker_agent_name": payload.get("test_worker_agent_name", ""),
         "test_session": True,
     }
-    # If the caller pinned a specific version, include it so the worker can
-    # load that version's config instead of the default active/published one.
-    if payload.get("test_bot_version_id"):
-        room_metadata["test_bot_version_id"] = payload["test_bot_version_id"]
+    if version_id:
+        room_metadata["test_bot_version_id"] = version_id
+    if embedded_config:
+        room_metadata["test_bot_config"] = embedded_config
+    custom_lead = payload.get("custom_lead_json")
+    if custom_lead and isinstance(custom_lead, dict):
+        room_metadata["custom_lead_override"] = custom_lead
+
     return {
         "room_metadata": room_metadata,
         "instructions": "Pass this metadata when creating the LiveKit room for the controlled test call.",
@@ -494,18 +548,64 @@ def _transcript_sources():
         yield "legacy", get_client()[LEGACY_TRANSCRIPT_DB][LEGACY_TRANSCRIPT_COLLECTION]
 
 
+def _parse_date(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 def _transcript_query(filters: dict[str, Any]) -> dict[str, Any]:
     query: dict[str, Any] = {}
-    for key in ("bot_id", "bot_version_id", "campaign_id", "lead_id", "call_id", "assistant_id", "status"):
+    # Don't add status to the top-level query when outcome is also set —
+    # outcome already checks status via $or, and combining both creates an
+    # impossible query (e.g. status=disconnected AND $or[status=completed]).
+    status_keys = ("bot_id", "bot_version_id", "campaign_id", "lead_id", "call_id", "assistant_id")
+    for key in status_keys:
         if filters.get(key):
             query[key] = filters[key]
+    if filters.get("status") and not filters.get("outcome"):
+        query["status"] = filters["status"]
+    # Build $or clauses — we may have multiple sources contributing to $or.
+    # Mongo doesn't support multiple $or keys; collect them all then wrap in $and.
+    or_clauses: list[list[dict[str, Any]]] = []
+    if filters.get("outcome"):
+        # Outcome can be stored in tags (new style) or status (legacy style).
+        # When status filter is also present, AND it into the outcome $or so both apply.
+        outcome_val = filters["outcome"]
+        outcome_or: list[dict[str, Any]] = [
+            {"tags": {"$in": [outcome_val]}},
+            {"status": outcome_val},
+        ]
+        if filters.get("status") and filters["status"] != outcome_val:
+            # User filtered both: interpret as "status=X AND (tags=outcome OR status=outcome)"
+            # which only makes sense when outcome != status value, so add status back as $and.
+            query["status"] = filters["status"]
+        or_clauses.append(outcome_or)
     if filters.get("mobile"):
-        query["$or"] = [
+        or_clauses.append([
             {"sip_info.caller_number": filters["mobile"]},
             {"lead_record.buyer_details.buyer_number": filters["mobile"]},
-        ]
+        ])
+    if len(or_clauses) == 1:
+        query["$or"] = or_clauses[0]
+    elif len(or_clauses) > 1:
+        query["$and"] = [{"$or": clause} for clause in or_clauses]
     if filters.get("text"):
         query["transcript.text"] = {"$regex": filters["text"], "$options": "i"}
+    start_dt = _parse_date(filters.get("start_date"))
+    end_dt = _parse_date(filters.get("end_date"))
+    if start_dt or end_dt:
+        date_range: dict[str, Any] = {}
+        if start_dt:
+            date_range["$gte"] = start_dt
+        if end_dt:
+            date_range["$lt"] = end_dt + timedelta(days=1)
+        query["created_at"] = date_range
     return query
 
 
@@ -628,3 +728,155 @@ def attach_test_recording(room_name: str, recording_url: str, recording_path: st
         result = collection.update_many({"room_name": room_name}, update)
         matched += int(result.matched_count or 0)
     return matched
+
+
+# ─── Campaign status ──────────────────────────────────────────────────────────
+
+def set_campaign_status(campaign_key: str, status: str, user: str) -> dict[str, Any] | None:
+    db = get_db()
+    doc = db[CAMPAIGN_COLLECTION].find_one_and_update(
+        {"campaign_key": campaign_key},
+        {"$set": {"status": status, "updated_by": user, "updated_at": _now()}},
+        return_document=ReturnDocument.AFTER,
+    )
+    return serialize_doc(doc) if doc else None
+
+
+# ─── Analytics ───────────────────────────────────────────────────────────────
+
+_OUTCOME_FIELDS = ("status", "tags", "ended_naturally", "call_duration_sec", "bot_id", "campaign_id", "created_at")
+_OUTCOME_PROJECTION = {f: 1 for f in _OUTCOME_FIELDS}
+
+
+def get_outcome_analytics(
+    *,
+    bot_id: str | None = None,
+    campaign_id: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    hours: int | None = None,
+) -> dict[str, Any]:
+    query: dict[str, Any] = {}
+    if bot_id:
+        query["bot_id"] = bot_id
+    if campaign_id:
+        query["campaign_id"] = campaign_id
+
+    if hours is not None:
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        query["created_at"] = {"$gte": cutoff}
+    else:
+        start_dt = _parse_date(start_date)
+        end_dt = _parse_date(end_date)
+        if start_dt or end_dt:
+            date_range: dict[str, Any] = {}
+            if start_dt:
+                date_range["$gte"] = start_dt
+            if end_dt:
+                date_range["$lt"] = end_dt + timedelta(days=1)
+            query["created_at"] = date_range
+
+    status_counts: dict[str, int] = {}
+    outcome_counts: dict[str, int] = {}
+    total = 0
+    total_duration = 0.0
+    ended_naturally = 0
+    tags_seen = 0
+
+    for _source, collection in _transcript_sources():
+        for doc in collection.find(query, _OUTCOME_PROJECTION):
+            total += 1
+            s = doc.get("status") or "unknown"
+            status_counts[s] = status_counts.get(s, 0) + 1
+            tags = doc.get("tags") or []
+            for tag in tags:
+                outcome_counts[tag] = outcome_counts.get(tag, 0) + 1
+                tags_seen += 1
+            dur = doc.get("call_duration_sec")
+            if isinstance(dur, (int, float)) and dur > 0:
+                total_duration += dur
+            if doc.get("ended_naturally"):
+                ended_naturally += 1
+
+    # When no tags are populated (legacy dialer that only sets status),
+    # surface status counts as outcome counts so the dashboard is never empty.
+    if tags_seen == 0:
+        outcome_counts = dict(status_counts)
+
+    avg_duration = round(total_duration / total, 1) if total > 0 else 0.0
+    return {
+        "total": total,
+        "by_status": status_counts,
+        "by_outcome": outcome_counts,
+        "ended_naturally": ended_naturally,
+        "avg_duration_sec": avg_duration,
+    }
+
+
+def get_quality_alerts(*, hours: int = 1, threshold_pct: float = 30.0) -> dict[str, Any]:
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    query = {"created_at": {"$gte": cutoff}}
+    total = 0
+    bad = 0
+    for _source, collection in _transcript_sources():
+        for doc in collection.find(query, {"status": 1, "ended_naturally": 1, "tags": 1}):
+            total += 1
+            s = doc.get("status") or ""
+            tags = doc.get("tags") or []
+            if s in ("disconnected", "error") or "disconnected" in tags or "error" in tags:
+                bad += 1
+
+    pct = round(bad / total * 100, 1) if total > 0 else 0.0
+    alert = total >= 5 and pct >= threshold_pct
+    return {
+        "hours": hours,
+        "total_calls": total,
+        "bad_calls": bad,
+        "bad_pct": pct,
+        "threshold_pct": threshold_pct,
+        "alert": alert,
+        "message": (
+            f"{bad}/{total} calls ({pct}%) ended as disconnected/error in the last {hours}h"
+            if alert else None
+        ),
+    }
+
+
+# ─── CSV export ──────────────────────────────────────────────────────────────
+
+_CSV_FIELDS = [
+    "call_id", "campaign_id", "bot_id", "bot_version_id", "status",
+    "call_duration_sec", "ended_naturally", "tags", "room_name",
+    "created_at", "updated_at",
+]
+
+
+def export_transcripts_csv(
+    filters: dict[str, Any],
+    *,
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    limit = max(1, min(limit, 5000))
+    query = _transcript_query(filters)
+    projection = {f: 1 for f in _CSV_FIELDS}
+    projection["sip_info"] = 1
+    rows = []
+    seen: set[tuple[str, str]] = set()
+    for source, collection in _transcript_sources():
+        cursor = collection.find(query, projection).sort("created_at", -1).limit(limit)
+        for doc in cursor:
+            key = (source, str(doc.get("_id", "")))
+            if key in seen:
+                continue
+            seen.add(key)
+            row = {f: doc.get(f, "") for f in _CSV_FIELDS}
+            row["tags"] = "|".join(doc.get("tags") or [])
+            row["created_at"] = str(doc.get("created_at", ""))
+            row["updated_at"] = str(doc.get("updated_at", ""))
+            sip = doc.get("sip_info") or {}
+            row["caller_number"] = sip.get("caller_number", "")
+            rows.append(row)
+        if len(rows) >= limit:
+            break
+    rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    return rows[:limit]
