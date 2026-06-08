@@ -477,7 +477,11 @@ _HARDCODED_BOT_CONFIG: dict = {
         "  1. Acknowledge plainly without echoing the number: \"इतनी quantity — business के लिए होगी।\" (vary wording each call)\n"
         "     NEVER say the number back — say 'इतनी quantity' or 'इतनी बड़ी requirement', NOT '1000 kg — समझ गई'.\n"
         "  2. Immediately ask: \"आपके business का नाम क्या है?\"\n"
-        "  3. Wait for the answer. Then ask: \"और कौन से city में?\"\n"
+        "  3. Wait for the answer. Then, for the city:\n"
+        "     • If the buyer mentioned a city name at ANY point earlier in this call — ask to reconfirm: \"क्या आपका business [city] में है?\"\n"
+        "       → If yes: accept it and move on.\n"
+        "       → If no: ask \"तो किस city में है?\"\n"
+        "     • If no city was mentioned yet — ask fresh: \"और कौन से city में?\"\n"
         "  4. Wait for the answer. Then continue with the remaining qualification questions from the schema, one at a time.\n"
         "  5. After ALL qualification questions are done, say the closing line.\n\n"
         "CRITICAL: Business name and city are asked RIGHT AFTER the gate triggers — not at the end. Then qualification questions resume normally.\n"
@@ -1045,7 +1049,11 @@ Triggers:
 EXACT SEQUENCE when gate triggers — follow this order, no deviations:
   1. Acknowledge plainly: "इतनी quantity — business के लिए होगी।" (vary wording, NEVER echo the number)
   2. Ask immediately: "आपके business का नाम क्या है?"
-  3. Wait for answer. Then ask: "और कौन से city में?"
+  3. Wait for answer. Then, for the city:
+     • If the buyer mentioned a city name at ANY point earlier in this call — ask to reconfirm: "क्या आपका business [city] में है?"
+       → If yes: accept it and move on.
+       → If no: ask "तो किस city में है?"
+     • If no city was mentioned yet — ask fresh: "और कौन से city में?"
   4. Wait for answer. Then continue the remaining qualification questions one at a time.
   5. After ALL qualification questions are answered, say the closing line.
 
@@ -1061,8 +1069,11 @@ After ALL qualification questions are answered, ask naturally:
 IF the buyer says YES (हाँ / हां / ji / bilkul / yes / business ke liye):
   - Warmly acknowledge: "अच्छा, business के लिए — ज़रूर!"
   - Ask business name: "आपके business का नाम क्या है?"
-  - After they answer, ask city: "और आपका business किस city में है?"
-  - Then close the call.
+  - After they answer, for the city:
+    • If the buyer mentioned a city name at ANY point earlier in this call — reconfirm: "क्या आपका business [city] में है?"
+      → If yes: accept and close the call.
+      → If no: ask "तो किस city में है?" then close.
+    • If no city was mentioned yet — ask fresh: "और आपका business किस city में है?" then close.
 
 IF the buyer says NO (नहीं / personal / ghar ke liye / khud ke liye):
   - Accept naturally and move straight to closing. Do NOT ask business name or city.
