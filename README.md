@@ -1,6 +1,6 @@
-# LiveKit Native JustDial Bot
+# LiveKit Native JustDial Bot + No-Code Platform
 
-Standalone LiveKit-Agents voicebot for JustDial product qualification calls. This is a complete, self-contained rewrite of the Pipecat bot — no Pipecat dependency. Uses Gemini Live (s2s) via `livekit-agents` natively.
+Standalone LiveKit-Agents voicebot for JustDial product qualification calls plus a V1 internal no-code platform for PMs and developers. The runtime uses Gemini Live (s2s) via `livekit-agents` natively, while the platform stores bot prompts/settings, versions, campaigns and transcripts in MongoDB.
 
 ## Requirements
 
@@ -41,6 +41,30 @@ Or manually:
 uv run python bot.py start
 ```
 
+## Platform API and Dashboard
+
+Seed the current hardcoded bot into MongoDB:
+
+```bash
+uv run python -m voicebot_platform.seed_default
+```
+
+Start the FastAPI platform service:
+
+```bash
+./start_api.sh
+```
+
+Start the React dashboard:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+See `docs/platform_v1.md` for API routes, handoff notes, observability setup and the LiveKit/Langfuse monitoring plan.
+
 ## Architecture
 
 - **Model**: `gemini-3.1-flash-live-preview` via `livekit.plugins.google.realtime.RealtimeModel`
@@ -50,6 +74,7 @@ uv run python bot.py start
 - **Function tools**: `FetchLead` and `FetchCategorySchema` via MIS API
 - **Call log**: Saved to backend MongoDB after call ends
 - **Recording**: Written to `call_records/recording_<room>.wav`
+- **No-code config**: Active published bot versions are fetched from MongoDB by `assistant_id`; active calls keep their startup config snapshot.
 
 ## Notes
 

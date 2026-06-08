@@ -1,0 +1,24 @@
+[Unit]
+Description=VoiceBot LiveKit Worker
+After=network.target mongod.service
+Wants=mongod.service
+
+[Service]
+Type=simple
+; DEPLOY NOTE: change User to the actual Linux user running the app on the server
+User=justdial
+WorkingDirectory=/Users/justdial/voicebot_nodcode_platform
+EnvironmentFile=/Users/justdial/voicebot_nodcode_platform/.env
+; DEPLOY NOTE: find the full uv path on server with: which uv
+ExecStart=/Users/justdial/.local/bin/uv run python bot.py start
+Restart=always
+RestartSec=5s
+StartLimitIntervalSec=60
+StartLimitBurst=5
+KillMode=process-group
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voicebot-worker
+
+[Install]
+WantedBy=multi-user.target

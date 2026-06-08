@@ -8,6 +8,9 @@ from datetime import datetime, timedelta, timezone
 import aiohttp
 from loguru import logger
 
+from voicebot_platform.outcome_catalog import get_disposition_map
+from voicebot_platform.phrase_library import get_phrase_texts
+
 from .config import GEMINI_API_KEY
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -102,7 +105,7 @@ _WRONG_OPENER_PHRASES: tuple[str, ...] = (
     "are you on the line",
 )
 
-DISPOSITION_MAP: dict[str, str] = {
+_FALLBACK_DISPOSITION_MAP: dict[str, str] = {
     "Short Hangup":                      "The call ended with no product discussion — the customer said nothing at all, OR gave only a bare call-acknowledgment (e.g. hello, haan, hold on, ek second) and disconnected before any product topic was raised.",
     "Voicemail":                        "The call went to the recipient's voicemail instead of connecting directly.",
     "Wrong Number":                     "The number dialed does not belong to the intended customer.",
@@ -123,11 +126,51 @@ DISPOSITION_MAP: dict[str, str] = {
     "Language Issue":                   "Communication was not possible due to a language mismatch.",
 }
 
-_VALID_OUTCOMES = set(DISPOSITION_MAP.keys())
+def _current_disposition_map() -> dict[str, str]:
+    """Resolve the editable outcome catalog with a hardcoded fallback."""
+    try:
+        mapping = get_disposition_map()
+        if mapping:
+            return mapping
+    except Exception:
+        pass
+    return _FALLBACK_DISPOSITION_MAP
+
+
+class _LazyDispositionMap(dict):
+    def __getitem__(self, key):
+        return _current_disposition_map()[key]
+
+    def get(self, key, default=None):
+        return _current_disposition_map().get(key, default)
+
+    def keys(self):  # type: ignore[override]
+        return _current_disposition_map().keys()
+
+    def items(self):  # type: ignore[override]
+        return _current_disposition_map().items()
+
+    def __iter__(self):
+        return iter(_current_disposition_map())
+
+    def __contains__(self, key):  # type: ignore[override]
+        return key in _current_disposition_map()
+
+
+DISPOSITION_MAP: dict[str, str] = _LazyDispositionMap()
+
+
+def _valid_outcomes() -> set[str]:
+    return set(_current_disposition_map().keys())
 
 
 def status_to_outcome(status: str) -> str:
-    if status == "abusive":
+    normalized = (status or "").strip().lower()
+    if normalized in {"timeout", "inactivity_timeout", "max_duration", "failed", "error"}:
+        return "Technical Issue - Call Connected"
+    if normalized in {"short_hangup", "no_response"}:
+        return "Short Hangup"
+    if normalized == "abusive":
         return "Abusive Lead"
     return "Could Not Confirm"
 
@@ -173,6 +216,7 @@ async def generate_call_analysis(
     greeting_done: bool = True,
     user_speech_ms: int = 0,
     wrong_opener_detected: bool = False,
+    transcript_source: str = "gemini_live",
 ) -> dict:
     if gemini_connect_failed:
         return {
@@ -221,7 +265,8 @@ async def generate_call_analysis(
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
 
-    user_turns = [t for t in transcript if t.get("role") == "user"]
+    user_roles = {"user", "buyer", "recording"}
+    user_turns = [t for t in transcript if str(t.get("role", "")).lower() in user_roles]
     non_empty_user_turns = [t for t in user_turns if (t.get("text") or "").strip()]
 
     # Tokens that count as product confirmation when they appear as the buyer's
@@ -337,25 +382,50 @@ async def generate_call_analysis(
         "dial 1", "dial 2", "dial 3",
         "for english press", "hindi ke liye", "हिंदी के लिए दबाएं",
         "please press", "kindly press",
+        "दबाएं", "के लिए दबाएं",          # Hindi "press X for Y" IVR
+        "reason for calling",
+        "रीज़न फॉर कॉलिंग",
+        "please state your",
         # Automated queuing / unavailability
         "all our representatives are busy", "all agents are busy",
         "our executives are busy", "all our executives are busy",
+        "our representatives are",
         "currently busy", "please hold the line",
         "your call is important to us",
         "estimated wait time",
         "you are number", "in the queue",
+        "currently unavailable",
+        "not available at the moment",
+        "आईवीआर", "ivr system",
         # Automated connection notices
         "your call is being connected", "apka call connect",
         "connecting your call",
         "this call may be recorded for quality",
         "this call is being recorded for training",
+        # Carrier / voicemail system messages — never uttered by a live person
+        "you may hang up", "may hang up now",
+        "यू मे हैंग अप",
+        "the person you are trying to",
+        "the person you are calling",
+        "the number you are trying to",
+        "पर्सन यू आर ट्राइंग", "पर्सन यू आर कॉलिंग",
+        "after the beep", "leave your message after",
+        "do you have recording",
     ]
-
     _all_text = " ".join(
         (t.get("text") or "").lower() for t in transcript
     )
     _muted_text = " ".join((m or "").lower() for m in (muted_transcript or []))
     _full_text = f"{_all_text} {_muted_text}"
+    _DNC_SIGNALS_PRE = get_phrase_texts("dnc_trigger")
+    if any(sig in _full_text for sig in _DNC_SIGNALS_PRE):
+        return {
+            "call_outcome": "DNC Client : Don't Call Further",
+            "call_outcome_description": DISPOSITION_MAP["DNC Client : Don't Call Further"],
+            "call_summary": "Customer explicitly requested not to be called again.",
+            "is_business": "", "business_city": "", "business_name": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
     if any(sig in _full_text for sig in _HARD_IVR_SIGNALS):
         return {
             "call_outcome": "Voicemail",
@@ -365,7 +435,7 @@ async def generate_call_analysis(
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
-    _VOICEMAIL_SIGNALS_PRE = [
+    _VOICEMAIL_SIGNALS_PRE = get_phrase_texts("voicemail") or [
         "leave a message", "leave your message", "please leave a message",
         "after the tone", "at the beep",
         "you have reached", "you've reached",
@@ -376,7 +446,7 @@ async def generate_call_analysis(
         "voice mail recording", "voicemail recording",
         "finished recording hang up", "when you have finished recording",
     ]
-    _HOLD_MUSIC_SIGNALS_PRE = [
+    _HOLD_MUSIC_SIGNALS_PRE = get_phrase_texts("hold_music") or [
         "put your call on hold",
         "placed your call on hold",
         "has put your call on hold",
@@ -393,7 +463,7 @@ async def generate_call_analysis(
     seen_substantive_user_turn = False
     for turn in transcript:
         text_lower = (turn.get("text") or "").lower()
-        if turn.get("role") in ("user", "buyer"):
+        if str(turn.get("role", "")).lower() in user_roles:
             words = {w.strip(".,!? ").lower() for w in (turn.get("text") or "").split() if w.strip()}
             if words - _GREETING_TOKENS:
                 seen_substantive_user_turn = True
@@ -868,10 +938,11 @@ async def generate_call_analysis(
         (i for i, t in enumerate(_non_empty_turns) if t.get("role") == "assistant"),
         default=-1,
     )
-    _has_user_after_last_agent = any(
-        t.get("role") == "user"
-        for t in _non_empty_turns[_last_agent_idx + 1:]
-    ) if _last_agent_idx >= 0 else False
+    _has_user_after_last_agent = (
+        any(str(t.get("role", "")).lower() in user_roles for t in _non_empty_turns[_last_agent_idx + 1:])
+        if _last_agent_idx >= 0
+        else False
+    )
     _ends_on_agent_no_response = _last_agent_idx >= 0 and not _has_user_after_last_agent
     _trailing_agent_note = (
         "\n⚠ TRANSCRIPT ENDS ON AGENT QUESTION: The last turn in the transcript is from "
@@ -1578,7 +1649,7 @@ STRICT OUTPUT RULES:
             raw = data["candidates"][0]["content"]["parts"][0]["text"]
             result = json.loads(raw)
             outcome = result.get("call_outcome", "")
-            if outcome not in _VALID_OUTCOMES:
+            if outcome not in _valid_outcomes():
                 outcome = status_to_outcome(base_status)
                 result["call_outcome"] = outcome
             result["call_outcome_description"] = DISPOSITION_MAP.get(outcome, "")
@@ -1772,9 +1843,9 @@ STRICT OUTPUT RULES:
                     _bare_ack_nfc = {unicodedata.normalize("NFC", w) for w in _BARE_ACK_SET}
                     _all_user_words: set[str] = set()
                     for _t in transcript:
-                        if _t.get("role") == "user":
+                        if str(_t.get("role", "")).lower() in user_roles:
                             for _w in (_t.get("text") or "").split():
-                                _clean = _strip_punct(_w)
+                                _clean = unicodedata.normalize("NFC", re.sub(r"[^\w]", "", _w.lower()))
                                 if _clean:
                                     _all_user_words.add(_clean)
                     # Also include words from muted transcript
@@ -1829,6 +1900,27 @@ STRICT OUTPUT RULES:
                         result["qna"] = []
 
             # ── END POST-PROCESSING ────────────────────────────────────────
+            # ── END POST-PROCESSING ────────────────────────────────────────
+            user_quotes = [
+                (t.get("text") or "").strip()
+                for t in transcript
+                if str(t.get("role", "")).lower() in user_roles and (t.get("text") or "").strip()
+            ]
+            result.setdefault("confidence", 0.75)
+            result.setdefault("evidence_quotes", user_quotes[:3])
+            result.setdefault("disqualifiers", [])
+            result.setdefault("needs_review", False)
+            result["analysis_transcript_source"] = transcript_source
+            if result.get("call_outcome") == "Interested" and not user_quotes:
+                result["call_outcome"] = "Short Hangup"
+                result["call_outcome_description"] = DISPOSITION_MAP["Short Hangup"]
+                result["call_summary"] = (
+                    "No buyer-side evidence was available after transcript verification; "
+                    "downgraded from Interested to Short Hangup."
+                )
+                result["confidence"] = 0.9
+                result["disqualifiers"] = ["no_buyer_evidence"]
+                result["needs_review"] = False
 
             return result
     except Exception as e:
