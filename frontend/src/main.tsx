@@ -1,4 +1,4 @@
-import React, { Component, ErrorInfo, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Component, ErrorInfo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   createLocalAudioTrack,
@@ -13,23 +13,30 @@ import {
   AlertCircle,
   AlertTriangle,
   Ban,
+  BarChart2,
   Bot,
   BookOpen,
   Braces,
+  Check,
   Pencil,
   CheckCircle2,
   ChevronRight,
   Clock3,
   ClipboardList,
+  Copy,
   Database,
+  Download,
   FileText,
+  Filter,
   Gauge,
   GitBranch,
   Headphones,
+  Keyboard,
   Layers,
   Megaphone,
   MessageSquareText,
   Mic,
+  Pause,
   PhoneCall,
   PhoneOff,
   Play,
@@ -39,12 +46,15 @@ import {
   Save,
   Search,
   SendHorizontal,
+  Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Square,
   Trash2,
   Volume2,
   Wand2,
-  Wifi
+  Wifi,
+  XCircle
 } from 'lucide-react';
 import {
   api,
@@ -60,9 +70,11 @@ import {
   LanguageOption,
   LanguageSettings,
   LibraryPhrase,
+  OutcomeAnalytics,
   OutcomeEntry,
   OutcomeRule,
   PhraseCategory,
+  QualityAlert,
   RuntimeSettings,
   TestRecordingLookup,
   Transcript,
@@ -70,8 +82,9 @@ import {
 } from './api';
 import './styles.css';
 
-type View = 'bots' | 'builder' | 'campaigns' | 'test' | 'transcripts' | 'observability' | 'library' | 'settings';
+type View = 'bots' | 'builder' | 'campaigns' | 'test' | 'transcripts' | 'analytics' | 'observability' | 'library' | 'settings';
 type AgentWorkspaceMode = 'list' | 'builder';
+type BuilderMode = 'pm' | 'advanced';
 type DiagnosticSeverity = 'info' | 'warning' | 'error';
 
 type Diagnostic = {
@@ -85,6 +98,9 @@ type Diagnostic = {
 
 type RuntimeConfig = {
   assistant_id?: string;
+  agent_name?: string;
+  organization_name?: string;
+  ai_partner?: string;
   model?: string;
   voice?: string;
   language?: string;
@@ -95,6 +111,7 @@ type RuntimeConfig = {
   system_prompt?: string;
   initial_message?: string;
   call_end_text?: string;
+  inactivity_end_text?: string;
   function_calling?: boolean;
   gemini_silence_duration_ms?: number;
   gemini_prefix_padding_ms?: number;
@@ -105,6 +122,7 @@ type RuntimeConfig = {
   };
   prompt_config?: Record<string, unknown>;
   functions?: unknown[];
+  close_markers?: string[];
   [key: string]: unknown;
 };
 
@@ -119,18 +137,23 @@ type TestForm = {
   test_worker_agent_name: string;
   /** Pinned version id — empty string means "use active published version" */
   test_bot_version_id: string;
+  custom_lead_json: string;
 };
 
 const defaultConfig: RuntimeConfig = {
+  agent_name: '',
+  organization_name: '',
+  ai_partner: '',
   model: 'gemini-3.1-flash-live-preview',
   voice: 'Aoede',
   language: 'hindi',
   livekit_language: 'hi-IN',
   temperature: 0.7,
   max_call_duration: 300,
-  system_prompt: 'You are Simran, a warm JustDial call center agent.',
-  initial_message: 'हेलो, मैं Simran बोल रही हूँ Justdial से — आपको {product} की requirement है ना?',
+  system_prompt: 'You are a warm and professional call center agent. Greet the caller, understand their requirement, and collect key details.',
+  initial_message: 'हेलो, मैं {agent_name} बोल रही हूँ {organization_name} से — आपको {product} की requirement है ना?',
   call_end_text: 'ठीक है जी, सारी details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए शुक्रिया.',
+  inactivity_end_text: '',
   function_calling: true,
   gemini_silence_duration_ms: 1800,
   gemini_prefix_padding_ms: 300,
@@ -169,6 +192,10 @@ function App() {
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
   const [actionState, setActionState] = useState<Record<string, 'idle' | 'running' | 'failed'>>({});
   const [searchText, setSearchText] = useState('');
+  const [transcriptFilters, setTranscriptFilters] = useState<{
+    status: string; outcome: string; campaign_id: string; bot_id: string;
+    start_date: string; end_date: string;
+  }>({ status: '', outcome: '', campaign_id: '', bot_id: '', start_date: '', end_date: '' });
   const [testForm, setTestForm] = useState<TestForm>({
     campaign_id: 'test',
     lead_id: '',
@@ -178,7 +205,8 @@ function App() {
     buyer_name: 'Test User',
     city: 'Mumbai',
     test_worker_agent_name: '',
-    test_bot_version_id: ''
+    test_bot_version_id: '',
+    custom_lead_json: ''
   });
   const [testStatus, setTestStatus] = useState('Idle');
   const [testError, setTestError] = useState('');
@@ -186,8 +214,27 @@ function App() {
   const [testRoomName, setTestRoomName] = useState('');
   const [testChatMessage, setTestChatMessage] = useState('');
   const [micEnabled, setMicEnabled] = useState(false);
+  const [builderMode, setBuilderMode] = useState<BuilderMode>(
+    () => (localStorage.getItem('builderMode') as BuilderMode) || 'pm'
+  );
   const [deleteCandidate, setDeleteCandidate] = useState<BotType | null>(null);
+  const [showNewAgentWizard, setShowNewAgentWizard] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showCmdK, setShowCmdK] = useState(false);
+  const [diffVersionIds, setDiffVersionIds] = useState<[string, string] | null>(null);
+  const [showPublishConfirm, setShowPublishConfirm] = useState(false);
+  const [newAgentForm, setNewAgentForm] = useState({
+    name: '',
+    description: '',
+    agent_name: '',
+    organization_name: '',
+    language: 'hindi',
+    voice: 'Aoede',
+    initial_message: 'हेलो, मैं {agent_name} बोल रही हूँ {organization_name} से — आपको {product} की requirement है ना?'
+  });
   const [remoteAudioReady, setRemoteAudioReady] = useState(false);
+  const workspaceRef = useRef<HTMLElement>(null);
+  const scrollPositions = useRef<Partial<Record<View, number>>>({});
   const livekitRoomRef = useRef<Room | null>(null);
   const localTrackRef = useRef<LocalAudioTrack | null>(null);
   const remoteAudioRef = useRef<HTMLDivElement | null>(null);
@@ -408,18 +455,44 @@ function App() {
     }
   }
 
+  function openNewAgentWizard() {
+    setNewAgentForm({
+      name: '',
+      description: '',
+      agent_name: '',
+      organization_name: '',
+      language: 'hindi',
+      voice: voices[0]?.id || 'Aoede',
+      initial_message: 'हेलो, मैं {agent_name} बोल रही हूँ {organization_name} से — आपको {product} की requirement है ना?'
+    });
+    setShowNewAgentWizard(true);
+  }
+
   async function createBot() {
+    const lang = languages.find((l) => l.id === newAgentForm.language);
+    const config: RuntimeConfig = {
+      ...defaultConfig,
+      agent_name: newAgentForm.agent_name.trim(),
+      organization_name: newAgentForm.organization_name.trim(),
+      voice: newAgentForm.voice,
+      language: newAgentForm.language,
+      livekit_language: lang?.livekit_code || defaultConfig.livekit_language,
+      sarvam_language: lang?.sarvam_code || lang?.livekit_code || defaultConfig.livekit_language,
+      initial_message: newAgentForm.initial_message.trim() || defaultConfig.initial_message,
+      system_prompt: `You are ${newAgentForm.agent_name || 'a call center agent'}, a warm and professional outbound agent for ${newAgentForm.organization_name || 'the company'}. Greet the caller, understand their requirement for {product}, and collect key qualification details.`
+    };
     await runAction('createBot', 'Create Bot', async () => {
       const bot = await api.createBot({
-        name: 'New JustDial Voice Bot',
-        description: 'Prompt and settings based outbound bot',
+        name: newAgentForm.name.trim() || 'New Voice Agent',
+        description: newAgentForm.description.trim() || 'Outbound voice agent',
         orchestration: { mode: 'prompt_settings', flow_provider: null, flow_id: null },
-        config: defaultConfig
+        config
       });
       setSelectedBotId(bot._id);
       setView('bots');
       setAgentWorkspaceMode('builder');
-      setMessage('Draft bot created. Add prompt details, save draft, then publish.');
+      setShowNewAgentWizard(false);
+      setMessage('Draft bot created. Review the prompt, save draft, then publish.');
       await refresh();
     });
   }
@@ -501,12 +574,46 @@ function App() {
     });
   }
 
-  async function publishDraft() {
+  async function doPublishDraft() {
     if (!selectedBot) return;
     await runAction('publishDraft', 'Publish Bot', async () => {
       const version = await api.publish(selectedBot._id, latestDraft?._id);
       setMessage(`Published v${version.version}. Live calls keep their old snapshot; new calls use this version.`);
       // Reload versions so published/draft states are accurate in the history panel.
+      await refreshBotVersions();
+      await refresh();
+    });
+  }
+
+  function publishDraft() {
+    setShowPublishConfirm(true);
+  }
+
+  const liveCallsByVersion = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of transcripts) {
+      if (t.bot_version_id && t.status && !['completed', 'failed', 'cancelled', 'dnc'].includes(t.status)) {
+        counts[t.bot_version_id] = (counts[t.bot_version_id] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [transcripts]);
+
+  async function unpublishActive() {
+    if (!selectedBot) return;
+    await runAction('unpublishActive', 'Unpublish', async () => {
+      const version = await api.unpublish(selectedBot._id);
+      setMessage(`v${version.version} moved back to draft. Edit it and re-publish when ready.`);
+      await refreshBotVersions({ selectVersionId: version._id });
+      await refresh();
+    });
+  }
+
+  async function rollbackToVersion(versionId: string) {
+    if (!selectedBot) return;
+    await runAction(`rollback-${versionId}`, 'Rollback', async () => {
+      const result = await api.rollbackVersion(selectedBot._id, versionId);
+      setMessage(`Rolled back to v${result.active_version.version}. New calls now use this version.`);
       await refreshBotVersions();
       await refresh();
     });
@@ -591,6 +698,27 @@ function App() {
       setRuntimeSettings(nextSettings);
       cacheSet('runtimeSettings', nextSettings);
       setMessage(`Runtime settings saved. Test calls now dispatch to ${nextSettings.livekit_agent_name}.`);
+    });
+  }
+
+  async function assignBotToCampaign(campaignKey: string, botId: string) {
+    await runAction(`assignBot-${campaignKey}`, 'Assign Bot', async () => {
+      const campaign = campaigns.find(c => c.campaign_key === campaignKey);
+      await api.upsertCampaign({ campaign_key: campaignKey, name: campaign?.name || campaignKey, bot_id: botId });
+      const next = await api.campaigns();
+      setCampaigns(next);
+      cacheSet('campaigns', next);
+      setMessage(`Bot assigned to campaign "${campaignKey}".`);
+    });
+  }
+
+  async function setCampaignStatus(campaignKey: string, status: string) {
+    await runAction(`campaignStatus-${campaignKey}`, 'Campaign Status', async () => {
+      await api.setCampaignStatus(campaignKey, status);
+      const next = await api.campaigns();
+      setCampaigns(next);
+      cacheSet('campaigns', next);
+      setMessage(`Campaign "${campaignKey}" is now ${status}.`);
     });
   }
 
@@ -886,10 +1014,41 @@ function App() {
 
   const hasError = diagnostics.some((item) => item.severity === 'error');
 
-  function navigate(nextView: View) {
+  const navigate = useCallback((nextView: View) => {
+    if (workspaceRef.current) {
+      scrollPositions.current[view] = workspaceRef.current.scrollTop;
+    }
     setView(nextView);
     if (nextView !== 'bots') setAgentWorkspaceMode('list');
-  }
+    requestAnimationFrame(() => {
+      if (workspaceRef.current) {
+        workspaceRef.current.scrollTop = scrollPositions.current[nextView] ?? 0;
+      }
+    });
+  }, [view]); // view needed so scroll-save captures current view correctly
+
+  const closeTopModal = useCallback(() => {
+    if (showCmdK) { setShowCmdK(false); return; }
+    if (showShortcuts) { setShowShortcuts(false); return; }
+    if (showPublishConfirm) { setShowPublishConfirm(false); return; }
+    if (diffVersionIds) { setDiffVersionIds(null); return; }
+    if (showNewAgentWizard) { setShowNewAgentWizard(false); return; }
+    if (deleteCandidate) { setDeleteCandidate(null); return; }
+  }, [showCmdK, showShortcuts, showPublishConfirm, diffVersionIds, showNewAgentWizard, deleteCandidate]);
+
+  useKeyboardShortcuts(navigate, () => setShowShortcuts(v => !v), closeTopModal);
+
+  // Cmd+K / Ctrl+K — open command palette
+  useEffect(() => {
+    function handler(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setShowCmdK(v => !v);
+      }
+    }
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   return (
     <div className="app-shell">
@@ -903,15 +1062,16 @@ function App() {
           </div>
         </div>
 
-        <nav className="sidebar-nav">
+        <SidebarNav>
           <NavItem icon={<Bot />} label="Agents" active={view === 'bots'} onClick={() => navigate('bots')} />
           <NavItem icon={<Megaphone />} label="Campaigns" active={view === 'campaigns'} onClick={() => navigate('campaigns')} />
           <NavItem icon={<Play />} label="Test Call" active={view === 'test'} onClick={() => navigate('test')} />
           <NavItem icon={<FileText />} label="Transcripts" active={view === 'transcripts'} onClick={() => navigate('transcripts')} />
+          <NavItem icon={<BarChart2 />} label="Analytics" active={view === 'analytics'} onClick={() => navigate('analytics')} />
           <NavItem icon={<Gauge />} label="Observability" active={view === 'observability'} onClick={() => navigate('observability')} />
           <NavItem icon={<BookOpen />} label="Library" active={view === 'library'} onClick={() => navigate('library')} />
           <NavItem icon={<ClipboardList />} label="Settings" active={view === 'settings'} onClick={() => navigate('settings')} />
-        </nav>
+        </SidebarNav>
 
         <div className="sidebar-footer">
           <span className={`status-dot ${hasError ? 'error' : ''}`} />
@@ -929,7 +1089,7 @@ function App() {
         <button onClick={refresh} style={{ color: '#94A3B8' }}><RefreshCw size={17} /></button>
       </div>
 
-      <main className="workspace">
+      <main className="workspace" ref={workspaceRef}>
         {/* ── Page header ── */}
         <header className="page-header">
           <div className="page-header-top">
@@ -946,8 +1106,14 @@ function App() {
               >
                 {bots.map((bot) => <option key={bot._id} value={bot._id}>{bot.name}</option>)}
               </select>
+
+              <button className="cmdk-trigger" onClick={() => setShowCmdK(true)} title="Search everything (⌘K)">
+                <Search size={14} />
+                <span>Search…</span>
+                <kbd className="kbd" style={{ fontSize: '10px', padding: '1px 5px', marginLeft: 4 }}>⌘K</kbd>
+              </button>
               <button onClick={refresh}><RefreshCw size={14} /> Refresh</button>
-              <button className="primary" onClick={createBot} disabled={actionState.createBot === 'running'}>
+              <button className="primary" onClick={openNewAgentWizard} disabled={actionState.createBot === 'running'}>
                 <Rocket size={14} /> {actionState.createBot === 'failed' ? 'Retry' : 'New Agent'}
               </button>
             </div>
@@ -1003,27 +1169,40 @@ function App() {
                 onUpdateLanguage={updateLanguage}
                 onSaveDraft={saveDraft}
                 onPublish={publishDraft}
+                onUnpublish={unpublishActive}
                 onRename={renameBotMeta}
                 saveState={actionState.saveDraft}
                 publishState={actionState.publishDraft}
+                unpublishState={actionState.unpublishActive}
                 renameState={actionState.renameBotMeta}
                 onBack={() => setAgentWorkspaceMode('list')}
                 editingVersionId={editingVersionId}
                 onSelectVersion={selectVersion}
                 onUpdateVersion={updateVersionAction}
                 updateVersionState={actionState.updateVersion}
+                onRollback={rollbackToVersion}
+                rollbackState={actionState}
+                builderMode={builderMode}
+                onToggleMode={(mode) => {
+                  setBuilderMode(mode);
+                  localStorage.setItem('builderMode', mode);
+                }}
+                onShowDiff={(a, b) => setDiffVersionIds([a, b])}
+                liveCallsByVersion={liveCallsByVersion}
               />
             ) : (
               <BotsView
                 bots={bots}
                 selectedBot={selectedBot}
                 transcripts={transcripts}
+                loading={loading}
                 onSelect={setSelectedBotId}
                 onEdit={(botId) => {
                   setSelectedBotId(botId);
                   setAgentWorkspaceMode('builder');
                 }}
                 onDelete={(bot) => setDeleteCandidate(bot)}
+                onNew={openNewAgentWizard}
               />
             )}
           </ResilientPanel>
@@ -1036,12 +1215,16 @@ function App() {
               bots={bots}
               languages={languages}
               outcomes={outcomes}
+              loading={loading}
               workspaceMode={campaignWorkspaceMode}
               selectedCampaignKey={selectedCampaignKey}
               onSelectCampaign={(key) => { setSelectedCampaignKey(key); setCampaignWorkspaceMode('strategy'); }}
               onBackToList={() => setCampaignWorkspaceMode('list')}
               onSaveStrategy={saveCampaignStrategy}
               saveState={actionState.campaignStrategy}
+              onAssignBot={assignBotToCampaign}
+              assignBotState={actionState}
+              onSetStatus={setCampaignStatus}
             />
           </ResilientPanel>
         )}
@@ -1080,10 +1263,22 @@ function App() {
               selectedTranscript={selectedTranscript}
               localRecordingByRoom={localRecordingByRoom}
               callEvents={callEvents}
+              bots={bots}
+              campaigns={campaigns}
+              loading={loading}
               searchText={searchText}
               onSearchText={setSearchText}
+              filters={transcriptFilters}
+              onFiltersChange={setTranscriptFilters}
               onSelect={setSelectedTranscriptId}
+              onNavigateTest={() => navigate('test')}
             />
+          </ResilientPanel>
+        )}
+
+        {view === 'analytics' && (
+          <ResilientPanel name="Analytics" onDiagnostic={reportDiagnostic}>
+            <AnalyticsView bots={bots} campaigns={campaigns} />
           </ResilientPanel>
         )}
 
@@ -1121,9 +1316,53 @@ function App() {
         {deleteCandidate && (
           <DeleteAgentDialog
             bot={deleteCandidate}
+            campaigns={campaigns}
+            transcriptCount={transcripts.filter(t => t.bot_id === deleteCandidate._id).length}
             busy={actionState.deleteAgent === 'running'}
             onCancel={() => setDeleteCandidate(null)}
             onConfirm={() => deleteAgent(deleteCandidate)}
+          />
+        )}
+        {showNewAgentWizard && (
+          <NewAgentWizard
+            form={newAgentForm}
+            onChange={setNewAgentForm}
+            voices={voices}
+            languages={languages}
+            busy={actionState.createBot === 'running'}
+            onCancel={() => setShowNewAgentWizard(false)}
+            onConfirm={createBot}
+          />
+        )}
+        {diffVersionIds && (() => {
+          const verA = versions.find(v => v._id === diffVersionIds[0]);
+          const verB = versions.find(v => v._id === diffVersionIds[1]);
+          return verA && verB ? <VersionDiffModal versionA={verA} versionB={verB} onClose={() => setDiffVersionIds(null)} /> : null;
+        })()}
+        {showPublishConfirm && (
+          <PublishConfirmModal
+            latestDraft={latestDraft}
+            activeVersion={activeVersion}
+            activeCallCount={transcripts.filter(t => t.bot_id === selectedBot?._id && t.status && !['completed', 'failed', 'cancelled', 'dnc'].includes(t.status)).length}
+            busy={actionState.publishDraft === 'running'}
+            onCancel={() => setShowPublishConfirm(false)}
+            onConfirm={async () => { setShowPublishConfirm(false); await doPublishDraft(); }}
+          />
+        )}
+        {showShortcuts && <ShortcutsModal onClose={() => setShowShortcuts(false)} />}
+        {showCmdK && (
+          <CommandPalette
+            bots={bots}
+            campaigns={campaigns}
+            transcripts={transcripts}
+            onClose={() => setShowCmdK(false)}
+            onNavigate={(view, extra) => {
+              setShowCmdK(false);
+              navigate(view);
+              if (extra?.botId) setSelectedBotId(extra.botId);
+              if (extra?.transcriptId) setSelectedTranscriptId(extra.transcriptId);
+              if (extra?.campaignKey) setSelectedCampaignKey(extra.campaignKey);
+            }}
           />
         )}
       </main>
@@ -1134,8 +1373,110 @@ function App() {
         <button className={`bottom-nav-item ${view === 'campaigns' ? 'active' : ''}`} onClick={() => navigate('campaigns')}><Megaphone size={20} /><span>Campaigns</span></button>
         <button className={`bottom-nav-item ${view === 'test' ? 'active' : ''}`} onClick={() => navigate('test')}><Play size={20} /><span>Test</span></button>
         <button className={`bottom-nav-item ${view === 'transcripts' ? 'active' : ''}`} onClick={() => navigate('transcripts')}><FileText size={20} /><span>Calls</span></button>
+        <button className={`bottom-nav-item ${view === 'analytics' ? 'active' : ''}`} onClick={() => navigate('analytics')}><BarChart2 size={20} /><span>Analytics</span></button>
         <button className={`bottom-nav-item ${(view === 'observability' || view === 'library' || view === 'settings') ? 'active' : ''}`} onClick={() => navigate('library')}><BookOpen size={20} /><span>More</span></button>
       </nav>
+    </div>
+  );
+}
+
+function VersionDiffModal({ versionA, versionB, onClose }: { versionA: BotVersion; versionB: BotVersion; onClose: () => void }) {
+  const allKeys = Array.from(new Set([...Object.keys(versionA.config), ...Object.keys(versionB.config)]));
+  const diffs = allKeys.filter(k => JSON.stringify(versionA.config[k]) !== JSON.stringify(versionB.config[k]));
+  const same = allKeys.filter(k => !diffs.includes(k));
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal-panel" role="dialog" aria-modal="true" style={{ maxWidth: 720 }}>
+        <div className="modal-header">
+          <div className="modal-icon"><GitBranch size={17} /></div>
+          <h2>Version diff — v{versionA.version} vs v{versionB.version}</h2>
+        </div>
+        <div className="modal-body" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+          {diffs.length === 0 && <p className="muted">No differences found between these two versions.</p>}
+          {diffs.length > 0 && (
+            <>
+              <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>Changed fields ({diffs.length})</div>
+              {diffs.map(key => (
+                <div key={key} style={{ marginBottom: '0.75rem', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border)' }}>
+                  <div style={{ background: 'var(--surface-2, #f4f4f5)', padding: '4px 10px', fontSize: '0.78rem', fontWeight: 700 }}>{key}</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+                    <div style={{ background: '#fef2f2', padding: '8px 10px', fontSize: '0.78rem', borderRight: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: '0.68rem', color: '#b91c1c', marginBottom: '3px' }}>v{versionA.version}</div>
+                      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{JSON.stringify(versionA.config[key], null, 2)}</pre>
+                    </div>
+                    <div style={{ background: '#f0fdf4', padding: '8px 10px', fontSize: '0.78rem' }}>
+                      <div style={{ fontSize: '0.68rem', color: '#15803d', marginBottom: '3px' }}>v{versionB.version}</div>
+                      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{JSON.stringify(versionB.config[key], null, 2)}</pre>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {same.length > 0 && (
+                <details style={{ marginTop: '0.5rem' }}>
+                  <summary style={{ fontSize: '0.78rem', color: 'var(--muted)', cursor: 'pointer' }}>Unchanged fields ({same.length})</summary>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '4px' }}>
+                    {same.map(k => <code key={k} style={{ fontSize: '0.72rem', background: 'var(--surface-2, #f4f4f5)', padding: '2px 6px', borderRadius: '4px' }}>{k}</code>)}
+                  </div>
+                </details>
+              )}
+            </>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button onClick={onClose}>Close</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function PublishConfirmModal({
+  latestDraft,
+  activeVersion,
+  activeCallCount,
+  busy,
+  onCancel,
+  onConfirm
+}: {
+  latestDraft?: BotVersion;
+  activeVersion?: BotVersion;
+  activeCallCount: number;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal-panel" role="dialog" aria-modal="true" style={{ maxWidth: 480 }}>
+        <div className="modal-header">
+          <div className="modal-icon"><Rocket size={17} /></div>
+          <h2>Publish v{latestDraft?.version}?</h2>
+        </div>
+        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          {activeCallCount > 0 && (
+            <div className="notice" style={{ background: 'var(--warning-bg, #fef3c7)', borderColor: 'var(--warning-border, #fcd34d)', color: 'var(--warning, #92400e)' }}>
+              <AlertTriangle size={16} />
+              <strong>{activeCallCount} call{activeCallCount > 1 ? 's' : ''} are currently in progress</strong> on {activeVersion ? `v${activeVersion.version}` : 'the active version'}. Those calls keep their snapshot and will not be interrupted. Only new calls will use v{latestDraft?.version}.
+            </div>
+          )}
+          {activeCallCount === 0 && (
+            <div className="callout success">
+              <CheckCircle2 size={16} />
+              No active calls detected. Safe to publish.
+            </div>
+          )}
+          <p style={{ fontSize: '0.88rem', color: 'var(--text-2)' }}>
+            Publishing makes v{latestDraft?.version} the active config for all <strong>new</strong> inbound and outbound calls. Existing in-flight calls are unaffected.
+          </p>
+        </div>
+        <div className="modal-footer">
+          <button onClick={onCancel} disabled={busy}>Cancel</button>
+          <button className="primary" onClick={onConfirm} disabled={busy}>
+            <Rocket size={15} /> {busy ? 'Publishing…' : `Publish v${latestDraft?.version}`}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -1366,13 +1707,15 @@ function DiagnosticsBar({
   );
 }
 
-function BotsView({ bots, selectedBot, transcripts, onSelect, onEdit, onDelete }: {
+function BotsView({ bots, selectedBot, transcripts, loading, onSelect, onEdit, onDelete, onNew }: {
   bots: BotType[];
   selectedBot?: BotType;
   transcripts: Transcript[];
+  loading?: boolean;
   onSelect: (botId: string) => void;
   onEdit: (botId: string) => void;
   onDelete: (bot: BotType) => void;
+  onNew?: () => void;
 }) {
   return (
     <section className="content-grid two-col">
@@ -1388,15 +1731,26 @@ function BotsView({ bots, selectedBot, transcripts, onSelect, onEdit, onDelete }
             <tr><th>Name</th><th>Status</th><th>Assistant</th><th>Updated</th><th>Actions</th></tr>
           </thead>
           <tbody>
-            {bots.map((bot) => (
+            {loading && !bots.length ? (
+              <SkeletonTableBody cols={5} rows={4} />
+            ) : bots.length === 0 ? (
+              <tr><td colSpan={5}>
+                <EmptyState
+                  icon={<Bot size={32} />}
+                  heading="No agents yet"
+                  description="Create your first voice agent to get started. Each agent has its own prompt, voice, and published versions."
+                  action={onNew ? { label: 'Create first agent', onClick: onNew } : undefined}
+                />
+              </td></tr>
+            ) : bots.map((bot) => (
               <tr key={bot._id} onClick={() => onSelect(bot._id)} className={bot._id === selectedBot?._id ? 'selected-row' : ''}>
                 <td>
                   <strong>{bot.name}</strong>
                   <small>{bot.description || 'Prompt + settings agent'}</small>
                 </td>
                 <td><StatusPill value={bot.status} /></td>
-                <td><code>{shortId(bot.assistant_id)}</code></td>
-                <td>{formatDate(bot.updated_at)}</td>
+                <td><CopyableId value={bot.assistant_id} /></td>
+                <td><TimeAgo value={bot.updated_at} /></td>
                 <td>
                   <div className="table-actions">
                     <button onClick={(event) => { event.stopPropagation(); onEdit(bot._id); }}><Pencil size={13} /> Edit</button>
@@ -1438,19 +1792,136 @@ function BotsView({ bots, selectedBot, transcripts, onSelect, onEdit, onDelete }
   );
 }
 
+function NewAgentWizard({
+  form,
+  onChange,
+  voices,
+  languages,
+  busy,
+  onCancel,
+  onConfirm
+}: {
+  form: {
+    name: string;
+    description: string;
+    agent_name: string;
+    organization_name: string;
+    language: string;
+    voice: string;
+    initial_message: string;
+  };
+  onChange: (value: typeof form) => void;
+  voices: VoiceOption[];
+  languages: LanguageOption[];
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const canCreate = form.name.trim().length > 0 && form.agent_name.trim().length > 0;
+  const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    onChange({ ...form, [key]: e.target.value });
+
+  const previewOpening = form.initial_message
+    .replace('{agent_name}', form.agent_name || '<agent_name>')
+    .replace('{organization_name}', form.organization_name || '<org_name>')
+    .replace('{product}', 'air conditioner');
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="new-agent-title" style={{ maxWidth: 560 }}>
+        <div className="modal-header">
+          <div className="modal-icon"><Rocket size={17} /></div>
+          <h2 id="new-agent-title">New voice agent</h2>
+        </div>
+        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div className="form-grid">
+            <label>
+              Display name <span style={{ color: 'var(--danger)' }}>*</span>
+              <input value={form.name} onChange={set('name')} placeholder="e.g. JD Outbound — Hindi" autoFocus />
+            </label>
+            <label>
+              Description
+              <input value={form.description} onChange={set('description')} placeholder="Short note (optional)" />
+            </label>
+          </div>
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
+            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Persona</div>
+            <div className="form-grid">
+              <label>
+                Agent persona name <span style={{ color: 'var(--danger)' }}>*</span>
+                <input value={form.agent_name} onChange={set('agent_name')} placeholder="e.g. Tarun, Priya, Aman" />
+                <small>Used in the opening line and system prompt.</small>
+              </label>
+              <label>
+                Organization name
+                <input value={form.organization_name} onChange={set('organization_name')} placeholder="e.g. JustDial" />
+              </label>
+            </div>
+          </div>
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
+            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Voice & Language</div>
+            <div className="form-grid">
+              <label>
+                Language
+                <select value={form.language} onChange={set('language')}>
+                  {languages.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+                </select>
+              </label>
+              <label>
+                Voice
+                <select value={form.voice} onChange={set('voice')}>
+                  {voices.map((v) => <option key={v.id} value={v.id}>{v.label} {v.gender ? `(${v.gender})` : ''}</option>)}
+                </select>
+              </label>
+            </div>
+          </div>
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
+            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Opening line</div>
+            <label>
+              <textarea
+                value={form.initial_message}
+                onChange={set('initial_message')}
+                rows={2}
+                style={{ fontFamily: 'inherit', fontSize: '0.85rem' }}
+              />
+              <small>Use <code style={{ fontSize: '0.75rem' }}>{'{product}'}</code>, <code style={{ fontSize: '0.75rem' }}>{'{agent_name}'}</code>, <code style={{ fontSize: '0.75rem' }}>{'{organization_name}'}</code> as placeholders.</small>
+            </label>
+            {previewOpening && (
+              <div style={{ background: 'var(--surface-2, #f4f4f5)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.82rem', fontStyle: 'italic', marginTop: '0.4rem', color: 'var(--text-2)' }}>
+                Preview: "{previewOpening}"
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button onClick={onCancel} disabled={busy}>Cancel</button>
+          <button className="primary" onClick={onConfirm} disabled={!canCreate || busy}>
+            <Rocket size={15} /> {busy ? 'Creating…' : 'Create agent'}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function DeleteAgentDialog({
   bot,
+  campaigns,
+  transcriptCount,
   busy,
   onCancel,
   onConfirm
 }: {
   bot: BotType;
+  campaigns: Campaign[];
+  transcriptCount: number;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
   const [confirmText, setConfirmText] = useState('');
   const canDelete = confirmText.trim() === bot.name;
+  const assignedCampaigns = campaigns.filter(c => c.bot_id === bot._id);
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -1466,6 +1937,31 @@ function DeleteAgentDialog({
             This will permanently remove <strong style={{ color: 'var(--text)' }}>{bot.name}</strong> from the
             dashboard and disable its runtime config lookup. Existing transcripts and call records are kept for audit.
           </p>
+
+          {/* Blast radius */}
+          {(assignedCampaigns.length > 0 || transcriptCount > 0) && (
+            <div className="blast-radius">
+              <strong>What breaks if you delete this:</strong>
+              <ul>
+                {assignedCampaigns.length > 0 && (
+                  <li>
+                    <AlertTriangle size={13} />
+                    <span>
+                      <strong>{assignedCampaigns.length} campaign{assignedCampaigns.length > 1 ? 's' : ''}</strong> will lose their bot assignment:{' '}
+                      {assignedCampaigns.map(c => c.name).join(', ')}
+                    </span>
+                  </li>
+                )}
+                {transcriptCount > 0 && (
+                  <li>
+                    <FileText size={13} />
+                    <span><strong>{transcriptCount} transcript{transcriptCount > 1 ? 's' : ''}</strong> will be orphaned (kept, but no longer linked to a bot config)</span>
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
+
           <label>
             Type <strong style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-2)' }}>{bot.name}</strong> to confirm
             <input
@@ -1489,6 +1985,40 @@ function DeleteAgentDialog({
   );
 }
 
+function CloseMarkersEditor({ markers, onChange }: { markers: string[]; onChange: (value: string[]) => void }) {
+  const [input, setInput] = useState('');
+  function add() {
+    const trimmed = input.trim();
+    if (trimmed && !markers.includes(trimmed)) onChange([...markers, trimmed]);
+    setInput('');
+  }
+  return (
+    <label className="full">
+      Call-end close phrases
+      <small>Bot ends the call when it detects any of these phrases. Override the hardcoded Hindi defaults for non-Hindi bots.</small>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.4rem', marginBottom: '0.4rem', minHeight: '2rem' }}>
+        {markers.map(m => (
+          <span key={m} style={{ background: 'var(--surface-2, #f4f4f5)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            {m}
+            <button style={{ padding: 0, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', lineHeight: 1 }} onClick={() => onChange(markers.filter(x => x !== m))}>×</button>
+          </span>
+        ))}
+        {markers.length === 0 && <span style={{ fontSize: '0.78rem', color: 'var(--muted)', fontStyle: 'italic' }}>Using hardcoded defaults (Hindi)</span>}
+      </div>
+      <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <input
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          placeholder="e.g. thank you, goodbye, dhanyavaad"
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
+          style={{ flex: 1 }}
+        />
+        <button onClick={add} style={{ whiteSpace: 'nowrap' }}><Plus size={14} /> Add</button>
+      </div>
+    </label>
+  );
+}
+
 function BuilderView({
   selectedBot,
   versions,
@@ -1504,15 +2034,23 @@ function BuilderView({
   onUpdateLanguage,
   onSaveDraft,
   onPublish,
+  onUnpublish,
   onRename,
   onBack,
   saveState,
   publishState,
+  unpublishState,
   renameState,
   editingVersionId,
   onSelectVersion,
   onUpdateVersion,
-  updateVersionState
+  updateVersionState,
+  onRollback,
+  rollbackState,
+  onShowDiff,
+  liveCallsByVersion,
+  builderMode,
+  onToggleMode
 }: {
   selectedBot?: BotType;
   versions: BotVersion[];
@@ -1528,18 +2066,26 @@ function BuilderView({
   onUpdateLanguage: (value: string) => void;
   onSaveDraft: () => void;
   onPublish: () => void;
+  onUnpublish?: () => void;
   onRename?: (name: string, description: string) => void;
   onBack?: () => void;
   saveState?: 'idle' | 'running' | 'failed';
   publishState?: 'idle' | 'running' | 'failed';
+  unpublishState?: 'idle' | 'running' | 'failed';
   renameState?: 'idle' | 'running' | 'failed';
   editingVersionId?: string;
   onSelectVersion?: (version: BotVersion) => void;
   onUpdateVersion?: (versionId: string) => void;
   updateVersionState?: 'idle' | 'running' | 'failed';
+  onRollback?: (versionId: string) => void;
+  rollbackState?: Record<string, 'idle' | 'running' | 'failed'>;
+  onShowDiff?: (versionIdA: string, versionIdB: string) => void;
+  liveCallsByVersion?: Record<string, number>;
+  builderMode?: BuilderMode;
+  onToggleMode?: (mode: BuilderMode) => void;
 }) {
   const value = config.ok ? config.value : defaultConfig;
-
+  const isAdvanced = builderMode === 'advanced';
 
   const [draftName, setDraftName] = useState(selectedBot?.name || '');
   const [draftDescription, setDraftDescription] = useState(selectedBot?.description || '');
@@ -1551,6 +2097,70 @@ function BuilderView({
 
   const nameChanged = draftName.trim() !== (selectedBot?.name || '').trim()
     || draftDescription.trim() !== (selectedBot?.description || '').trim();
+
+  // ── Dirty tracking: detect unsaved config changes ──────────────────
+  const [baseConfigText, setBaseConfigText] = useState(configText);
+  const prevSaveState = useRef(saveState);
+  const prevUpdateState = useRef(updateVersionState);
+  // Capture config at the moment a save starts so we can reset base to
+  // exactly what was saved, not what the user may have typed since.
+  const configAtSaveStartRef = useRef(configText);
+
+  // Reset base when a new version is selected (editingVersionId changes)
+  useEffect(() => { setBaseConfigText(configText); }, [editingVersionId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Track config at save start, reset base on successful completion
+  useEffect(() => {
+    if (saveState === 'running' && prevSaveState.current !== 'running') {
+      configAtSaveStartRef.current = configText;
+    }
+    if (prevSaveState.current === 'running' && saveState === 'idle') {
+      setBaseConfigText(configAtSaveStartRef.current);
+    }
+    prevSaveState.current = saveState;
+  }, [saveState]); // intentionally omit configText — we capture it via ref at save-start
+
+  useEffect(() => {
+    if (updateVersionState === 'running' && prevUpdateState.current !== 'running') {
+      configAtSaveStartRef.current = configText;
+    }
+    if (prevUpdateState.current === 'running' && updateVersionState === 'idle') {
+      setBaseConfigText(configAtSaveStartRef.current);
+    }
+    prevUpdateState.current = updateVersionState;
+  }, [updateVersionState]); // intentionally omit configText — captured via ref
+
+  const isDirtyConfig = configText !== baseConfigText;
+  const isDirty = isDirtyConfig || nameChanged;
+
+  // Auto-save to localStorage (debounced 2s)
+  useEffect(() => {
+    if (!selectedBot?._id || !isDirtyConfig) return;
+    const id = window.setTimeout(() => {
+      localStorage.setItem(`draft-autosave-${selectedBot._id}`, configText);
+    }, 2000);
+    return () => clearTimeout(id);
+  }, [configText, selectedBot?._id, isDirtyConfig]);
+
+  // Warn before tab close when there are unsaved changes
+  useEffect(() => {
+    if (!isDirty) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [isDirty]);
+
+  // Cmd/Ctrl+S to save draft
+  useEffect(() => {
+    function handleSave(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        if (config.ok && saveState !== 'running') onSaveDraft();
+      }
+    }
+    window.addEventListener('keydown', handleSave);
+    return () => window.removeEventListener('keydown', handleSave);
+  }, [config.ok, saveState, onSaveDraft]);
 
   const editingVer = versions.find(v => v._id === editingVersionId);
   const isPublishedVer = editingVer?.state === 'published';
@@ -1564,7 +2174,31 @@ function BuilderView({
             <ChevronRight className="rotate-180" size={15} /> Back to agents
           </button>
         )}
+        {onToggleMode && (
+          <div className="mode-toggle" role="group" aria-label="Builder mode">
+            <button
+              className={!isAdvanced ? 'mode-btn active' : 'mode-btn'}
+              onClick={() => onToggleMode('pm')}
+              title="PM view — core fields only"
+            >
+              <Pencil size={13} /> PM
+            </button>
+            <button
+              className={isAdvanced ? 'mode-btn active' : 'mode-btn'}
+              onClick={() => onToggleMode('advanced')}
+              title="Advanced — all config fields including admin settings"
+            >
+              <SlidersHorizontal size={13} /> Advanced
+            </button>
+          </div>
+        )}
         <div className="builder-action-bar-right">
+          {isDirty && (
+            <span className="unsaved-indicator" title="You have unsaved changes. Press ⌘S to save a new draft.">
+              <span className="unsaved-dot" />
+              Unsaved changes
+            </span>
+          )}
           {!isPublishedVer && editingVersionId && onUpdateVersion && (
             <button
               disabled={!config.ok || updateVersionState === 'running'}
@@ -1572,6 +2206,16 @@ function BuilderView({
             >
               <Save size={15} />
               {updateVersionState === 'running' ? 'Saving…' : updateVersionState === 'failed' ? 'Retry' : `Update v${editingVer?.version ?? ''}`}
+            </button>
+          )}
+          {activeVersion && !latestDraft && onUnpublish && (
+            <button
+              className="fallback-button"
+              disabled={unpublishState === 'running'}
+              onClick={onUnpublish}
+              title="Move the published version back to draft so you can edit it"
+            >
+              <Pencil size={15} /> {unpublishState === 'running' ? 'Unpublishing…' : 'Edit published'}
             </button>
           )}
           <button disabled={!config.ok || saveState === 'running'} onClick={onSaveDraft}>
@@ -1633,13 +2277,41 @@ function BuilderView({
                 </div>
               )}
             </div>
+
+            {/* ── Persona & Identity — always visible ── */}
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginBottom: '0.25rem' }}>
+              <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Persona &amp; Identity</div>
+              <div className="form-grid">
+                <label>
+                  Persona name
+                  <input value={String(value.agent_name || '')} placeholder="e.g. Tarun, Priya, Aman" onChange={(e) => onUpdateConfig('agent_name', e.target.value)} />
+                  <small>Used in opening line and system prompt.</small>
+                </label>
+                <label>
+                  Organization name
+                  <input value={String(value.organization_name || '')} placeholder="e.g. JustDial" onChange={(e) => onUpdateConfig('organization_name', e.target.value)} />
+                </label>
+                {isAdvanced && (
+                  <>
+                    <label>
+                      AI partner key
+                      <input value={String(value.ai_partner || '')} placeholder="e.g. inh-suny-bot" onChange={(e) => onUpdateConfig('ai_partner', e.target.value)} />
+                      <small>Dialer lead fetch tag. Leave blank to use platform default.</small>
+                    </label>
+                    <label>
+                      Inactivity end phrase
+                      <input value={String(value.inactivity_end_text || '')} placeholder="Platform default used if blank" onChange={(e) => onUpdateConfig('inactivity_end_text', e.target.value)} />
+                      <small>Spoken after extended silence. Language-specific.</small>
+                    </label>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* ── Core content — always visible ── */}
             <label className="full">
               System prompt
-              <textarea
-                className="prompt-editor"
-                value={String(value.system_prompt || '')}
-                onChange={(event) => onUpdateConfig('system_prompt', event.target.value)}
-              />
+              <textarea className="prompt-editor" value={String(value.system_prompt || '')} onChange={(event) => onUpdateConfig('system_prompt', event.target.value)} />
             </label>
             <div className="form-grid">
               <label>
@@ -1663,55 +2335,101 @@ function BuilderView({
                 </select>
               </label>
               <label>
-                Model
-                <input value={String(value.model || '')} onChange={(event) => onUpdateConfig('model', event.target.value)} />
-              </label>
-              <label>
-                Max call duration
-                <input type="number" value={Number(value.max_call_duration || 300)} onChange={(event) => onUpdateConfig('max_call_duration', Number(event.target.value))} />
-              </label>
-              <label>
-                Temperature
-                <input type="number" min="0" max="2" step="0.1" value={Number(value.temperature || 0)} onChange={(event) => onUpdateConfig('temperature', Number(event.target.value))} />
-              </label>
-              <label>
-                Silence duration ms
-                <input type="number" value={Number(value.gemini_silence_duration_ms || 1800)} onChange={(event) => onUpdateConfig('gemini_silence_duration_ms', Number(event.target.value))} />
-              </label>
-              <label>
-                Dialer service ID
-                <input
-                  type="number"
-                  value={Number((value.recording as RuntimeConfig['recording'] | undefined)?.service_id || 293)}
-                  onChange={(event) => onUpdateConfig('recording', {
-                    ...(typeof value.recording === 'object' && value.recording ? value.recording : {}),
-                    service_id: Number(event.target.value)
-                  })}
-                />
-              </label>
-              <label>
-                Dialer city
-                <input
-                  value={String((value.recording as RuntimeConfig['recording'] | undefined)?.dialer_city || 'bangalore')}
-                  onChange={(event) => onUpdateConfig('recording', {
-                    ...(typeof value.recording === 'object' && value.recording ? value.recording : {}),
-                    dialer_city: event.target.value
-                  })}
-                />
+                Max call duration: {Number(value.max_call_duration || 300)}s ({Math.round(Number(value.max_call_duration || 300) / 60)} min)
+                <input type="range" min={60} max={600} step={30} value={Number(value.max_call_duration || 300)} onChange={(event) => onUpdateConfig('max_call_duration', Number(event.target.value))} />
+                <small>Also update the "X minutes" mention in your system prompt.</small>
               </label>
             </div>
+
+            {/* ── Advanced-only fields ── */}
+            {isAdvanced && (
+              <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: '0.5rem' }}>
+                <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <SlidersHorizontal size={12} /> Advanced / Admin settings
+                </div>
+                <div className="form-grid">
+                  <label>
+                    Model
+                    <input value={String(value.model || '')} onChange={(event) => onUpdateConfig('model', event.target.value)} />
+                  </label>
+                  <label>
+                    Temperature
+                    <input type="number" min="0" max="2" step="0.1" value={Number(value.temperature || 0)} onChange={(event) => onUpdateConfig('temperature', Number(event.target.value))} />
+                  </label>
+                  <label>
+                    Silence duration ms
+                    <input type="number" value={Number(value.gemini_silence_duration_ms || 1800)} onChange={(event) => onUpdateConfig('gemini_silence_duration_ms', Number(event.target.value))} />
+                    <small>VAD: how long silence triggers end-of-speech.</small>
+                  </label>
+                  <label>
+                    Prefix padding ms
+                    <input type="number" value={Number(value.gemini_prefix_padding_ms || 300)} onChange={(event) => onUpdateConfig('gemini_prefix_padding_ms', Number(event.target.value))} />
+                  </label>
+                  <label>
+                    Post-speech hold ms
+                    <input type="number" value={Number(value.post_speech_hold_ms || 800)} onChange={(event) => onUpdateConfig('post_speech_hold_ms', Number(event.target.value))} />
+                  </label>
+                  <label>
+                    Dialer service ID
+                    <input
+                      type="number"
+                      value={Number((value.recording as RuntimeConfig['recording'] | undefined)?.service_id || 293)}
+                      onChange={(event) => onUpdateConfig('recording', {
+                        ...(typeof value.recording === 'object' && value.recording ? value.recording : {}),
+                        service_id: Number(event.target.value)
+                      })}
+                    />
+                  </label>
+                  <label>
+                    Dialer city
+                    <input
+                      value={String((value.recording as RuntimeConfig['recording'] | undefined)?.dialer_city || 'bangalore')}
+                      onChange={(event) => onUpdateConfig('recording', {
+                        ...(typeof value.recording === 'object' && value.recording ? value.recording : {}),
+                        dialer_city: event.target.value
+                      })}
+                    />
+                  </label>
+                  <label>
+                    MIS API base URL
+                    <input
+                      value={String((value.api_urls as Record<string,string> | undefined)?.mis_api_base || '')}
+                      placeholder="Leave blank to use platform default"
+                      onChange={(event) => onUpdateConfig('api_urls', {
+                        ...(typeof value.api_urls === 'object' && value.api_urls ? value.api_urls : {}),
+                        mis_api_base: event.target.value
+                      })}
+                    />
+                    <small>Per-bot override for MIS lead fetch endpoint.</small>
+                  </label>
+                </div>
+                <CloseMarkersEditor
+                  markers={Array.isArray(value.close_markers) ? value.close_markers as string[] : []}
+                  onChange={v => onUpdateConfig('close_markers', v)}
+                />
+                <label style={{ marginTop: '0.5rem', display: 'block' }}>
+                  Function calling
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.3rem' }}>
+                    <input type="checkbox" checked={Boolean(value.function_calling)} onChange={(e) => onUpdateConfig('function_calling', e.target.checked)} style={{ width: 'auto' }} />
+                    <span style={{ fontSize: '0.85rem' }}>Enable function calling (requires functions list in JSON)</span>
+                  </div>
+                </label>
+              </div>
+            )}
           </div>
         </div>
-        <div className="panel json-panel">
-          <div className="panel-header">
-            <div>
-              <h2>Developer JSON</h2>
-              <p>Advanced config stays visible so backend/runtime fields are not hidden from developers.</p>
+        {isAdvanced && (
+          <div className="panel json-panel">
+            <div className="panel-header">
+              <div>
+                <h2>Developer JSON</h2>
+                <p>Full runtime config. Only visible in Advanced mode.</p>
+              </div>
+              <Database size={18} />
             </div>
-            <Database size={18} />
+            <textarea className="json-editor" value={configText} onChange={(event) => onConfigTextChange(event.target.value)} spellCheck={false} />
           </div>
-          <textarea className="json-editor" value={configText} onChange={(event) => onConfigTextChange(event.target.value)} spellCheck={false} />
-        </div>
+        )}
       </div>
       <aside className="right-rail">
         <div className="panel compact">
@@ -1725,18 +2443,52 @@ function BuilderView({
         <div className="panel compact">
           <h2>Version history</h2>
           <div className="version-list">
-            {versions.map((version) => (
-              <div
-                className={`version-row${version._id === editingVersionId ? ' active' : ''}`}
-                key={version._id}
-                onClick={() => onSelectVersion?.(version)}
-                style={{ cursor: 'pointer' }}
-              >
-                <span>v{version.version}</span>
-                <StatusPill value={version.state} />
-                <small>{version.published_at ? `Published ${formatDate(version.published_at)}` : `Created ${formatDate(version.created_at)}`}</small>
-              </div>
-            ))}
+            {versions.map((version, i) => {
+              const isActive = version._id === selectedBot?.active_version_id;
+              const rollbackKey = `rollback-${version._id}`;
+              const rolling = rollbackState?.[rollbackKey] === 'running';
+              const liveCalls = liveCallsByVersion?.[version._id] || 0;
+              return (
+                <div
+                  className={`version-row${version._id === editingVersionId ? ' active' : ''}`}
+                  key={version._id}
+                  onClick={() => onSelectVersion?.(version)}
+                  style={{ cursor: 'pointer' }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                    <span>v{version.version}</span>
+                    <StatusPill value={version.state} />
+                    {isActive && <span style={{ fontSize: '0.68rem', background: 'var(--primary-bg, #dbeafe)', color: 'var(--primary, #2563eb)', borderRadius: '4px', padding: '1px 5px', fontWeight: 600 }}>LIVE</span>}
+                    {liveCalls > 0 && (
+                      <span style={{ fontSize: '0.68rem', background: '#dcfce7', color: '#15803d', borderRadius: '4px', padding: '1px 5px', fontWeight: 600 }}>
+                        {liveCalls} live
+                      </span>
+                    )}
+                  </div>
+                  <small>{version.published_at ? <>Published <TimeAgo value={version.published_at} /></> : <>Created <TimeAgo value={version.created_at} /></>}</small>
+                  {version.notes && <small style={{ color: 'var(--muted)', fontStyle: 'italic' }}>{version.notes}</small>}
+                  <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', marginTop: '0.2rem' }}>
+                    {version.state === 'published' && !isActive && onRollback && (
+                      <button
+                        style={{ fontSize: '0.72rem', padding: '2px 8px' }}
+                        disabled={rolling}
+                        onClick={(e) => { e.stopPropagation(); onRollback(version._id); }}
+                      >
+                        {rolling ? 'Rolling back…' : '↩ Rollback to this'}
+                      </button>
+                    )}
+                    {i > 0 && onShowDiff && (
+                      <button
+                        style={{ fontSize: '0.72rem', padding: '2px 8px' }}
+                        onClick={(e) => { e.stopPropagation(); onShowDiff(versions[i - 1]._id, version._id); }}
+                      >
+                        <GitBranch size={11} /> vs prev
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
         <div className="callout">
@@ -1753,23 +2505,31 @@ function CampaignsView({
   bots,
   languages,
   outcomes,
+  loading,
   workspaceMode,
   selectedCampaignKey,
   onSelectCampaign,
   onBackToList,
   onSaveStrategy,
-  saveState
+  saveState,
+  onAssignBot,
+  assignBotState,
+  onSetStatus,
 }: {
   campaigns: Campaign[];
   bots: BotType[];
   languages: LanguageOption[];
   outcomes: OutcomeEntry[];
+  loading?: boolean;
   workspaceMode: 'list' | 'strategy';
   selectedCampaignKey: string;
   onSelectCampaign: (key: string) => void;
   onBackToList: () => void;
   onSaveStrategy: (key: string, name: string, strategy: DialingStrategy) => Promise<void>;
   saveState?: 'idle' | 'running' | 'failed';
+  onAssignBot?: (campaignKey: string, botId: string) => void;
+  assignBotState?: Record<string, 'idle' | 'running' | 'failed'>;
+  onSetStatus?: (campaignKey: string, status: string) => void;
 }) {
   const selectedCampaign = campaigns.find((c) => c.campaign_key === selectedCampaignKey) || campaigns[0];
 
@@ -1801,10 +2561,33 @@ function CampaignsView({
             <tr><th>Campaign</th><th>Bot</th><th>Status</th><th>Strategy</th><th>Lead API</th><th>Actions</th></tr>
           </thead>
           <tbody>
-            {campaigns.map((campaign) => (
+            {loading && !campaigns.length ? (
+              <SkeletonTableBody cols={6} rows={3} />
+            ) : !campaigns.length ? (
+              <tr><td colSpan={6}>
+                <EmptyState
+                  icon={<Megaphone size={32} />}
+                  heading="No campaigns yet"
+                  description="Campaigns are created via the backend API. Each campaign maps a bot to a lead source and callback endpoint."
+                />
+              </td></tr>
+            ) : campaigns.map((campaign) => (
               <tr key={campaign._id}>
                 <td><strong>{campaign.name}</strong><small>{campaign.campaign_key}</small></td>
-                <td>{bots.find((bot) => bot._id === campaign.bot_id)?.name || '-'}</td>
+                <td>
+                  {onAssignBot ? (
+                    <select
+                      value={campaign.bot_id || ''}
+                      onChange={e => onAssignBot(campaign.campaign_key, e.target.value)}
+                      style={{ fontSize: '0.82rem', width: '100%' }}
+                    >
+                      <option value="">— unassigned —</option>
+                      {bots.map(b => <option key={b._id} value={b._id}>{b.name}</option>)}
+                    </select>
+                  ) : (
+                    bots.find((bot) => bot._id === campaign.bot_id)?.name || '-'
+                  )}
+                </td>
                 <td><StatusPill value={campaign.status || 'draft'} /></td>
                 <td>
                   {campaign.dialing_strategy
@@ -1813,16 +2596,31 @@ function CampaignsView({
                   }
                 </td>
                 <td><code>{String(campaign.lead_api?.url || campaign.lead_api?.endpoint || '-')}</code></td>
-                <td>
+                <td style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {onSetStatus && campaign.status !== 'active' && (
+                    <button
+                      className="btn-success"
+                      title="Activate campaign"
+                      onClick={() => onSetStatus(campaign.campaign_key, 'active')}
+                    >
+                      <Play size={13} /> Activate
+                    </button>
+                  )}
+                  {onSetStatus && campaign.status === 'active' && (
+                    <button
+                      className="btn-warn"
+                      title="Pause campaign"
+                      onClick={() => onSetStatus(campaign.campaign_key, 'paused')}
+                    >
+                      <Pause size={13} /> Pause
+                    </button>
+                  )}
                   <button onClick={() => onSelectCampaign(campaign.campaign_key)}>
-                    <Layers size={14} /> Edit Strategy
+                    <Layers size={14} /> Strategy
                   </button>
                 </td>
               </tr>
             ))}
-            {!campaigns.length && (
-              <tr><td colSpan={6}>No campaigns yet. Backend can create mappings through <code>POST /api/campaigns</code>.</td></tr>
-            )}
           </tbody>
         </table></div>
       </div>
@@ -1986,6 +2784,28 @@ function TestCallPanel({
           <button onClick={() => updateField('test_worker_agent_name', defaultWorker)}>Use saved default</button>
           <button onClick={() => setForm((current) => ({ ...current, call_id: `TEST-${Date.now()}` }))}>New call ID</button>
         </div>
+        <details style={{ marginTop: '0.5rem' }}>
+          <summary style={{ fontSize: '0.83rem', fontWeight: 600, cursor: 'pointer', padding: '0.3rem 0', userSelect: 'none' }}>
+            Custom lead data (advanced)
+          </summary>
+          <div style={{ marginTop: '0.5rem' }}>
+            <label>
+              Lead JSON override
+              <textarea
+                rows={5}
+                value={form.custom_lead_json}
+                onChange={(e) => updateField('custom_lead_json', e.target.value)}
+                placeholder={'{\n  "is_business": true,\n  "qualification": "premium"\n}'}
+                style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}
+              />
+              <small>Merged into the lead record sent to the bot. Use for edge-case testing (is_business, specific qualification fields, etc.).</small>
+            </label>
+            {form.custom_lead_json && (() => {
+              try { JSON.parse(form.custom_lead_json); return <div style={{ fontSize: '0.78rem', color: '#15803d', marginTop: '2px' }}>✓ Valid JSON</div>; }
+              catch { return <div style={{ fontSize: '0.78rem', color: '#b91c1c', marginTop: '2px' }}>✗ Invalid JSON — fix before starting</div>; }
+            })()}
+          </div>
+        </details>
         <div className="button-row">
           <button className={error ? 'fallback-button' : 'primary'} onClick={onStart} disabled={!selectedBot || status.includes('Creating') || status.includes('Connecting')}>
             <Play size={16} /> {error ? 'Fallback: retry setup' : status.includes('Creating') || status.includes('Connecting') ? 'Starting...' : 'Start WebRTC test'}
@@ -2033,6 +2853,7 @@ function TestCallPanel({
         <ConnectionLine icon={<Mic />} label="Microphone" value={status.includes('Microphone') || remoteAudioReady ? 'Requested' : 'Waiting'} done={status.includes('Microphone') || remoteAudioReady} />
         <ConnectionLine icon={<Volume2 />} label="Bot audio" value={remoteAudioReady ? 'Connected' : 'Waiting'} done={remoteAudioReady} />
         <div ref={remoteAudioRef} />
+        {selectedVersion && <PromptPreview version={selectedVersion} srchterm={form.srchterm} />}
         {error && (
           <div className="notice error test-error">
             <AlertTriangle size={16} />
@@ -2048,6 +2869,69 @@ function TestCallPanel({
         )}
       </div>
     </section>
+  );
+}
+
+function PromptPreview({ version, srchterm }: { version: BotVersion; srchterm: string }) {
+  const cfg = version.config as Record<string, string | undefined>;
+  const rawOpening = cfg.initial_message || '(no opening line set)';
+  const opening = rawOpening
+    .replace('{product}', srchterm || '<product>')
+    .replace('{agent_name}', cfg.agent_name || '<agent_name>')
+    .replace('{organization_name}', cfg.organization_name || '<org_name>');
+  const systemPrompt = cfg.system_prompt || '(no system_prompt set in this version)';
+  const voice = cfg.voice || 'Aoede (default)';
+  const model = cfg.model || 'gemini-3.1-flash-live-preview (default)';
+  const agentName = cfg.agent_name;
+  const orgName = cfg.organization_name;
+  const aiPartner = cfg.ai_partner;
+
+  const warnings: string[] = [];
+  if (!agentName) warnings.push('agent_name not set — bot may use hardcoded persona');
+  if (!orgName) warnings.push('organization_name not set');
+  if (!cfg.initial_message) warnings.push('initial_message not set — bot will use fallback');
+
+  const configSource = version.state === 'published'
+    ? `embedded_test_config:${version._id.slice(-6)}`
+    : `draft:v${version.version}`;
+
+  return (
+    <details className="prompt-preview" style={{ marginTop: '1rem' }}>
+      <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem', padding: '0.5rem 0', userSelect: 'none' }}>
+        Prompt preview — v{version.version} ({version.state})
+      </summary>
+      <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <code style={{ fontSize: '0.72rem', background: 'var(--surface-2, #f4f4f5)', padding: '2px 8px', borderRadius: '4px', color: 'var(--muted)' }}>
+            config: {configSource}
+          </code>
+          {aiPartner && <code style={{ fontSize: '0.72rem', background: 'var(--surface-2, #f4f4f5)', padding: '2px 8px', borderRadius: '4px', color: 'var(--muted)' }}>ai_partner: {aiPartner}</code>}
+        </div>
+        {warnings.length > 0 && (
+          <div style={{ background: 'var(--warning-bg, #fef3c7)', border: '1px solid var(--warning-border, #fcd34d)', borderRadius: '6px', padding: '0.5rem 0.75rem' }}>
+            {warnings.map((w) => <div key={w} style={{ fontSize: '0.78rem', color: 'var(--warning, #92400e)' }}>⚠ {w}</div>)}
+          </div>
+        )}
+        <div>
+          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Persona</div>
+          <code style={{ fontSize: '0.8rem' }}>{agentName || '(not set)'} · {orgName || '(org not set)'}</code>
+        </div>
+        <div>
+          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Voice / Model</div>
+          <code style={{ fontSize: '0.8rem' }}>{voice} · {model}</code>
+        </div>
+        <div>
+          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Opening line</div>
+          <div style={{ background: 'var(--surface-2, #f4f4f5)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.85rem', fontStyle: 'italic' }}>
+            "{opening}"
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>System prompt</div>
+          <pre style={{ background: 'var(--surface-2, #f4f4f5)', borderRadius: '6px', padding: '0.75rem', fontSize: '0.78rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '300px', overflowY: 'auto', margin: 0 }}>{systemPrompt}</pre>
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -2071,23 +2955,213 @@ type ConversationItem =
       severity: CallEvent['severity'];
     };
 
+// Counts a number up from 0 to `target` over `duration`ms.
+// Returns the current display value and a ref to attach to the element
+// (adds/removes .counting CSS class so the shimmer animation fires).
+function useCountUp(target: number, duration = 600) {
+  const [value, setValue] = useState(0);
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (target === 0) { setValue(0); return; }
+    const start = performance.now();
+    ref.current?.classList.add('counting');
+    const tick = (now: number) => {
+      const progress = Math.min((now - start) / duration, 1);
+      // ease-out cubic
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setValue(Math.round(target * eased));
+      if (progress < 1) requestAnimationFrame(tick);
+      else ref.current?.classList.remove('counting');
+    };
+    requestAnimationFrame(tick);
+  }, [target, duration]);
+  return { value, ref };
+}
+
+function AnalyticsView({ bots, campaigns }: { bots: BotType[]; campaigns: Campaign[] }) {
+  const [analytics, setAnalytics] = useState<OutcomeAnalytics | null>(null);
+  const [alert, setAlert] = useState<QualityAlert | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [botId, setBotId] = useState('');
+  const [campaignId, setCampaignId] = useState('');
+  const [hours, setHours] = useState<number | ''>('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+
+  async function load() {
+    setLoading(true);
+    try {
+      const params: Parameters<typeof api.outcomeAnalytics>[0] = {};
+      if (botId) params.bot_id = botId;
+      if (campaignId) params.campaign_id = campaignId;
+      if (hours) params.hours = Number(hours);
+      if (startDate) params.start_date = startDate;
+      if (endDate) params.end_date = endDate;
+      const [a, q] = await Promise.all([
+        api.outcomeAnalytics(params),
+        api.qualityAlerts(1, 30),
+      ]);
+      setAnalytics(a);
+      setAlert(q);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  const statusEntries = analytics ? Object.entries(analytics.by_status).sort((a, b) => b[1] - a[1]) : [];
+  const outcomeEntries = analytics ? Object.entries(analytics.by_outcome).sort((a, b) => b[1] - a[1]) : [];
+  const total = analytics?.total || 0;
+  const { value: animatedTotal, ref: totalRef } = useCountUp(total);
+  const { value: animatedNatural, ref: naturalRef } = useCountUp(analytics?.ended_naturally || 0);
+
+  return (
+    <section className="content-grid two-col">
+      <div className="panel">
+        <div className="panel-header">
+          <div><h2>Call outcome analytics</h2><p>Aggregated over selected time window.</p></div>
+          <button onClick={load} disabled={loading}><RefreshCw size={14} /> {loading ? 'Loading…' : 'Refresh'}</button>
+        </div>
+
+        {alert?.alert && (
+          <div className="callout" style={{ background: 'rgba(239,68,68,0.1)', borderColor: 'var(--error)', marginBottom: '12px' }}>
+            <AlertTriangle size={18} style={{ color: 'var(--error)' }} />
+            <strong style={{ color: 'var(--error)' }}>Quality alert:</strong> {alert.message}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '14px' }}>
+          <select value={botId} onChange={e => setBotId(e.target.value)} style={{ fontSize: '0.82rem' }}>
+            <option value="">All bots</option>
+            {bots.map(b => <option key={b._id} value={b._id}>{b.name}</option>)}
+          </select>
+          <select value={campaignId} onChange={e => setCampaignId(e.target.value)} style={{ fontSize: '0.82rem' }}>
+            <option value="">All campaigns</option>
+            {campaigns.map(c => <option key={c._id} value={c.campaign_key}>{c.name}</option>)}
+          </select>
+          <select value={hours} onChange={e => setHours(e.target.value === '' ? '' : Number(e.target.value))} style={{ fontSize: '0.82rem' }}>
+            <option value="">Custom date range</option>
+            <option value={1}>Last 1 hour</option>
+            <option value={6}>Last 6 hours</option>
+            <option value={24}>Last 24 hours</option>
+            <option value={168}>Last 7 days</option>
+            <option value={720}>Last 30 days</option>
+          </select>
+          {!hours && (
+            <>
+              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ fontSize: '0.82rem' }} />
+              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ fontSize: '0.82rem' }} />
+            </>
+          )}
+          <button onClick={load} disabled={loading}>Apply</button>
+        </div>
+
+        {analytics && (
+          <>
+            <div className="metric-board" style={{ marginBottom: '16px' }}>
+              <div className="metric" ref={totalRef as React.RefObject<HTMLDivElement>}>
+                <span>Total calls</span>
+                <strong>{animatedTotal.toLocaleString('en-IN')}</strong>
+              </div>
+              <div className="metric" ref={naturalRef as React.RefObject<HTMLDivElement>}>
+                <span>Ended naturally</span>
+                <strong>{animatedNatural} <small style={{ fontWeight: 400, fontSize: '0.75rem' }}>({total ? Math.round(analytics.ended_naturally / total * 100) : 0}%)</small></strong>
+              </div>
+              <div className="metric">
+                <span>Avg duration</span>
+                <strong>{analytics.avg_duration_sec}s</strong>
+              </div>
+            </div>
+
+            <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>By status</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '16px' }}>
+              {statusEntries.map(([status, count]) => (
+                <div key={status} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <StatusPill value={status} />
+                  <div style={{ flex: 1, background: 'var(--bg-tertiary)', borderRadius: '3px', height: '8px', overflow: 'hidden' }}>
+                    <div style={{ width: `${total ? count / total * 100 : 0}%`, background: 'var(--accent)', height: '100%', transition: 'width 0.3s' }} />
+                  </div>
+                  <span style={{ fontSize: '0.82rem', minWidth: '50px', textAlign: 'right' }}>{count} ({total ? Math.round(count / total * 100) : 0}%)</span>
+                </div>
+              ))}
+              {!statusEntries.length && <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No data for this window.</p>}
+            </div>
+
+            {outcomeEntries.length > 0 && (
+              <>
+                <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>By outcome tag</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {outcomeEntries.map(([outcome, count]) => (
+                    <div key={outcome} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ minWidth: '140px', fontSize: '0.82rem' }}>{outcome}</span>
+                      <div style={{ flex: 1, background: 'var(--bg-tertiary)', borderRadius: '3px', height: '8px', overflow: 'hidden' }}>
+                        <div style={{ width: `${total ? count / total * 100 : 0}%`, background: 'var(--success)', height: '100%', transition: 'width 0.3s' }} />
+                      </div>
+                      <span style={{ fontSize: '0.82rem', minWidth: '40px', textAlign: 'right' }}>{count}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </>
+        )}
+        {loading && !analytics && <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading…</p>}
+      </div>
+
+      <div className="panel">
+        <h2>Quality monitoring</h2>
+        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+          Alert fires when disconnected/error calls exceed 30% in the last hour (min 5 calls).
+        </p>
+        {alert && (
+          <div className="detail-list">
+            <Detail label="Window" value={`Last ${alert.hours}h`} />
+            <Detail label="Total calls" value={String(alert.total_calls)} />
+            <Detail label="Bad calls" value={String(alert.bad_calls)} />
+            <Detail label="Bad rate" value={`${alert.bad_pct}%`} />
+            <Detail label="Status" value={alert.alert ? '🔴 ALERT' : '🟢 OK'} />
+          </div>
+        )}
+        <div className="callout" style={{ marginTop: '16px' }}>
+          <BarChart2 size={18} />
+          Run this endpoint from a cron job to get Slack/email alerts: <code>GET /api/analytics/quality-alerts?hours=1&threshold_pct=30</code>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function TranscriptsView({
   transcripts,
   selectedTranscript,
   localRecordingByRoom,
   callEvents,
+  bots,
+  campaigns,
+  loading,
   searchText,
   onSearchText,
-  onSelect
+  filters,
+  onFiltersChange,
+  onSelect,
+  onNavigateTest
 }: {
   transcripts: Transcript[];
   selectedTranscript?: Transcript;
   localRecordingByRoom: Record<string, TestRecordingLookup>;
   callEvents: CallEvent[];
+  bots: BotType[];
+  campaigns: Campaign[];
+  loading?: boolean;
   searchText: string;
   onSearchText: (value: string) => void;
+  filters: { status: string; outcome: string; campaign_id: string; bot_id: string; start_date: string; end_date: string };
+  onFiltersChange: (f: typeof filters) => void;
   onSelect: (id: string) => void;
+  onNavigateTest?: () => void;
 }) {
+  const [showFilters, setShowFilters] = useState(false);
   const conversationItems = useMemo(
     () => buildConversationItems(selectedTranscript, callEvents),
     [selectedTranscript, callEvents]
@@ -2098,6 +3172,28 @@ function TranscriptsView({
   const recordingUrl = selectedTranscript?.recording_url || localRecording?.recording_url || '';
   const recordingSource = selectedTranscript?.recording_source || localRecording?.recording_source || '';
 
+  const activeFilterCount = Object.values(filters).filter(Boolean).length;
+
+  // Client-side apply active filters on top of the already-searched list
+  const displayedTranscripts = useMemo(() => {
+    return transcripts.filter(t => {
+      if (filters.status && t.status !== filters.status) return false;
+      if (filters.campaign_id && t.campaign_id !== filters.campaign_id) return false;
+      if (filters.bot_id && t.bot_id !== filters.bot_id) return false;
+      return true;
+    });
+  }, [transcripts, filters]);
+
+  const csvUrl = api.exportCsvUrl({
+    bot_id: filters.bot_id || undefined,
+    campaign_id: filters.campaign_id || undefined,
+    status: filters.status || undefined,
+    outcome: filters.outcome || undefined,
+    start_date: filters.start_date || undefined,
+    end_date: filters.end_date || undefined,
+    text: searchText.trim() || undefined,
+  });
+
   return (
     <section className="content-grid transcripts-grid">
       <div className="table-panel">
@@ -2106,24 +3202,96 @@ function TranscriptsView({
             <h2>Saved transcripts</h2>
             <p>Raw transcripts are stored forever with call config snapshots.</p>
           </div>
-          <div className="search-box"><Search size={15} /><input value={searchText} onChange={(event) => onSearchText(event.target.value)} placeholder="Search call, lead, campaign or text" /></div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="search-box"><Search size={15} /><input value={searchText} onChange={(event) => onSearchText(event.target.value)} placeholder="Search call, lead, campaign or text" /></div>
+            <button
+              title="Filters"
+              onClick={() => setShowFilters(v => !v)}
+              style={{ position: 'relative' }}
+            >
+              <Filter size={14} /> Filters {activeFilterCount > 0 && <span className="pill active" style={{ marginLeft: '4px', fontSize: '0.72rem', padding: '0 6px' }}>{activeFilterCount}</span>}
+            </button>
+            <a href={csvUrl} download style={{ textDecoration: 'none' }}>
+              <button title="Export CSV"><Download size={14} /> Export</button>
+            </a>
+          </div>
         </div>
+        {showFilters && (
+          <div style={{ padding: '10px 16px', background: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.8rem' }}>
+              Status
+              <select value={filters.status} onChange={e => onFiltersChange({ ...filters, status: e.target.value })} style={{ fontSize: '0.8rem' }}>
+                <option value="">All</option>
+                {['completed', 'not_interested', 'disconnected', 'voicemail', 'dnc', 'error', 'busy', 'no_answer'].map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.8rem' }}>
+              Campaign
+              <select value={filters.campaign_id} onChange={e => onFiltersChange({ ...filters, campaign_id: e.target.value })} style={{ fontSize: '0.8rem' }}>
+                <option value="">All</option>
+                {campaigns.map(c => <option key={c._id} value={c.campaign_key}>{c.name}</option>)}
+              </select>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.8rem' }}>
+              Bot
+              <select value={filters.bot_id} onChange={e => onFiltersChange({ ...filters, bot_id: e.target.value })} style={{ fontSize: '0.8rem' }}>
+                <option value="">All</option>
+                {bots.map(b => <option key={b._id} value={b._id}>{b.name}</option>)}
+              </select>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.8rem' }}>
+              From date
+              <input type="date" value={filters.start_date} onChange={e => onFiltersChange({ ...filters, start_date: e.target.value })} style={{ fontSize: '0.8rem' }} />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.8rem' }}>
+              To date
+              <input type="date" value={filters.end_date} onChange={e => onFiltersChange({ ...filters, end_date: e.target.value })} style={{ fontSize: '0.8rem' }} />
+            </label>
+            <button onClick={() => onFiltersChange({ status: '', outcome: '', campaign_id: '', bot_id: '', start_date: '', end_date: '' })} style={{ fontSize: '0.8rem' }}>
+              Clear
+            </button>
+          </div>
+        )}
+
         <div className="table-scroll"><table>
           <thead>
             <tr><th>Call</th><th>Lead</th><th>Status</th><th>Duration</th><th>Turns</th><th>Created</th></tr>
           </thead>
           <tbody>
-            {transcripts.map((item) => (
+            {loading && !transcripts.length ? (
+              <SkeletonTableBody cols={6} rows={5} />
+            ) : displayedTranscripts.length === 0 ? (
+              <tr><td colSpan={6}>
+                {transcripts.length === 0 ? (
+                  <EmptyState
+                    icon={<FileText size={32} />}
+                    heading="No transcripts yet"
+                    description="Transcripts appear here after calls complete. Start a test call to see your first one."
+                    action={onNavigateTest ? { label: 'Go to Test Call', onClick: onNavigateTest } : undefined}
+                  />
+                ) : (
+                  <EmptyState
+                    icon={<Search size={28} />}
+                    heading="No matching transcripts"
+                    description="Try adjusting your filters or search text."
+                  />
+                )}
+              </td></tr>
+            ) : displayedTranscripts.map((item) => (
               <tr key={item._id} onClick={() => onSelect(item._id)} className={item._id === selectedTranscript?._id ? 'selected-row' : ''}>
-                <td><strong>{item.call_id || '-'}</strong><small>{item.campaign_id || '-'}</small></td>
-                <td>{item.lead_id || '-'}</td>
+                <td>
+                  <CopyableId value={item.call_id} label={item.call_id} />
+                  <small>{item.campaign_id || '-'}</small>
+                </td>
+                <td><CopyableId value={item.lead_id} /></td>
                 <td><StatusPill value={item.status || 'unknown'} /></td>
                 <td>{item.call_duration_sec || 0}s</td>
                 <td>{item.transcript_count ?? item.transcript?.length ?? 0}</td>
-                <td>{formatDate(item.created_at)}</td>
+                <td><TimeAgo value={item.created_at} /></td>
               </tr>
             ))}
-            {!transcripts.length && <tr><td colSpan={6}>No transcripts found.</td></tr>}
           </tbody>
         </table></div>
       </div>
@@ -2138,7 +3306,7 @@ function TranscriptsView({
         {selectedTranscript ? (
           <>
             <div className="detail-list">
-              <Detail label="Call ID" value={selectedTranscript.call_id || '-'} />
+              <Detail label="Call ID" value={selectedTranscript.call_id || '-'} copyable />
               <Detail label="Bot version" value={selectedTranscript.bot_version_id ? shortId(selectedTranscript.bot_version_id) : '-'} />
               <Detail label="Callback" value={selectedTranscript.callback_status || '-'} />
               <Detail label="Transcript source" value={transcriptSourceLabel(selectedTranscript)} />
@@ -2338,6 +3506,12 @@ function SettingsView({
     livekit_browser_url: runtimeSettings?.livekit_browser_url || '',
     livekit_agent_name: runtimeSettings?.livekit_agent_name || ''
   });
+  const [adminDraft, setAdminDraft] = useState({
+    mis_api_base: '',
+    default_inactivity_phrase: '',
+    default_close_markers: ''
+  });
+  const [adminSaved, setAdminSaved] = useState(false);
 
   useEffect(() => {
     setDraft({
@@ -2347,44 +3521,136 @@ function SettingsView({
     });
   }, [runtimeSettings?._id, runtimeSettings?.livekit_api_url, runtimeSettings?.livekit_browser_url, runtimeSettings?.livekit_agent_name]);
 
+  // Load admin settings from localStorage (no backend yet — these are UI-layer hints)
+  useEffect(() => {
+    const stored = localStorage.getItem('adminPlatformSettings');
+    if (stored) {
+      try { setAdminDraft(JSON.parse(stored)); } catch { /* ignore */ }
+    }
+  }, []);
+
+  function saveAdminSettings() {
+    localStorage.setItem('adminPlatformSettings', JSON.stringify(adminDraft));
+    setAdminSaved(true);
+    setTimeout(() => setAdminSaved(false), 2000);
+  }
+
   return (
-    <section className="content-grid two-col">
+    <section style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div className="content-grid two-col">
+        <div className="panel">
+          <div className="panel-header">
+            <div>
+              <h2>Runtime settings</h2>
+              <p>Controls where dashboard test calls are created and which LiveKit worker receives them.</p>
+            </div>
+            <StatusPill value={runtimeSettings?.livekit_credentials_configured ? 'ready' : 'missing keys'} />
+          </div>
+          <div className="form-grid">
+            <label>
+              LiveKit API URL
+              <input value={draft.livekit_api_url} onChange={(event) => setDraft({ ...draft, livekit_api_url: event.target.value })} />
+            </label>
+            <label>
+              Browser WebSocket URL
+              <input value={draft.livekit_browser_url} onChange={(event) => setDraft({ ...draft, livekit_browser_url: event.target.value })} />
+            </label>
+            <label>
+              Test call worker agent name
+              <input value={draft.livekit_agent_name} onChange={(event) => setDraft({ ...draft, livekit_agent_name: event.target.value })} />
+            </label>
+            <label>
+              Secret keys
+              <input value={runtimeSettings?.livekit_credentials_configured ? 'Configured in backend .env' : 'Missing in backend .env'} disabled />
+            </label>
+          </div>
+          <div className="button-row">
+            <button className="primary" onClick={() => onUpdateRuntime(draft)}><Save size={16} /> Save runtime settings</button>
+          </div>
+        </div>
+        <div className="panel">
+          <h2>Worker vs dashboard agent</h2>
+          <div className="timeline">
+            <Step title="Dashboard agent" text="The bot you create in the UI: prompt, voice, language and settings stored in Mongo." />
+            <Step title="LiveKit worker" text="A Python process connected to LiveKit. It receives rooms for a specific agent name and runs bot.py." />
+            <Step title="Safe testing" text="Use a separate worker name such as voice-bot-justdial-test so test calls do not route to live workers." />
+          </div>
+        </div>
+      </div>
+
+      {/* ── Admin Tools ── */}
       <div className="panel">
         <div className="panel-header">
           <div>
-            <h2>Runtime settings</h2>
-            <p>These values control where dashboard test calls are created and which LiveKit worker receives them.</p>
+            <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <SlidersHorizontal size={18} /> Admin tools
+            </h2>
+            <p>Platform-wide defaults for bot behaviour. These are used when a bot has no per-bot override configured in Advanced mode.</p>
           </div>
-          <StatusPill value={runtimeSettings?.livekit_credentials_configured ? 'ready' : 'missing keys'} />
+          <span style={{ fontSize: '0.72rem', background: 'var(--warning-bg, #fef3c7)', color: 'var(--warning, #92400e)', border: '1px solid var(--warning-border, #fcd34d)', borderRadius: '4px', padding: '2px 8px', fontWeight: 600 }}>Admin only</span>
         </div>
-        <div className="form-grid">
-          <label>
-            LiveKit API URL
-            <input value={draft.livekit_api_url} onChange={(event) => setDraft({ ...draft, livekit_api_url: event.target.value })} />
-          </label>
-          <label>
-            Browser WebSocket URL
-            <input value={draft.livekit_browser_url} onChange={(event) => setDraft({ ...draft, livekit_browser_url: event.target.value })} />
-          </label>
-          <label>
-            Test call worker agent name
-            <input value={draft.livekit_agent_name} onChange={(event) => setDraft({ ...draft, livekit_agent_name: event.target.value })} />
-          </label>
-          <label>
-            Secret keys
-            <input value={runtimeSettings?.livekit_credentials_configured ? 'Configured in backend .env' : 'Missing in backend .env'} disabled />
-          </label>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+          <div>
+            <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Platform defaults</div>
+            <div className="form-grid">
+              <label>
+                MIS API base URL
+                <input
+                  value={adminDraft.mis_api_base}
+                  onChange={(e) => setAdminDraft({ ...adminDraft, mis_api_base: e.target.value })}
+                  placeholder="http://192.168.8.67:8000"
+                />
+                <small>Platform default for lead fetch. Set MIS_API_BASE in .env for production.</small>
+              </label>
+              <label>
+                Default inactivity end phrase
+                <input
+                  value={adminDraft.default_inactivity_phrase}
+                  onChange={(e) => setAdminDraft({ ...adminDraft, default_inactivity_phrase: e.target.value })}
+                  placeholder="Leave blank to keep current Hindi default"
+                />
+                <small>Spoken when caller is silent for too long. Override per-bot in Advanced mode.</small>
+              </label>
+              <label className="full">
+                Default close markers (comma-separated)
+                <textarea
+                  rows={3}
+                  value={adminDraft.default_close_markers}
+                  onChange={(e) => setAdminDraft({ ...adminDraft, default_close_markers: e.target.value })}
+                  placeholder="thank you for your time, goodbye, धन्यवाद, …"
+                  style={{ fontFamily: 'inherit', fontSize: '0.83rem' }}
+                />
+                <small>Bot ends the call when any of these phrases are detected. Override per-bot in Advanced mode.</small>
+              </label>
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Role & access</div>
+            <div className="callout" style={{ marginBottom: '0.75rem' }}>
+              <Settings size={16} />
+              <div>
+                <strong>Builder modes</strong>
+                <p style={{ margin: '4px 0 0', fontSize: '0.82rem' }}>The <strong>PM</strong> toggle shows only core fields (prompt, voice, opening/closing line). The <strong>Advanced</strong> toggle reveals all admin fields. Mode is remembered per browser session.</p>
+              </div>
+            </div>
+            <div className="callout">
+              <ShieldCheck size={16} />
+              <div>
+                <strong>Coming soon: role-based access</strong>
+                <p style={{ margin: '4px 0 0', fontSize: '0.82rem' }}>Once auth is added, PMs will be locked to PM mode. Admins will see the Advanced toggle. The admin tools section will require an admin role to view.</p>
+              </div>
+            </div>
+          </div>
         </div>
-        <div className="button-row">
-          <button className="primary" onClick={() => onUpdateRuntime(draft)}><Save size={16} /> Save runtime settings</button>
-        </div>
-      </div>
-      <div className="panel">
-        <h2>Worker vs dashboard agent</h2>
-        <div className="timeline">
-          <Step title="Dashboard agent" text="The bot you create in the UI: prompt, voice, language and settings stored in Mongo." />
-          <Step title="LiveKit worker" text="A Python process connected to LiveKit. It receives rooms for a specific agent name and runs bot.py." />
-          <Step title="Safe testing" text="Use a separate worker name such as voice-bot-justdial-test so test calls do not route to live workers." />
+
+        <div className="button-row" style={{ marginTop: '1rem' }}>
+          <button className="primary" onClick={saveAdminSettings}>
+            <Save size={15} /> {adminSaved ? 'Saved ✓' : 'Save admin settings'}
+          </button>
+          <span style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
+            Note: MIS API base and phrase defaults require a bot worker restart to take effect.
+          </span>
         </div>
       </div>
     </section>
@@ -2649,7 +3915,7 @@ function PhraseEditor({
                   <td><input value={editingText} onChange={(event) => setEditingText(event.target.value)} /></td>
                   <td><input value={editingLanguage} onChange={(event) => setEditingLanguage(event.target.value)} style={{ width: 80 }} /></td>
                   <td><input value={editingNotes} onChange={(event) => setEditingNotes(event.target.value)} /></td>
-                  <td>{formatDate(row.updated_at)}</td>
+                  <td><TimeAgo value={row.updated_at} /></td>
                   <td>
                     <div className="button-row">
                       <button className="primary" onClick={onSubmitEdit}><Save size={14} /> Save</button>
@@ -2662,7 +3928,7 @@ function PhraseEditor({
                   <td><strong>{row.text}</strong>{row.created_by && <small>added by {row.created_by}</small>}</td>
                   <td><code>{row.language || '-'}</code></td>
                   <td><small>{row.notes || '-'}</small></td>
-                  <td>{formatDate(row.updated_at)}</td>
+                  <td><TimeAgo value={row.updated_at} /></td>
                   <td>
                     <div className="button-row">
                       <button onClick={() => onStartEdit(row)}><Pencil size={13} /> Edit</button>
@@ -2746,7 +4012,7 @@ function OutcomeCatalog({
                   <td><code>{row.key}</code></td>
                   <td><input value={draftLabel} onChange={(e) => setDraftLabel(e.target.value)} /></td>
                   <td><textarea rows={4} value={draftDescription} onChange={(e) => setDraftDescription(e.target.value)} /></td>
-                  <td>{formatDate(row.updated_at)}</td>
+                  <td><TimeAgo value={row.updated_at} /></td>
                   <td>
                     <div className="button-row">
                       <button className="primary" onClick={submitOutcomeEdit}><Save size={14} /> Save</button>
@@ -2759,7 +4025,7 @@ function OutcomeCatalog({
                   <td><code>{row.key}</code></td>
                   <td><strong>{row.display_label || row.key}</strong></td>
                   <td><small>{row.description}</small></td>
-                  <td>{formatDate(row.updated_at)}</td>
+                  <td><TimeAgo value={row.updated_at} /></td>
                   <td><button onClick={() => startEditOutcome(row)}><Pencil size={13} /> Edit</button></td>
                 </tr>
               )
@@ -2859,7 +4125,7 @@ function LanguageSettingsCatalog({
                 >
                   <td><code>{row.id}</code></td>
                   <td><strong>{row.name}</strong></td>
-                  <td>{formatDate(row.updated_at)}</td>
+                  <td><TimeAgo value={row.updated_at} /></td>
                 </tr>
               ))}
               {!settings.length && <tr><td colSpan={3}>No languages yet. Click "New language" to add the first.</td></tr>}
@@ -3464,8 +4730,6 @@ function AttemptSequenceEditor({
 }
 
 function NavItem({ icon, label, active, onClick }: {
-
-// function NavButton({ icon, label, active, onClick }: {
   icon: React.ReactNode;
   label: string;
   active: boolean;
@@ -3478,17 +4742,498 @@ function NavItem({ icon, label, active, onClick }: {
   );
 }
 
-// Keep backward-compat alias
+// Wraps the sidebar <nav> and drives the --proximity CSS variable on each
+// child based on how close the pointer is. Each item independently scales
+// and shifts — items far from the cursor stay still, nearby ones lift.
+function SidebarNav({ children }: { children: React.ReactNode }) {
+  const navRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+
+    // Radius (px) within which items respond. Beyond this they get proximity=0.
+    const RADIUS = 100;
+
+    function handleMove(e: PointerEvent) {
+      const items = nav!.querySelectorAll<HTMLElement>('.nav-item');
+      items.forEach(el => {
+        const rect = el.getBoundingClientRect();
+        const centerY = rect.top + rect.height / 2;
+        const dist = Math.abs(e.clientY - centerY);
+        const proximity = Math.max(0, 1 - dist / RADIUS);
+        el.style.setProperty('--proximity', proximity.toFixed(3));
+      });
+    }
+
+    function handleLeave() {
+      nav!.querySelectorAll<HTMLElement>('.nav-item').forEach(el => {
+        el.style.setProperty('--proximity', '0');
+      });
+    }
+
+    nav.addEventListener('pointermove', handleMove);
+    nav.addEventListener('pointerleave', handleLeave);
+    return () => {
+      nav.removeEventListener('pointermove', handleMove);
+      nav.removeEventListener('pointerleave', handleLeave);
+    };
+  }, []);
+
+  return (
+    <nav className="sidebar-nav" ref={navRef}>
+      {children}
+    </nav>
+  );
+}
+
 function NavButton(props: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
   return <NavItem {...props} />;
 }
 
-function Detail({ label, value }: { label: string; value: string }) {
-  return <div className="detail"><span>{label}</span><strong>{value}</strong></div>;
+function Detail({ label, value, copyable }: { label: string; value: string; copyable?: boolean }) {
+  return (
+    <div className="detail">
+      <span>{label}</span>
+      {copyable && value !== '-' ? <CopyableId value={value} label={value} /> : <strong>{value}</strong>}
+    </div>
+  );
 }
 
+// ─── StatusPill with icon ────────────────────────────────────────────────────
+
+const STATUS_ICONS: Record<string, React.ReactNode> = {
+  completed:    <CheckCircle2 size={12} aria-hidden />,
+  active:       <CheckCircle2 size={12} aria-hidden />,
+  published:    <CheckCircle2 size={12} aria-hidden />,
+  enabled:      <CheckCircle2 size={12} aria-hidden />,
+  ready:        <CheckCircle2 size={12} aria-hidden />,
+  running:      <Activity size={12} aria-hidden />,
+  connecting:   <Activity size={12} aria-hidden />,
+  disconnected: <XCircle size={12} aria-hidden />,
+  failed:       <XCircle size={12} aria-hidden />,
+  error:        <XCircle size={12} aria-hidden />,
+  not_interested: <XCircle size={12} aria-hidden />,
+  draft:        <Clock3 size={12} aria-hidden />,
+  paused:       <Clock3 size={12} aria-hidden />,
+  pending:      <Clock3 size={12} aria-hidden />,
+  voicemail:    <Clock3 size={12} aria-hidden />,
+  busy:         <Clock3 size={12} aria-hidden />,
+  no_answer:    <Clock3 size={12} aria-hidden />,
+};
+
 function StatusPill({ value }: { value: string }) {
-  return <span className={`pill ${value.toLowerCase()}`}>{value}</span>;
+  const key = value.toLowerCase().replace(/\s+/g, '_');
+  const icon = STATUS_ICONS[key];
+  return (
+    <span className={`pill ${key}`}>
+      {icon && <span className="pill-icon">{icon}</span>}
+      {value}
+    </span>
+  );
+}
+
+// ─── TimeAgo ─────────────────────────────────────────────────────────────────
+
+function timeAgo(value?: string): string {
+  if (!value) return '-';
+  const date = parseApiDate(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const diffSec = (Date.now() - date.getTime()) / 1000;
+  if (diffSec < 60) return 'just now';
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} min ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} hr ago`;
+  if (diffSec < 172800) return 'yesterday';
+  return formatDate(value);
+}
+
+function TimeAgo({ value }: { value?: string }) {
+  const [, forceUpdate] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => forceUpdate(n => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  const abs = value ? formatDate(value) : '-';
+  return <span title={abs}>{timeAgo(value)}</span>;
+}
+
+// ─── CopyableId ──────────────────────────────────────────────────────────────
+
+function CopyableId({ value, label }: { value?: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  if (!value || value === '-') return <span>{value || '-'}</span>;
+  const display = label ?? value;
+  function handleCopy(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!navigator.clipboard) {
+      // Fallback for non-HTTPS or older browsers
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      } catch { /* silent */ }
+      return;
+    }
+    navigator.clipboard.writeText(value)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })
+      .catch(() => { /* permission denied or insecure context — fail silently */ });
+  }
+  return (
+    <span className="copyable-id" title={`Click to copy: ${value}`} onClick={handleCopy}>
+      <span className="copyable-id-text">{display}</span>
+      <span className="copyable-id-icon">{copied ? <Check size={11} /> : <Copy size={11} />}</span>
+    </span>
+  );
+}
+
+// ─── SkeletonTableBody ────────────────────────────────────────────────────────
+
+function SkeletonTableBody({ cols, rows = 4 }: { cols: number; rows?: number }) {
+  return (
+    <>
+      {Array.from({ length: rows }).map((_, r) => (
+        <tr key={r} className="skeleton-row" aria-hidden>
+          {Array.from({ length: cols }).map((_, c) => (
+            <td key={c}><span className="skeleton-cell" style={{ width: `${55 + ((r * 37 + c * 29) % 35)}%` }} /></td>
+          ))}
+        </tr>
+      ))}
+    </>
+  );
+}
+
+// ─── EmptyState ───────────────────────────────────────────────────────────────
+
+function EmptyState({ icon, heading, description, action }: {
+  icon: React.ReactNode;
+  heading: string;
+  description: string;
+  action?: { label: string; onClick: () => void };
+}) {
+  return (
+    <div className="empty-state">
+      <div className="empty-state-icon">{icon}</div>
+      <strong>{heading}</strong>
+      <p>{description}</p>
+      {action && <button className="primary" onClick={action.onClick}>{action.label}</button>}
+    </div>
+  );
+}
+
+// ─── Command Palette (Cmd+K) ──────────────────────────────────────────────────
+
+type CmdKResult =
+  | { kind: 'view';       view: View;       label: string; icon: React.ReactNode; description?: string }
+  | { kind: 'bot';        bot: BotType }
+  | { kind: 'campaign';   campaign: Campaign }
+  | { kind: 'transcript'; transcript: Transcript };
+
+type CmdKExtra = { botId?: string; transcriptId?: string; campaignKey?: string };
+
+const CMD_VIEWS: CmdKResult[] = [
+  { kind: 'view', view: 'bots',          label: 'Agents',        icon: <Bot size={15} />,          description: 'Manage voice agents' },
+  { kind: 'view', view: 'campaigns',     label: 'Campaigns',     icon: <Megaphone size={15} />,    description: 'Campaign mappings' },
+  { kind: 'view', view: 'test',          label: 'Test Call',     icon: <PhoneCall size={15} />,    description: 'Run a browser call' },
+  { kind: 'view', view: 'transcripts',   label: 'Transcripts',   icon: <FileText size={15} />,     description: 'Browse call transcripts' },
+  { kind: 'view', view: 'analytics',     label: 'Analytics',     icon: <BarChart2 size={15} />,    description: 'Outcomes and quality' },
+  { kind: 'view', view: 'observability', label: 'Observability', icon: <Gauge size={15} />,        description: 'LiveKit and latency' },
+  { kind: 'view', view: 'library',       label: 'Library',       icon: <BookOpen size={15} />,     description: 'Phrase library' },
+  { kind: 'view', view: 'settings',      label: 'Settings',      icon: <Settings size={15} />,     description: 'Runtime settings' },
+];
+
+function matchScore(haystack: string, needle: string): number {
+  if (!needle) return 1;
+  const h = haystack.toLowerCase();
+  const n = needle.toLowerCase();
+  if (h === n) return 3;
+  if (h.startsWith(n)) return 2;
+  if (h.includes(n)) return 1;
+  return 0;
+}
+
+function highlight(text: string, query: string): React.ReactNode {
+  if (!query.trim()) return text;
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="cmdk-mark">{text.slice(idx, idx + query.length)}</mark>
+      {text.slice(idx + query.length)}
+    </>
+  );
+}
+
+function CommandPalette({ bots, campaigns, transcripts, onClose, onNavigate }: {
+  bots: BotType[];
+  campaigns: Campaign[];
+  transcripts: Transcript[];
+  onClose: () => void;
+  onNavigate: (view: View, extra?: CmdKExtra) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [cursor, setCursor] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const q = query.trim();
+
+  const results: CmdKResult[] = useMemo(() => {
+    const out: CmdKResult[] = [];
+
+    // Views — always shown when query is empty, or when it matches
+    CMD_VIEWS.forEach(v => {
+      if (!q || matchScore(v.label, q) > 0 || matchScore(v.description || '', q) > 0) {
+        out.push(v);
+      }
+    });
+
+    if (q) {
+      // Bots
+      bots.forEach(bot => {
+        const score = Math.max(
+          matchScore(bot.name, q),
+          matchScore(bot.description || '', q),
+          matchScore(bot.assistant_id || '', q)
+        );
+        if (score > 0) out.push({ kind: 'bot', bot });
+      });
+
+      // Campaigns
+      campaigns.forEach(campaign => {
+        const score = Math.max(
+          matchScore(campaign.name, q),
+          matchScore(campaign.campaign_key, q)
+        );
+        if (score > 0) out.push({ kind: 'campaign', campaign });
+      });
+
+      // Transcripts — search recent ones (last 200, which is already what's loaded)
+      const recent = transcripts.slice(0, 200);
+      recent.forEach(t => {
+        const score = Math.max(
+          matchScore(t.call_id || '', q),
+          matchScore(t.lead_id || '', q),
+          matchScore(t.campaign_id || '', q),
+          matchScore(t.status || '', q)
+        );
+        if (score > 0) out.push({ kind: 'transcript', transcript: t });
+      });
+    }
+
+    return out.slice(0, 12);
+  }, [q, bots, campaigns, transcripts]);
+
+  // Reset cursor when results change
+  useEffect(() => { setCursor(0); }, [results.length, q]);
+
+  function selectResult(result: CmdKResult) {
+    if (result.kind === 'view') { onNavigate(result.view); return; }
+    if (result.kind === 'bot') { onNavigate('bots', { botId: result.bot._id }); return; }
+    if (result.kind === 'campaign') { onNavigate('campaigns', { campaignKey: result.campaign.campaign_key }); return; }
+    if (result.kind === 'transcript') { onNavigate('transcripts', { transcriptId: result.transcript._id }); return; }
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setCursor(c => Math.min(c + 1, results.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setCursor(c => Math.max(c - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (results[cursor]) selectResult(results[cursor]);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      onClose();
+    }
+  }
+
+  // Scroll active item into view
+  useEffect(() => {
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${cursor}"]`);
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [cursor]);
+
+  // Group results by kind for display
+  const grouped: Array<{ label: string; items: Array<{ result: CmdKResult; idx: number }> }> = [];
+  let globalIdx = 0;
+  const groups: Record<string, { label: string; items: Array<{ result: CmdKResult; idx: number }> }> = {};
+  results.forEach(r => {
+    const g = r.kind === 'view' ? 'Views' : r.kind === 'bot' ? 'Agents' : r.kind === 'campaign' ? 'Campaigns' : 'Transcripts';
+    if (!groups[g]) { groups[g] = { label: g, items: [] }; grouped.push(groups[g]); }
+    groups[g].items.push({ result: r, idx: globalIdx++ });
+  });
+
+  function resultIcon(r: CmdKResult) {
+    if (r.kind === 'view') return r.icon;
+    if (r.kind === 'bot') return <Bot size={15} />;
+    if (r.kind === 'campaign') return <Megaphone size={15} />;
+    return <FileText size={15} />;
+  }
+
+  function resultLabel(r: CmdKResult) {
+    if (r.kind === 'view') return highlight(r.label, q);
+    if (r.kind === 'bot') return highlight(r.bot.name, q);
+    if (r.kind === 'campaign') return highlight(r.campaign.name, q);
+    return highlight(r.transcript.call_id || r.transcript._id, q);
+  }
+
+  function resultSub(r: CmdKResult) {
+    if (r.kind === 'view') return r.description || '';
+    if (r.kind === 'bot') return r.bot.description || r.bot.assistant_id || '';
+    if (r.kind === 'campaign') return r.campaign.campaign_key;
+    return `${r.transcript.status || 'unknown'} · ${r.transcript.campaign_id || ''}`;
+  }
+
+  return (
+    <div className="cmdk-backdrop" onClick={onClose}>
+      <div className="cmdk-panel" onClick={e => e.stopPropagation()}>
+        <div className="cmdk-input-row">
+          <Search size={16} className="cmdk-search-icon" />
+          <input
+            ref={inputRef}
+            className="cmdk-input"
+            placeholder="Search agents, campaigns, transcripts…"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={handleKeyDown}
+          />
+          {query && (
+            <button className="cmdk-clear" onClick={() => { setQuery(''); inputRef.current?.focus(); }}>
+              <XCircle size={15} />
+            </button>
+          )}
+        </div>
+
+        <div className="cmdk-results" ref={listRef}>
+          {results.length === 0 && (
+            <div className="cmdk-empty">No results for "{query}"</div>
+          )}
+          {grouped.map(group => (
+            <div key={group.label} className="cmdk-group">
+              <div className="cmdk-group-label">{group.label}</div>
+              {group.items.map(({ result, idx }) => (
+                <button
+                  key={idx}
+                  data-idx={idx}
+                  className={`cmdk-item ${cursor === idx ? 'active' : ''}`}
+                  onClick={() => selectResult(result)}
+                  onMouseEnter={() => setCursor(idx)}
+                >
+                  <span className="cmdk-item-icon">{resultIcon(result)}</span>
+                  <span className="cmdk-item-body">
+                    <span className="cmdk-item-label">{resultLabel(result)}</span>
+                    {resultSub(result) && <span className="cmdk-item-sub">{resultSub(result)}</span>}
+                  </span>
+                  <ChevronRight size={13} className="cmdk-item-arrow" />
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+
+        <div className="cmdk-footer">
+          <span><kbd className="kbd" style={{ fontSize: '10px' }}>↑↓</kbd> navigate</span>
+          <span><kbd className="kbd" style={{ fontSize: '10px' }}>↵</kbd> open</span>
+          <span><kbd className="kbd" style={{ fontSize: '10px' }}>Esc</kbd> close</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Keyboard shortcuts ───────────────────────────────────────────────────────
+
+const SHORTCUT_MAP: Array<{ key: string; view: View; label: string }> = [
+  { key: 'b', view: 'bots',          label: 'Go to Agents' },
+  { key: 'c', view: 'campaigns',     label: 'Go to Campaigns' },
+  { key: 't', view: 'test',          label: 'Go to Test Call' },
+  { key: 'x', view: 'transcripts',   label: 'Go to Transcripts' },
+  { key: 'a', view: 'analytics',     label: 'Go to Analytics' },
+  { key: 'o', view: 'observability', label: 'Go to Observability' },
+];
+
+function useKeyboardShortcuts(
+  navigate: (v: View) => void,
+  toggleShortcuts: () => void,
+  closeModal: () => void
+) {
+  // Store callbacks in refs so the event listener is registered once and always
+  // calls the latest version — avoids re-registering on every render.
+  const navigateRef = useRef(navigate);
+  const toggleRef = useRef(toggleShortcuts);
+  const closeRef = useRef(closeModal);
+  navigateRef.current = navigate;
+  toggleRef.current = toggleShortcuts;
+  closeRef.current = closeModal;
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      if (target.isContentEditable) return;
+
+      if (e.key === 'Escape') { closeRef.current(); return; }
+      if (e.key === '?') { toggleRef.current(); return; }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const key = e.key.toLowerCase();
+      const match = SHORTCUT_MAP.find(s => s.key === key);
+      if (match) { e.preventDefault(); navigateRef.current(match.view); }
+    }
+
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, []); // registered once, callbacks always current via refs
+}
+
+function ShortcutsModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 420 }} onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <Keyboard size={18} />
+          <h2>Keyboard shortcuts</h2>
+          <button className="modal-close" onClick={onClose}>✕</button>
+        </div>
+        <div style={{ padding: '16px 20px 20px' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <tbody>
+              {SHORTCUT_MAP.map(s => (
+                <tr key={s.key} style={{ borderBottom: '1px solid var(--border)' }}>
+                  <td style={{ padding: '8px 0', width: 80 }}><kbd className="kbd">{s.key.toUpperCase()}</kbd></td>
+                  <td style={{ padding: '8px 0', color: 'var(--text-2)' }}>{s.label}</td>
+                </tr>
+              ))}
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                <td style={{ padding: '8px 0' }}><kbd className="kbd">Esc</kbd></td>
+                <td style={{ padding: '8px 0', color: 'var(--text-2)' }}>Close modal</td>
+              </tr>
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                <td style={{ padding: '8px 0' }}><kbd className="kbd">⌘S</kbd></td>
+                <td style={{ padding: '8px 0', color: 'var(--text-2)' }}>Save draft (in builder)</td>
+              </tr>
+              <tr>
+                <td style={{ padding: '8px 0' }}><kbd className="kbd">?</kbd></td>
+                <td style={{ padding: '8px 0', color: 'var(--text-2)' }}>Toggle this help</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function ConnectionLine({ icon, label, value, done }: {
@@ -3580,6 +5325,7 @@ function titleFor(view: View) {
     campaigns: 'Campaigns',
     test: 'WebRTC Test Call',
     transcripts: 'Transcripts',
+    analytics: 'Analytics',
     observability: 'Observability',
     library: 'Phrase Library',
     settings: 'Settings'
@@ -3593,6 +5339,7 @@ function subtitleFor(view: View) {
     campaigns: 'Connect one bot to one campaign and its lead/callback APIs.',
     test: 'Start a controlled browser call with helpful connection diagnostics.',
     transcripts: 'Inspect raw call transcripts, outcomes, and config snapshots.',
+    analytics: 'Outcome aggregation, quality alerts, and call performance trends.',
     observability: 'Track LiveKit health, Gemini latency, TTFW, and callback failures.',
     library: 'Edit voicemail, hold-music, and DNC trigger phrases without a code deploy.',
     settings: 'Control LiveKit routing and dashboard runtime options.'

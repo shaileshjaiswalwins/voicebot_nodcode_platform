@@ -31,6 +31,11 @@
   --info-bg:        #EFF6FF;
   --info-border:    #BFDBFE;
 
+  --bg-tertiary:    #F1F5F9;
+  --accent:         #2563EB;
+  --text-secondary: #64748B;
+  --error:          #DC2626;
+
   --sidebar-bg:           #0F172A;
   --sidebar-hover:        #1E293B;
   --sidebar-active:       rgba(37,99,235,0.18);
@@ -424,6 +429,24 @@ button.danger-button {
   background: var(--danger-bg);
   border-color: var(--danger-border);
   color: var(--danger);
+}
+
+button.btn-success {
+  background: var(--success-bg);
+  border-color: var(--success-border);
+  color: var(--success);
+}
+button.btn-success:hover:not(:disabled) {
+  background: #dcfce7;
+}
+
+button.btn-warn {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--warning);
+}
+button.btn-warn:hover:not(:disabled) {
+  background: #fef3c7;
 }
 button.danger-button:hover:not(:disabled) {
   background: #FEE2E2;
@@ -916,6 +939,42 @@ td code {
   align-items: center;
   gap: 8px;
   flex-wrap: nowrap;
+}
+
+/* ── Builder mode toggle ── */
+.mode-toggle {
+  display: flex;
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px;
+  gap: 2px;
+}
+.mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+  white-space: nowrap;
+  min-height: unset;
+}
+.mode-btn:hover { color: var(--text); background: var(--surface); }
+.mode-btn.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.mode-btn.active[title*="Advanced"] {
+  color: var(--primary, #2563eb);
 }
 
 .builder-main { display: grid; gap: 16px; }
@@ -1911,3 +1970,534 @@ td code {
   min-height: 32px;
   font-size: 12px;
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   MICROINTERACTIONS
+   Each section is self-contained and can be removed independently.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ─── 1. Button press feedback ───────────────────────────────────────
+   Buttons scale down slightly on click — confirms the press
+   tactilely without any JS. Works on every button in the app.       */
+button:active:not(:disabled) {
+  transform: scale(0.96);
+  transition: transform 0.08s ease;
+}
+
+/* ─── 2. Card / panel lift on hover ─────────────────────────────────
+   Panels gain a stronger shadow on hover — signals interactivity
+   and adds depth. Only applies when the panel is inside a grid
+   so full-width panels don't lift pointlessly.                      */
+.content-grid .panel:hover,
+.content-grid .table-panel:hover {
+  box-shadow: 0 8px 24px rgba(15,23,42,.10), 0 2px 8px rgba(15,23,42,.06);
+  transition: box-shadow 0.2s ease;
+}
+
+/* ─── 3. Table row interaction ───────────────────────────────────────
+   Row slides slightly right and highlights on hover.
+   Selected row gets a left accent border.                           */
+tbody tr {
+  transition: background 0.12s ease, transform 0.12s ease;
+  cursor: pointer;
+}
+tbody tr:hover {
+  background: var(--surface-2);
+  transform: translateX(2px);
+}
+tbody tr.selected-row {
+  background: var(--info-bg);
+  border-left: 3px solid var(--primary);
+}
+tbody tr.selected-row td:first-child {
+  padding-left: calc(12px - 3px); /* compensate for border-left */
+}
+
+/* ─── 4. Nav item — hover fix + press + active indicator + proximity ─
+   .nav-item renders as <button>, so the generic button:hover rule sets
+   background:#F1F5F9 (white) while nav-item:hover sets color:#F8FAFC
+   (white) — making text invisible. Fix: explicitly re-assert the dark
+   sidebar colours so the button:hover rule can't win.               */
+.nav-item {
+  position: relative;
+  transition: background var(--transition), color var(--transition),
+              transform 0.12s ease;
+  /* CSS custom property driven by JS proximity handler */
+  --proximity: 0;
+}
+/* Override the generic button:hover that was causing white-on-white */
+.nav-item:hover:not(:disabled) {
+  background: var(--sidebar-hover) !important;
+  color: var(--sidebar-text-active) !important;
+  border-color: transparent !important;
+}
+.nav-item:active {
+  transform: scale(0.97) translateX(1px);
+}
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 20%; bottom: 20%;
+  width: 3px;
+  background: var(--primary);
+  border-radius: 0 3px 3px 0;
+}
+/* Proximity scale — driven by --proximity (0→1) set via JS.
+   At full proximity: scale 1.07, shift right 4px, slightly brighter. */
+.nav-item {
+  transform: scale(calc(1 + var(--proximity) * 0.07))
+             translateX(calc(var(--proximity) * 4px));
+  filter: brightness(calc(1 + var(--proximity) * 0.15));
+}
+
+/* ─── 5. Status pills — active/live pulse ────────────────────────────
+   Active/running status pills pulse their ring to signal liveness.
+   Static statuses (completed, error) don't animate.                */
+.pill.active,
+.pill.published,
+.pill.running {
+  animation: pill-pulse 2.4s ease-in-out infinite;
+}
+@keyframes pill-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(22,163,74,0); }
+  50%       { box-shadow: 0 0 0 4px rgba(22,163,74,0.18); }
+}
+
+/* ─── 6. View transition — fade + slide up on mount ─────────────────
+   Each view fades in and slides up 6px when it appears.
+   Keeps the app feeling fast — 150ms is below perception threshold. */
+.content-area > * {
+  animation: view-enter 0.15s ease both;
+}
+@keyframes view-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── 7. Metric card countup shimmer ─────────────────────────────────
+   While a metric is counting up (JS adds .counting class),
+   the number shimmers to signal it's live data loading in.         */
+.metric.counting strong {
+  animation: shimmer 0.8s ease infinite alternate;
+}
+@keyframes shimmer {
+  from { opacity: 0.4; }
+  to   { opacity: 1; }
+}
+
+/* ─── 8. Save / success button state ────────────────────────────────
+   When a save action completes, add class .btn-saved to the button.
+   It flashes green then returns to normal.
+   Usage: btn.classList.add('btn-saved'); setTimeout(() => btn.classList.remove('btn-saved'), 1800) */
+button.btn-saved {
+  background: var(--success-bg) !important;
+  border-color: var(--success-border) !important;
+  color: var(--success) !important;
+  animation: saved-flash 1.8s ease forwards;
+}
+@keyframes saved-flash {
+  0%   { transform: scale(1.04); }
+  15%  { transform: scale(1); }
+  85%  { opacity: 1; }
+  100% { opacity: 1; }
+}
+
+/* ─── 9. Input focus ring ────────────────────────────────────────────
+   Inputs expand their shadow slightly on focus — richer than the
+   default outline, and consistent across the app.                  */
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(147,197,253,0.35);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+/* ─── 10. Callout entrance ───────────────────────────────────────────
+   Callout/alert boxes slide in from left when they appear.         */
+.callout {
+  animation: callout-enter 0.2s ease both;
+}
+@keyframes callout-enter {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ─── 11. Respect reduced motion ─────────────────────────────────────
+   All animations are disabled for users who have set
+   "Reduce Motion" in their OS accessibility settings.              */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─── 12. Status pill icons ──────────────────────────────────────────
+   Each pill can contain a small icon before the text.              */
+.pill { display: inline-flex; align-items: center; gap: 4px; }
+.pill-icon { display: flex; align-items: center; flex-shrink: 0; }
+
+/* ─── 13. Skeleton loading rows ──────────────────────────────────────
+   Placeholder rows that animate while real data loads.            */
+@keyframes skeleton-shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+.skeleton-row td { pointer-events: none; }
+.skeleton-cell {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg,
+    var(--surface-2) 25%,
+    var(--border)    50%,
+    var(--surface-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+}
+
+/* ─── 14. Empty state ────────────────────────────────────────────────
+   Shown in table cells when there is no data.                      */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 24px;
+  text-align: center;
+  color: var(--text-3);
+}
+.empty-state-icon {
+  color: var(--text-4);
+  opacity: 0.7;
+}
+.empty-state strong {
+  font-size: 15px;
+  color: var(--text-2);
+  font-weight: 600;
+}
+.empty-state p {
+  font-size: 13px;
+  max-width: 340px;
+  line-height: 1.6;
+}
+.empty-state .primary {
+  margin-top: 4px;
+}
+
+/* ─── 15. Copyable ID ────────────────────────────────────────────────
+   Inline ID spans that reveal a copy icon on hover.               */
+.copyable-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 1px 3px;
+  transition: background 0.12s ease;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  max-width: 160px;
+}
+.copyable-id:hover {
+  background: var(--surface-2);
+}
+.copyable-id-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+.copyable-id-icon {
+  display: flex;
+  align-items: center;
+  color: var(--text-4);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  flex-shrink: 0;
+}
+.copyable-id:hover .copyable-id-icon {
+  opacity: 1;
+}
+
+/* ─── 16. Keyboard shortcut kbd ─────────────────────────────────────
+   <kbd> styling used in the shortcuts modal.                       */
+.kbd {
+  display: inline-block;
+  padding: 2px 7px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  box-shadow: 0 1px 0 var(--border);
+}
+
+/* ─── 17. Unsaved changes indicator ─────────────────────────────────
+   Shows in the builder action bar when config has been edited.    */
+.unsaved-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--warning);
+  font-weight: 500;
+  padding: 3px 8px;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
+}
+.unsaved-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+  animation: pulse 1.5s ease infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+/* ─── 18. Blast radius in delete dialog ──────────────────────────────
+   Shows what will break when a bot is deleted.                    */
+.blast-radius {
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin: 12px 0;
+  font-size: 13px;
+}
+.blast-radius strong {
+  display: block;
+  color: var(--danger);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.blast-radius ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.blast-radius li {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: var(--text-2);
+}
+.blast-radius li svg {
+  color: var(--danger);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* ─── 19. Command Palette (Cmd+K) ────────────────────────────────────
+   Full-screen overlay with a centered search panel.               */
+.cmdk-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15,23,42,0.55);
+  backdrop-filter: blur(4px);
+  z-index: 200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 80px;
+  animation: cmdk-backdrop-in 0.12s ease;
+}
+@keyframes cmdk-backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.cmdk-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 60px rgba(15,23,42,0.25), 0 4px 16px rgba(15,23,42,0.12);
+  width: 100%;
+  max-width: 580px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: cmdk-panel-in 0.14s cubic-bezier(0.16,1,0.3,1);
+}
+@keyframes cmdk-panel-in {
+  from { opacity: 0; transform: scale(0.96) translateY(-8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Search input row */
+.cmdk-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.cmdk-search-icon { color: var(--text-4); flex-shrink: 0; }
+.cmdk-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 15px;
+  color: var(--text);
+  font-family: inherit;
+  caret-color: var(--primary);
+}
+.cmdk-input::placeholder { color: var(--text-4); }
+.cmdk-clear {
+  padding: 2px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-4);
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+  min-height: unset;
+}
+.cmdk-clear:hover { color: var(--text-2); background: var(--surface-2); }
+
+/* Results list */
+.cmdk-results {
+  max-height: 380px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+}
+.cmdk-results:empty { display: none; }
+
+.cmdk-empty {
+  padding: 32px 24px;
+  text-align: center;
+  color: var(--text-4);
+  font-size: 13px;
+}
+
+.cmdk-group { margin-bottom: 4px; }
+.cmdk-group-label {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-4);
+}
+
+.cmdk-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.08s ease;
+  min-height: unset;
+}
+.cmdk-item:hover,
+.cmdk-item.active { background: var(--surface-2); }
+.cmdk-item.active .cmdk-item-arrow { opacity: 1; }
+
+.cmdk-item-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.cmdk-item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cmdk-item-label {
+  font-size: 13.5px;
+  color: var(--text);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmdk-item-sub {
+  font-size: 11.5px;
+  color: var(--text-4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cmdk-item-arrow {
+  color: var(--text-4);
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+/* Highlight matched text */
+.cmdk-mark {
+  background: var(--primary-light);
+  color: var(--primary-text);
+  border-radius: 2px;
+  font-style: normal;
+}
+
+/* Footer hints */
+.cmdk-footer {
+  display: flex;
+  gap: 16px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.cmdk-footer span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-4);
+}
+
+/* Trigger button in page header */
+.cmdk-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 5px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+  min-height: unset;
+}
+.cmdk-trigger:hover {
+  border-color: var(--border-focus);
+  background: var(--surface);
+  color: var(--text-2);
+}
+.cmdk-trigger span { color: var(--text-3); }
