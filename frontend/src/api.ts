@@ -145,6 +145,8 @@ export type Transcript = {
   transcript_count?: number;
   config_snapshot?: Record<string, unknown>;
   lead_record?: Record<string, unknown>;
+  tags?: string[];
+  ended_naturally?: boolean;
   callback_status?: string;
   analysis_result?: Record<string, unknown>;
   recording_url?: string;
@@ -303,6 +305,24 @@ export type OutcomeEntry = {
   updated_at?: string;
 };
 
+export type OutcomeAnalytics = {
+  total: number;
+  by_status: Record<string, number>;
+  by_outcome: Record<string, number>;
+  ended_naturally: number;
+  avg_duration_sec: number;
+};
+
+export type QualityAlert = {
+  hours: number;
+  total_calls: number;
+  bad_calls: number;
+  bad_pct: number;
+  threshold_pct: number;
+  alert: boolean;
+  message: string | null;
+};
+
 export type LanguageSettings = {
   _id?: string;
   id: string;
@@ -332,6 +352,13 @@ export const api = {
     }),
   publish: (botId: string, versionId?: string) =>
     request<BotVersion>(`/api/bots/${botId}/publish`, {
+      method: 'POST',
+      body: JSON.stringify({ version_id: versionId })
+    }),
+  unpublish: (botId: string) =>
+    request<BotVersion>(`/api/bots/${botId}/unpublish`, { method: 'POST' }),
+  rollbackVersion: (botId: string, versionId: string) =>
+    request<{ bot: Bot; active_version: BotVersion }>(`/api/bots/${botId}/rollback`, {
       method: 'POST',
       body: JSON.stringify({ version_id: versionId })
     }),
@@ -380,6 +407,53 @@ export const api = {
   getCampaign: (campaignKey: string) => request<Campaign>(`/api/campaigns/${encodeURIComponent(campaignKey)}`),
   upsertCampaign: (payload: Partial<Campaign> & { dialing_strategy?: DialingStrategy }) =>
     request<Campaign>('/api/campaigns', { method: 'POST', body: JSON.stringify(payload) }),
+  setCampaignStatus: (campaignKey: string, status: string) =>
+    request<Campaign>(`/api/campaigns/${encodeURIComponent(campaignKey)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status })
+    }),
+  outcomeAnalytics: (params?: { bot_id?: string; campaign_id?: string; hours?: number; start_date?: string; end_date?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.bot_id) qs.set('bot_id', params.bot_id);
+    if (params?.campaign_id) qs.set('campaign_id', params.campaign_id);
+    if (params?.hours != null) qs.set('hours', String(params.hours));
+    if (params?.start_date) qs.set('start_date', params.start_date);
+    if (params?.end_date) qs.set('end_date', params.end_date);
+    return request<OutcomeAnalytics>(`/api/analytics/outcomes${qs.toString() ? '?' + qs.toString() : ''}`);
+  },
+  qualityAlerts: (hours = 1, threshold = 30) =>
+    request<QualityAlert>(`/api/analytics/quality-alerts?hours=${hours}&threshold_pct=${threshold}`),
+  transcriptsFiltered: (params: {
+    bot_id?: string; campaign_id?: string; status?: string; outcome?: string;
+    start_date?: string; end_date?: string; text?: string; limit?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params.bot_id) qs.set('bot_id', params.bot_id);
+    if (params.campaign_id) qs.set('campaign_id', params.campaign_id);
+    if (params.status) qs.set('status', params.status);
+    if (params.outcome) qs.set('outcome', params.outcome);
+    if (params.start_date) qs.set('start_date', params.start_date);
+    if (params.end_date) qs.set('end_date', params.end_date);
+    if (params.text) qs.set('text', params.text);
+    if (params.limit) qs.set('limit', String(params.limit));
+    return request<Transcript[]>(`/api/transcripts?${qs.toString()}`);
+  },
+  exportCsvUrl: (params: {
+    bot_id?: string; bot_version_id?: string; campaign_id?: string;
+    status?: string; outcome?: string; start_date?: string; end_date?: string; text?: string;
+  }) => {
+    const base = (import.meta.env.VITE_API_BASE || '');
+    const qs = new URLSearchParams();
+    if (params.bot_id) qs.set('bot_id', params.bot_id);
+    if (params.bot_version_id) qs.set('bot_version_id', params.bot_version_id);
+    if (params.campaign_id) qs.set('campaign_id', params.campaign_id);
+    if (params.status) qs.set('status', params.status);
+    if (params.outcome) qs.set('outcome', params.outcome);
+    if (params.start_date) qs.set('start_date', params.start_date);
+    if (params.end_date) qs.set('end_date', params.end_date);
+    if (params.text) qs.set('text', params.text);
+    return `${base}/api/transcripts/export.csv?${qs.toString()}`;
+  },
   voices: () => request<VoiceOption[]>('/api/options/voices'),
   languages: () => request<LanguageOption[]>('/api/options/languages'),
   phrases: (category?: PhraseCategory) =>
