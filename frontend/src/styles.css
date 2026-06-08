@@ -2501,3 +2501,20 @@ textarea:focus {
   color: var(--text-2);
 }
 .cmdk-trigger span { color: var(--text-3); }
+
+/* ─── 20. Draft recovery banner ──────────────────────────────────────
+   Shown at the top of BuilderView when a localStorage draft exists.  */
+.draft-recovery-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--info-bg);
+  border-bottom: 1px solid var(--info-border);
+  font-size: 13px;
+  color: var(--primary-text);
+  flex-wrap: wrap;
+}
+.draft-recovery-banner svg { flex-shrink: 0; color: var(--primary); }
+.draft-recovery-banner span { flex: 1; min-width: 160px; }
+.draft-recovery-banner button { min-height: unset; padding: 4px 10px; font-size: 12px; }

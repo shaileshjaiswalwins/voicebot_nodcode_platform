@@ -2133,14 +2133,48 @@ function BuilderView({
   const isDirtyConfig = configText !== baseConfigText;
   const isDirty = isDirtyConfig || nameChanged;
 
+  // ── localStorage draft recovery ────────────────────────────────────
+  const lsKey = selectedBot?._id ? `draft-autosave-${selectedBot._id}` : null;
+
+  // Detect a saved draft when the bot or version changes
+  const [recoveryDraft, setRecoveryDraft] = useState<string | null>(null);
+  useEffect(() => {
+    if (!lsKey) return;
+    const saved = localStorage.getItem(lsKey);
+    // Only offer recovery if the saved draft differs from what's already loaded
+    if (saved && saved !== configText) {
+      setRecoveryDraft(saved);
+    } else {
+      setRecoveryDraft(null);
+    }
+  }, [lsKey, editingVersionId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function applyRecoveryDraft() {
+    if (!recoveryDraft) return;
+    onConfigTextChange(recoveryDraft);
+    setRecoveryDraft(null);
+  }
+
+  function discardRecoveryDraft() {
+    if (lsKey) localStorage.removeItem(lsKey);
+    setRecoveryDraft(null);
+  }
+
   // Auto-save to localStorage (debounced 2s)
   useEffect(() => {
-    if (!selectedBot?._id || !isDirtyConfig) return;
+    if (!lsKey || !isDirtyConfig) return;
     const id = window.setTimeout(() => {
-      localStorage.setItem(`draft-autosave-${selectedBot._id}`, configText);
+      localStorage.setItem(lsKey, configText);
     }, 2000);
     return () => clearTimeout(id);
-  }, [configText, selectedBot?._id, isDirtyConfig]);
+  }, [configText, lsKey, isDirtyConfig]);
+
+  // Clear localStorage after a successful save
+  useEffect(() => {
+    if (prevSaveState.current === 'running' && saveState === 'idle' && lsKey) {
+      localStorage.removeItem(lsKey);
+    }
+  }, [saveState, lsKey]);
 
   // Warn before tab close when there are unsaved changes
   useEffect(() => {
@@ -2167,6 +2201,15 @@ function BuilderView({
 
   return (
     <section className="builder-layout">
+      {/* ── Draft recovery banner ─────────────────────────────── */}
+      {recoveryDraft && (
+        <div className="draft-recovery-banner">
+          <RefreshCw size={14} />
+          <span>You have an unsaved draft from a previous session.</span>
+          <button className="primary" onClick={applyRecoveryDraft}>Restore draft</button>
+          <button onClick={discardRecoveryDraft}>Discard</button>
+        </div>
+      )}
       {/* ── Back nav + action bar ─────────────────────────────── */}
       <div className="builder-action-bar">
         {onBack && (
