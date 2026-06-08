@@ -1515,7 +1515,7 @@ EXTRACTION RULES (all mandatory):
    quantity_unit list. If buyer could not give a number → set answ to "Not Sure".
    Apply this format ONLY to quantity questions — never to grade/spec answers.
 
-Each qna entry: {{"id": <qid>, "quest": <question text>, "answ": <normalized English answer>, "opt_id": <matching option id or null>}}
+Each qna entry: {{"id": <qid>, "quest": <2–4 word English keyword label for the question — NOT the full text (e.g. "Material Type", "Brand Preference", "Usage Type", "Capacity")>, "answ": <normalized English answer>, "opt_id": <matching option id or null>}}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 2B — EXTRACT BUSINESS DETAILS

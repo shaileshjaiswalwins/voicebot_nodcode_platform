@@ -178,7 +178,7 @@ def build_callback_payload(doc: dict, analysis: dict, b2b_score: dict | None = N
                     answ = f"{answ} {unit}".strip()
         entry = {
             "Qid": qid or "",
-            "Quest": qa.get("quest", "") or q.get("text", ""),
+            "Quest": "Required Quantity" if q.get("type") == "quantity" else (qa.get("quest", "") or q.get("text", "")),
             "Answ": answ,
             "OptId": qa.get("opt_id"),
         }
