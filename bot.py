@@ -912,7 +912,8 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     else:
         script_rule = f"Every word MUST be in {language_name} script ONLY."
 
-    lang_notes = HINDI_LANG_CONFIG.get("lang_notes", "")
+    _bsp_lang_cfg = get_language_settings(lang_key or "hindi") or HINDI_LANG_CONFIG
+    lang_notes = _bsp_lang_cfg.get("lang_notes", "")
     lang_notes_block = f"\n\nLANGUAGE NOTES\n\n{lang_notes}\n" if lang_notes else ""
 
     base = (
@@ -956,9 +957,10 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     questions = schema.get("question", [])
     is_business = buyer.get("is_business", "")
 
-    _raw_opening = (
-        _bc.get("initial_message")
-        or "हेलो, मैं Simran बोल रही हूँ Justdial से — आपको {product} की requirement है ना?"
+    _agent_name = _bc.get("agent_name", "Simran")
+    mandatory_opening = (
+        f"हेलो, मैं {_agent_name} बोल रही हूँ Justdial से — "
+        f"आपको {product_name} की requirement है ना?"
     )
     mandatory_opening = _raw_opening.replace("{product}", product_name)
 
@@ -1147,8 +1149,9 @@ _SUCCESS_CLOSE_MARKERS = (
 )
 
 
-def _is_closing_phrase(text: str, markers: tuple | list = _CLOSE_MARKERS) -> bool:
+def _is_closing_phrase(text: str, extra_markers: tuple = ()) -> bool:
     normalized = _dedup_words(text or "").lower()
+    markers = _CLOSE_MARKERS + extra_markers if extra_markers else _CLOSE_MARKERS
     return any(marker.lower() in normalized for marker in markers)
 
 
@@ -1314,11 +1317,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         str(_bot_config.get("inactivity_end_text") or "").strip()
         or INACTIVITY_END_PHRASE
     )
-    _cfg_close_markers  = _bot_config.get("close_markers")
-    _effective_close_markers = (
-        list(_cfg_close_markers) if _cfg_close_markers
-        else list(_CLOSE_MARKERS)
-    )
     try:
         loop = asyncio.get_running_loop()
         _lang_cfg = await loop.run_in_executor(None, get_language_settings, _language)
@@ -1327,6 +1325,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _lang_cfg = None
     _lang_cfg = _lang_cfg or HINDI_LANG_CONFIG
     _config_snapshot["language_settings"] = deepcopy(_lang_cfg)
+    _inactivity_phrase     = _lang_cfg.get("inactivity_nudge") or INACTIVITY_PHRASE
+    _extra_close_markers   = tuple(m.lower() for m in (_bot_config.get("close_markers") or []))
 
     # 3. Per-call state
     call_state = {
@@ -1684,7 +1684,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _nudge_count = 0
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
                 return
-            nudge = INACTIVITY_PHRASE
+            nudge = _inactivity_phrase
             _log.info(f"[INACTIVITY] {sleep_secs:.0f}s nudge — saying: {nudge!r}")
             _nudge_in_progress = True
             await _speak_via_gemini(nudge, reason="inactivity-nudge")
@@ -1777,7 +1777,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _pending_assistant_text = buf
                 if not _early_close_muting and not _closing_triggered:
                     buf_lower = buf.lower()
-                    _stream_close_check = list(_effective_close_markers) + [
+                    _stream_close_check = list(_CLOSE_MARKERS) + list(_extra_close_markers) + [
                         "details मिल गईं",
                         "sellers आपसे contact",
                         "sellers will contact",
@@ -2370,7 +2370,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _early_close_muting = True
                 _set_mic(False, reason="commit-closing-phrase")
                 _log.info("[CLOSE DETECT] Partial closing phrase detected in commit — mic muted")
-        if _is_closing_phrase(_closing_buffer, _effective_close_markers):
+        if _is_closing_phrase(_closing_buffer, _extra_close_markers):
             _closing_triggered = True
             call_state["ended_naturally"] = True
             if _is_not_interested_close(_closing_buffer):
