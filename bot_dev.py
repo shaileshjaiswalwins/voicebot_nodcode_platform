@@ -1107,13 +1107,22 @@ TONE RULES for this section:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
+    _company_context_line = f"Company: {company_name}\n" if company_name else ""
+    _company_handling_block = (
+        f"\n━━━ COMPANY NAME HANDLING ━━━\n"
+        f"The buyer is listed under '{company_name}'. Your opening mentions this name to establish context.\n"
+        f"If the caller says the company name is wrong, or they don't recognise it:\n"
+        f"  → Acknowledge briefly: \"अच्छा जी, कोई बात नहीं.\" and continue with the product question immediately.\n"
+        f"Do NOT treat this as a gate — it is context only. Never repeat or re-ask the company name.\n"
+    ) if company_name else ""
+
     lead_section = f"""
 ━━━ CALL CONTEXT ━━━
 
 Customer: {name}
-Product search: {keyword}
+{_company_context_line}Product search: {keyword}
 Product: {product_name}
-
+{_company_handling_block}
 ━━━ MANDATORY OPENING ━━━
 Your VERY FIRST utterance MUST be EXACTLY this line, word-for-word, no additions, no preamble, no translation:
 
