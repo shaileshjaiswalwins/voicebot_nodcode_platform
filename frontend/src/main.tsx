@@ -2575,6 +2575,7 @@ function CampaignsView({
   onSetStatus?: (campaignKey: string, status: string) => void;
 }) {
   const selectedCampaign = campaigns.find((c) => c.campaign_key === selectedCampaignKey) || campaigns[0];
+  const botById = useMemo(() => new Map(bots.map((b) => [b._id, b])), [bots]);
 
   if (workspaceMode === 'strategy' && selectedCampaign) {
     return (
@@ -2628,7 +2629,7 @@ function CampaignsView({
                       {bots.map(b => <option key={b._id} value={b._id}>{b.name}</option>)}
                     </select>
                   ) : (
-                    bots.find((bot) => bot._id === campaign.bot_id)?.name || '-'
+                    botById.get(campaign.bot_id ?? '')?.name || '-'
                   )}
                 </td>
                 <td><StatusPill value={campaign.status || 'draft'} /></td>
@@ -4370,10 +4371,16 @@ function DialingStrategyBuilder({
     setDirty(false);
   }
 
-  const retryCount = strategy.outcome_rules.filter((r) => r.action === 'retry').length;
-  const stopCount = strategy.outcome_rules.filter((r) => r.action === 'stop').length;
-  const dncCount = strategy.outcome_rules.filter((r) => r.action === 'dnc').length;
-  const completedCount = strategy.outcome_rules.filter((r) => r.action === 'completed').length;
+  const ruleCounts = useMemo(
+    () => strategy.outcome_rules.reduce<Record<string, number>>(
+      (acc, r) => { acc[r.action] = (acc[r.action] ?? 0) + 1; return acc; }, {}
+    ),
+    [strategy.outcome_rules]
+  );
+  const retryCount = ruleCounts.retry ?? 0;
+  const stopCount = ruleCounts.stop ?? 0;
+  const dncCount = ruleCounts.dnc ?? 0;
+  const completedCount = ruleCounts.completed ?? 0;
 
   return (
     <section className="strategy-builder">

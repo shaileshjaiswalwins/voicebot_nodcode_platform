@@ -225,6 +225,8 @@ async def generate_call_analysis(
             "call_summary": "Gemini realtime WebSocket failed to connect — bot was silent, no greeting was spoken.",
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
     if not transcript:
         return fallback_analysis(base_status)
@@ -239,6 +241,8 @@ async def generate_call_analysis(
             "call_summary": "Call was answered by an automated IVR system, not a live person.",
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     # Deterministic abusive-language check — scan every user turn before hitting the LLM.
@@ -263,6 +267,8 @@ async def generate_call_analysis(
                 "call_summary": "Caller used explicit profanity or abusive language during the call.",
                 "is_business": "", "business_city": "", "business_name": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+            "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
             }
 
     user_roles = {"user", "buyer", "recording"}
@@ -338,6 +344,8 @@ async def generate_call_analysis(
                 "call_summary": _summary,
                 "is_business": "", "business_city": "", "business_name": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": ["zero_user_signal"], "needs_review": False,
             }
         # Muted transcript has content — check if it's only greetings/acknowledgements.
         # A bare "hello" / "haan bolo" / "haan" during the bot's opening turn is not
@@ -369,6 +377,8 @@ async def generate_call_analysis(
                 "call_summary": _summary,
                 "is_business": "", "business_city": "", "business_name": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+            "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
             }
         # Muted transcript has substantive content but no live user turns — STT failed on live mic
         # but user did speak during muted window. Fall through to LLM with context.
@@ -425,6 +435,8 @@ async def generate_call_analysis(
             "call_summary": "Customer explicitly requested not to be called again.",
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
     if any(sig in _full_text for sig in _HARD_IVR_SIGNALS):
         return {
@@ -433,6 +445,8 @@ async def generate_call_analysis(
             "call_summary": "Call was answered by an automated IVR system, not a live person.",
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     _VOICEMAIL_SIGNALS_PRE = get_phrase_texts("voicemail") or [
@@ -476,6 +490,8 @@ async def generate_call_analysis(
                 "call_summary": "Call was answered by voicemail or automated IVR system.",
                 "is_business": "", "business_city": "", "business_name": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+            "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
             }
         if any(sig in text_lower for sig in _HOLD_MUSIC_SIGNALS_PRE):
             return {
@@ -484,6 +500,8 @@ async def generate_call_analysis(
                 "call_summary": "Caller placed the bot on hold; no product confirmation was obtained.",
                 "is_business": "", "business_city": "", "business_name": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+            "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
             }
 
     # Pre-LLM: detect agent's not-interested closing phrase.
@@ -577,6 +595,8 @@ async def generate_call_analysis(
             "call_summary": "Agent responded with not-interested closing — buyer did not confirm the product requirement.",
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     # Pre-LLM: detect job-seeking caller intent.
@@ -725,6 +745,8 @@ async def generate_call_analysis(
             "call_summary": "Caller is seeking employment/job opportunities — this is not a product inquiry.",
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     # Buyer explicitly identifies this call as automated/computer/robot and dismisses it.
@@ -754,6 +776,8 @@ async def generate_call_analysis(
             ),
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     # Pre-LLM: detect caller who dialled to contact a company/seller directly
@@ -794,6 +818,8 @@ async def generate_call_analysis(
             ),
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     # Transfer-to-someone-else: receptionist/assistant answered and offered to connect
@@ -824,6 +850,8 @@ async def generate_call_analysis(
             "call_summary": "Call answered by a gatekeeper who offered to transfer — decision maker not reached.",
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     # All user turns contain only bare call-presence signals (hello, haan bolo, achha, etc.)
@@ -865,6 +893,8 @@ async def generate_call_analysis(
             "call_summary": _summary_bare,
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     # Pre-LLM: agent stuck on opening question — never progressed to spec questions.
@@ -898,6 +928,8 @@ async def generate_call_analysis(
             ),
             "is_business": "", "business_city": "", "business_name": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
+                "analysis_transcript_source": transcript_source,
+                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     # --- End pre-LLM guards ---

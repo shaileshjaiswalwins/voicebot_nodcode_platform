@@ -1282,14 +1282,6 @@ def _is_not_interested_close(closing_buf: str) -> bool:
     return any(m.lower() in n for m in _NOT_INTERESTED_MARKERS)
 
 
-def _is_not_interested_close(closing_buf: str) -> bool:
-    """True when the closing phrase is a not-interested / seller-detected close.
-    A success close containing 'सारी details मिल गईं' overrides not-interested markers."""
-    n = unicodedata.normalize("NFC", closing_buf).lower()
-    if any(m.lower() in n for m in _SUCCESS_CLOSE_MARKERS):
-        return False
-    return any(m.lower() in n for m in _NOT_INTERESTED_MARKERS)
-
 
 # Hindi/Hinglish profanity patterns for code-level abuse detection.
 # Checked against user transcripts before sending to Gemini so abusive
@@ -2800,7 +2792,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if _is_closing_phrase(_closing_buffer):
                 _closing_triggered = True
                 call_state["ended_naturally"] = True
-                if _is_not_interested_close(text):
+                if _is_not_interested_close(_closing_buffer):
                     _close_status = "not_interested"
                     _log.info("[CLOSE DETECT] Not-interested close detected — status=not_interested")
                 else:

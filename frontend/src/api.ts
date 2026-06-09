@@ -1,4 +1,9 @@
 const API_BASE = import.meta.env.VITE_API_BASE || '';
+
+function withQS(path: string, qs: URLSearchParams): string {
+  const q = qs.toString();
+  return q ? `${path}?${q}` : path;
+}
 const TEST_RECORDING_API_BASE = import.meta.env.VITE_TEST_RECORDING_API_BASE
   || (import.meta.env.DEV ? `${window.location.protocol}//${window.location.hostname}:8000` : API_BASE);
 const READ_TIMEOUT_MS = 8000;
@@ -419,7 +424,7 @@ export const api = {
     if (params?.hours != null) qs.set('hours', String(params.hours));
     if (params?.start_date) qs.set('start_date', params.start_date);
     if (params?.end_date) qs.set('end_date', params.end_date);
-    return request<OutcomeAnalytics>(`/api/analytics/outcomes${qs.toString() ? '?' + qs.toString() : ''}`);
+    return request<OutcomeAnalytics>(withQS('/api/analytics/outcomes', qs));
   },
   qualityAlerts: (hours = 1, threshold = 30) =>
     request<QualityAlert>(`/api/analytics/quality-alerts?hours=${hours}&threshold_pct=${threshold}`),
@@ -436,7 +441,7 @@ export const api = {
     if (params.end_date) qs.set('end_date', params.end_date);
     if (params.text) qs.set('text', params.text);
     if (params.limit) qs.set('limit', String(params.limit));
-    return request<Transcript[]>(`/api/transcripts?${qs.toString()}`);
+    return request<Transcript[]>(withQS('/api/transcripts', qs));
   },
   exportCsvUrl: (params: {
     bot_id?: string; bot_version_id?: string; campaign_id?: string;
@@ -452,7 +457,7 @@ export const api = {
     if (params.start_date) qs.set('start_date', params.start_date);
     if (params.end_date) qs.set('end_date', params.end_date);
     if (params.text) qs.set('text', params.text);
-    return `${base}/api/transcripts/export.csv?${qs.toString()}`;
+    return withQS(`${base}/api/transcripts/export.csv`, qs);
   },
   voices: () => request<VoiceOption[]>('/api/options/voices'),
   languages: () => request<LanguageOption[]>('/api/options/languages'),
