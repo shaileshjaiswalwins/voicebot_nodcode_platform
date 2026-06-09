@@ -416,6 +416,54 @@ async def generate_call_analysis(
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
 
+    # Pre-LLM: detect wrong-number signal from user turns.
+    # When the caller explicitly says the number was mis-submitted (किसी ने गलत नंबर डाला,
+    # wrong number, etc.) this is a hard Tier-1 signal — short-circuit before NI or any LLM.
+    _WRONG_NUMBER_USER_PATTERNS = [
+        "गलत नंबर", "galat number", "galat no",
+        "wrong number", "rong number", "rang number",
+        "किसी ने गलत", "kisi ne galat",
+        "यह नंबर गलत", "yeh number galat", "number galat hai",
+        "मेरा नंबर नहीं", "mera number nahi",
+        "यह मेरा नंबर नहीं", "yeh mera number nahi",
+        "इस नंबर पर मत", "is number par mat",
+        "गलत आदमी", "galat aadmi", "wrong person",
+    ]
+    _user_text_wn = unicodedata.normalize("NFC", " ".join(
+        (t.get("text") or "").lower() for t in non_empty_user_turns
+    ))
+    if any(unicodedata.normalize("NFC", p.lower()) in _user_text_wn for p in _WRONG_NUMBER_USER_PATTERNS):
+        return {
+            "call_outcome": "Wrong Number",
+            "call_outcome_description": DISPOSITION_MAP["Wrong Number"],
+            "call_summary": "Caller confirmed the number does not belong to the intended contact — someone submitted the wrong number.",
+            "is_business": "", "business_city": "", "business_name": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
+
+    # Pre-LLM: detect DNC (Do Not Call) request from user turns.
+    # When the buyer explicitly asks not to be contacted again this is a hard Tier-1 signal.
+    _DNC_USER_PATTERNS = [
+        "कॉल मत करना", "call mat karna", "call mat karo",
+        "फोन मत करना", "phone mat karna", "phone mat karo",
+        "दोबारा मत कॉल", "dobara mat call", "dobara call mat",
+        "फिर कभी मत कॉल", "phir kabhi mat call",
+        "कभी कॉल मत करना", "kabhi call mat karna",
+        "कभी फोन मत करना", "kabhi phone mat karna",
+        "number हटा दो", "number hata do", "numer hata do",
+        "remove my number", "number remove karo",
+        "मुझे कॉल मत करो", "mujhe call mat karo",
+        "do not call", "don't call again",
+    ]
+    if any(unicodedata.normalize("NFC", p.lower()) in _user_text_wn for p in _DNC_USER_PATTERNS):
+        return {
+            "call_outcome": "DNC Client : Don't Call Further",
+            "call_outcome_description": DISPOSITION_MAP["DNC Client : Don't Call Further"],
+            "call_summary": "Buyer explicitly requested not to be called again.",
+            "is_business": "", "business_city": "", "business_name": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
+
     # Pre-LLM: detect agent's not-interested closing phrase.
     # The bot emits "कोई बात नहीं जी, future में ज़रूरत हो तो Justdial पे call कर सकते हैं"
     # most commonly when the buyer rejected the product, but also (incorrectly) when the
@@ -494,12 +542,37 @@ async def generate_call_analysis(
         _schema_q_count > 0
         and len(_agent_turns_with_text) > _schema_q_count + 1
     )
+    # Bypass when ANY user turn contains an explicit positive-want signal. The bot can misfire
+    # the NI closing when it misreads an initial "नहीं" as rejection while the buyer was
+    # actually correcting the product name or confirming strong intent ("वही चाहिए किसी भी कीमत").
+    _NI_POSITIVE_WANT_PATTERNS = [
+        "चाहिए था", "chahiye tha",
+        "चाहिए थी", "chahiye thi",
+        "वही चाहिए", "wahi chahiye",
+        "किसी भी कीमत", "kisi bhi keemat", "kisi bhi price",
+        "मुझे चाहिए", "mujhe chahiye",
+        "हमें चाहिए", "humein chahiye",
+        "मेरे को चाहिए", "mere ko chahiye",
+        "हमारे को चाहिए", "hamare ko chahiye",
+        "मुझे लेना है", "mujhe lena hai",
+        "हमें लेना है", "humein lena hai",
+        "खरीदना है", "kharidna hai",
+        "order करना है", "order karna hai",
+    ]
+    _ni_user_wants_product_bypass = any(
+        any(
+            unicodedata.normalize("NFC", p.lower()) in unicodedata.normalize("NFC", (t.get("text") or "").lower())
+            for p in _NI_POSITIVE_WANT_PATTERNS
+        )
+        for t in non_empty_user_turns
+    )
     if (
         not _approved_closing_present
         and any(m.lower() in _last_agent_text for m in _NI_AGENT_MARKERS)
         and not _ni_seller_bypass
         and not _ni_already_spoken_bypass
         and not _ni_enrichment_complete_bypass
+        and not _ni_user_wants_product_bypass
     ):
         return {
             "call_outcome": "Not Interested",
