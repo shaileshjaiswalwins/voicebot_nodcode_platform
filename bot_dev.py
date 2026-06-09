@@ -168,12 +168,11 @@ for _i in range(1, 20):
 if not _GEMINI_LIVE_KEYS:
     raise RuntimeError("No GEMINI_LIVE_API_DEV_KEY found in environment")
 
-_KEY_INDEX_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".gemini_key_index")
-
 # Per-key concurrency tracking (in-process; shared across all concurrent entrypoint coroutines).
 _KEY_COOLDOWN_UNTIL: dict[str, float] = {}   # key -> epoch when it becomes usable again
 _KEY_COOLDOWN_SECS = 60.0
 _KEY_INFLIGHT: dict[str, int] = {}           # key -> number of active sessions using it
+_KEY_RR_INDEX: int = 0                       # round-robin tiebreaker for equal-inflight keys
 
 
 def _mark_key_409(key: str) -> None:
@@ -191,19 +190,30 @@ def _decr_key_inflight(key: str) -> None:
 
 
 def _next_gemini_key() -> str:
-    """Pick the least-loaded available key; skip keys that are in 409-cooldown."""
+    """Pick the least-loaded available key; skip keys that are in 409-cooldown.
+
+    When multiple keys share the minimum inflight count (common in sequential
+    calls where inflight resets to 0), round-robin among them so load spreads
+    evenly instead of always landing on the first key in the list.
+    """
+    global _KEY_RR_INDEX
     if len(_GEMINI_LIVE_KEYS) == 1:
         return _GEMINI_LIVE_KEYS[0]
     now = time.time()
-    available = [k for k in _GEMINI_LIVE_KEYS if _KEY_COOLDOWN_UNTIL.get(k, 0) <= now]
+    n = len(_GEMINI_LIVE_KEYS)
+    # Rotate the key list by _KEY_RR_INDEX so Python's stable min() picks a
+    # different "first" key on each call when inflight counts are tied.
+    rotated = [_GEMINI_LIVE_KEYS[(_KEY_RR_INDEX + i) % n] for i in range(n)]
+    available = [k for k in rotated if _KEY_COOLDOWN_UNTIL.get(k, 0) <= now]
     if not available:
         # All keys cooled — pick soonest-to-recover rather than crashing the call
-        available = sorted(_GEMINI_LIVE_KEYS, key=lambda k: _KEY_COOLDOWN_UNTIL.get(k, 0))
+        available = sorted(rotated, key=lambda k: _KEY_COOLDOWN_UNTIL.get(k, 0))
         _log.warning(
             f"[GEMINI] All {len(_GEMINI_LIVE_KEYS)} keys in cooldown — "
             f"using soonest-ready ...{available[0][-6:]}"
         )
     chosen = min(available, key=lambda k: _KEY_INFLIGHT.get(k, 0))
+    _KEY_RR_INDEX = (_KEY_RR_INDEX + 1) % n
     return chosen
 
 # ---------------------------------------------------------------------------
