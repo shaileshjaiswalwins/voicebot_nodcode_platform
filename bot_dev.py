@@ -1024,11 +1024,19 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     product_name = keyword or product.get("product_name", "")
     questions = schema.get("question", [])
     is_business = buyer.get("is_business", "")
+    company_name = record.get("company_name", "").strip()
 
-    mandatory_opening = (
-        f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
-        f"आपको {product_name} की requirement है ना?"
-    )
+    if company_name:
+        mandatory_opening = (
+            f"हेलो, {company_name}? "
+            f"जी, मैं Simran बोल रही हूँ Justdial से — "
+            f"आपको {product_name} की requirement है ना?"
+        )
+    else:
+        mandatory_opening = (
+            f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
+            f"आपको {product_name} की requirement है ना?"
+        )
 
     questions_block = build_questions_text(schema, is_business=is_business if is_business == "" else None)
     mapping_block = "\n" + _build_question_phrase_rules(questions) + "\n"
