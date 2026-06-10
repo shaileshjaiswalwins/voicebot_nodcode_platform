@@ -3,6 +3,7 @@
 import asyncio
 import json
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urlencode
 
 import aiohttp
 from loguru import logger
@@ -30,17 +31,24 @@ async def send_callback(
     callback_api_url: str = CALLBACK_API_URL,
 ) -> bool:
     """Send callback with up to 3 attempts (2s, 4s backoff). Returns True on success."""
+    _qs = urlencode({
+        "lead_id": payload.get("lead_id", ""),
+        "call_id": payload.get("call_id", ""),
+        "callsrc": "inh-suny-bot",
+        "call_outcome": payload.get("call_outcome", ""),
+    })
+    _url = f"{callback_api_url}?{_qs}"
     delays = [0, 2, 4]
     for attempt, delay in enumerate(delays, 1):
         if delay:
             await asyncio.sleep(delay)
         try:
             logger.info(
-                f"[CALLBACK] Sending to {callback_api_url} (attempt {attempt}/3) | "
+                f"[CALLBACK] Sending to {_url} (attempt {attempt}/3) | "
                 f"payload={json.dumps(payload, ensure_ascii=False)}"
             )
             async with http_session.post(
-                callback_api_url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+                _url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
             ) as resp:
                 body = await resp.text()
                 if resp.status not in (200, 201):
@@ -75,17 +83,24 @@ async def send_callback_update(
         "ai_partner": "inh-suny-bot",
         **updates,
     }
+    _qs = urlencode({
+        "lead_id": str(lead_id),
+        "call_id": call_id,
+        "callsrc": "inh-suny-bot",
+        "call_outcome": updates.get("call_outcome", ""),
+    })
+    _url = f"{callback_update_api_url}?{_qs}"
     delays = [0, 2, 4]
     for attempt, delay in enumerate(delays, 1):
         if delay:
             await asyncio.sleep(delay)
         try:
             logger.info(
-                f"[CALLBACK-UPDATE] Sending to {callback_update_api_url} (attempt {attempt}/3) | "
+                f"[CALLBACK-UPDATE] Sending to {_url} (attempt {attempt}/3) | "
                 f"payload={json.dumps(payload, ensure_ascii=False)}"
             )
             async with http_session.post(
-                callback_update_api_url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+                _url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
             ) as resp:
                 body = await resp.text()
                 if resp.status not in (200, 201):
