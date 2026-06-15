@@ -101,6 +101,10 @@ from bot import (
 
 load_dotenv(override=True)
 
+# Dev API (mirrors bot_dev.py) — overrides the live URLs imported from bot.py
+MIS_API_BASE = "http://192.168.14.101:3006"
+CATEGORY_CHANGE_API = f"{MIS_API_BASE}/leads/ai-lead-qualify/search"
+
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
 
