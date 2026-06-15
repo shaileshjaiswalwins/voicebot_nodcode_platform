@@ -46,17 +46,13 @@ from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentSession,
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    DEFAULT_API_CONNECT_OPTIONS,
     JobContext,
     RunContext,
     WorkerOptions,
     cli,
     function_tool,
 )
-from livekit.agents import tts as _lk_tts
+from livekit.agents.tts import TTSCapabilities
 from livekit.agents.voice.room_io import RoomOptions as _RoomOptionsCls
 from livekit.api import DeleteRoomRequest, LiveKitAPI
 
@@ -186,112 +182,30 @@ logger.add(
 
 
 # ---------------------------------------------------------------------------
-# HTTP-batch TTS: replaces Sarvam WebSocket streaming with a single HTTP POST.
-# Eliminates per-chunk streaming jitter at the cost of slightly higher TTFB.
+# HTTP-batch TTS — same path as session.say().
+# Declaring streaming=False makes Agent.default.tts_node wrap with StreamAdapter
+# which calls tts.synthesize() (HTTP POST) per sentence, identical to session.say().
 # ---------------------------------------------------------------------------
-import base64 as _b64
-from dataclasses import replace as _dc_replace
-
-try:
-    from livekit.plugins.sarvam.tts import (
-        _codec_to_mime_type as _sarvam_codec_mime,
-        _TELEPHONY_CODECS as _SARVAM_TELEPHONY,
-        _decode_telephony as _sarvam_decode_telephony,
-    )
-    _SARVAM_BATCH_OK = True
-except ImportError:
-    _SARVAM_BATCH_OK = False
-    logger.warning("[TTS] Cannot import sarvam.tts internals — falling back to WebSocket mode")
-
-
-class _HttpBatchSynthesizeStream(_lk_tts.SynthesizeStream):
-    """Buffers all LLM tokens then sends one HTTP POST to Sarvam TTS."""
-
-    async def _run(self, output_emitter: _lk_tts.AudioEmitter) -> None:
-        parts: list[str] = []
-        async for item in self._input_ch:
-            if isinstance(item, str):
-                parts.append(item)
-            # ignore _FlushSentinel (sentence boundaries) — we send everything at once
-
-        full_text = "".join(parts).strip()
-        if not full_text:
-            return
-
-        opts = _dc_replace(self._tts._opts)
-        payload: dict = {
-            "target_language_code": opts.target_language_code,
-            "text": full_text,
-            "speaker": opts.speaker,
-            "pace": opts.pace,
-            "speech_sample_rate": opts.speech_sample_rate,
-            "model": opts.model,
-            "output_audio_bitrate": opts.output_audio_bitrate,
-            "min_buffer_size": opts.min_buffer_size,
-            "max_chunk_length": opts.max_chunk_length,
-            "output_audio_codec": opts.output_audio_codec,
-        }
-        if opts.model in ("bulbul:v3", "bulbul:v3-beta"):
-            payload["temperature"] = opts.temperature
-
-        mime_type = _sarvam_codec_mime(opts.output_audio_codec)
-        headers = {
-            "api-subscription-key": opts.api_key,
-            "Content-Type": "application/json",
-        }
-        try:
-            async with self._tts._ensure_session().post(
-                url=opts.base_url,
-                json=payload,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
-            ) as res:
-                if res.status != 200:
-                    err = await res.text()
-                    raise APIStatusError(
-                        message=f"Sarvam HTTP TTS {res.status}: {err}",
-                        status_code=res.status,
-                        body=err,
-                    )
-                rj = await res.json()
-                audios = rj.get("audios", [])
-                if not audios:
-                    raise APIConnectionError("Sarvam HTTP TTS: no audios in response")
-
-                output_emitter.initialize(
-                    request_id=rj.get("request_id", "unknown"),
-                    sample_rate=self._tts.sample_rate,
-                    num_channels=self._tts.num_channels,
-                    mime_type=mime_type,
-                )
-                for b64chunk in audios:
-                    raw = _b64.b64decode(b64chunk)
-                    if opts.output_audio_codec in _SARVAM_TELEPHONY:
-                        raw = _sarvam_decode_telephony(opts.output_audio_codec, raw)
-                    output_emitter.push(raw)
-
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError("Sarvam HTTP TTS request timed out") from e
-        except aiohttp.ClientError as e:
-            raise APIConnectionError(f"Sarvam HTTP TTS connection error: {e}") from e
-
-
 class _BatchSarvamTTS(sarvam.TTS):
-    """sarvam.TTS with stream() forced to HTTP batch — no WebSocket connection."""
+    """sarvam.TTS with streaming=False so the framework uses synthesize() (HTTP) for all TTS."""
 
-    def stream(self, *, conn_options=DEFAULT_API_CONNECT_OPTIONS) -> _HttpBatchSynthesizeStream:
-        if not _SARVAM_BATCH_OK:
-            return super().stream(conn_options=conn_options)
-        stream = _HttpBatchSynthesizeStream(tts=self, conn_options=conn_options)
-        self._streams.add(stream)
-        return stream
+    @property
+    def capabilities(self) -> TTSCapabilities:
+        return TTSCapabilities(streaming=False, aligned_transcript=False)
 
 
 # ---------------------------------------------------------------------------
 # Prewarm: load Silero VAD once per worker process
 # ---------------------------------------------------------------------------
 def prewarm_fnc(proc) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
+    proc.userdata["vad"] = silero.VAD.load(
+        # Raise threshold from default 0.5 to reduce false triggers on breath/noise
+        activation_threshold=0.65,
+        # Require 150ms of sustained speech (was 50ms default — too trigger-happy)
+        min_speech_duration=0.15,
+        # Wait 700ms of silence before ending a speech segment (was 550ms default)
+        min_silence_duration=0.7,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1157,7 +1071,23 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # ── 8. Agent + AgentSession ──
     tools = [FetchCategorySchema, FetchLead] if _function_calling else []
     agent = Agent(instructions=system_instruction, tools=tools)
-    session = AgentSession(stt=stt, llm=llm, tts=tts, vad=vad)
+    session = AgentSession(
+        stt=stt, llm=llm, tts=tts, vad=vad,
+        turn_handling={
+            "interruption": {
+                # Require 1s of sustained speech to count as real interruption (default: 0.5s)
+                "min_duration": 1.0,
+                # Require at least 3 words so single-word reactions don't cut the bot off
+                "min_words": 3,
+                # Classify short-lived interruptions as false after 3s of silence (default: 2s)
+                "false_interruption_timeout": 3.0,
+            },
+            "endpointing": {
+                # Wait 800ms of silence after user stops speaking before processing (default: 500ms)
+                "min_delay": 0.8,
+            },
+        },
+    )
 
     # ── 9. Event handlers ──
 
