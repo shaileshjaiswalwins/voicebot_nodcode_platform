@@ -812,9 +812,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _last_user_turn_time: float = 0.0
     _final_arrived_while_speaking: bool = False
 
-    # ── Latency tracking: user FINAL → bot speaking start ──
-    _last_user_final_time: float = 0.0   # set in _on_user_spoke on is_final
-    _response_latencies: list = []        # ms per completed response turn
+    # ── Latency tracking ──
+    _last_user_final_time: float = 0.0   # user FINAL → bot speaking start (E2E)
+    _first_partial_time: float = 0.0     # first PARTIAL → FINAL (STT latency)
+    _thinking_start_time: float = 0.0    # thinking state start → speaking (LLM+TTS TTFB)
+    _response_latencies: list = []        # E2E ms per completed turn
 
     # ── _buffer_user_audio: captures caller audio for muted-window STT + Silero gating ──
     # The pipeline STT plugin sees only frames when mic is ON (session.input.set_audio_enabled).
@@ -1156,6 +1158,23 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 f"agent_state={_agent_state_now} mic={_mic_enabled} "
                 f"speech_ms={speech_ms_now:.0f}"
             )
+            # STT Langfuse span
+            nonlocal _first_partial_time
+            if _lf_trace and _first_partial_time > 0:
+                try:
+                    _stt_latency_ms = (asyncio.get_event_loop().time() - _first_partial_time) * 1000
+                    _lf_trace.span(
+                        name=f"stt-turn-{_turn_counter}",
+                        input={"speech_ms": round(speech_ms_now)},
+                        output={"transcript": transcript_text},
+                        metadata={
+                            "latency_ms": round(_stt_latency_ms),
+                            "model": "saaras:v3-codemix",
+                        },
+                    ).end()
+                except Exception:
+                    pass
+                _first_partial_time = 0.0
             if _call_ended:
                 return
             _early_inject_done = False
@@ -1299,6 +1318,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 asyncio.create_task(_save_and_close("abusive"))
                 return
             _had_partial = bool(_pending_user_text)
+            if not _had_partial:
+                # First partial of this turn — start STT clock
+                nonlocal _first_partial_time
+                _first_partial_time = asyncio.get_event_loop().time()
             _pending_user_text = transcript_text
             if _had_partial and _live_transcript and _live_transcript[-1]["role"] == "user":
                 _live_transcript[-1]["text"] = transcript_text
@@ -1369,11 +1392,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     f"[LATENCY] response={_latency_ms:.0f}ms | "
                     f"avg={_avg_ms:.0f}ms over {_turn_n} turn(s)"
                 )
-                # Langfuse span per turn
+                # Langfuse spans: E2E + LLM breakdown
                 if _lf_trace:
                     try:
+                        # E2E: user FINAL → first bot audio
                         _lf_trace.span(
-                            name=f"response-turn-{_turn_n}",
+                            name=f"e2e-turn-{_turn_n}",
                             input={"user": _last_user_final_text},
                             metadata={
                                 "latency_ms": round(_latency_ms),
@@ -1381,6 +1405,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                                 "turn": _turn_n,
                             },
                         ).end()
+                        # LLM + TTS TTFB: thinking state start → first bot audio
+                        if _thinking_start_time > 0:
+                            _llm_ms = (_speaking_start_time - _thinking_start_time) * 1000
+                            _lf_trace.span(
+                                name=f"llm-tts-ttfb-turn-{_turn_n}",
+                                input={"user": _last_user_final_text},
+                                metadata={
+                                    "latency_ms": round(_llm_ms),
+                                    "model": "gemini-3.1-flash-lite",
+                                },
+                            ).end()
+                            _thinking_start_time = 0.0
                     except Exception:
                         pass
             _final_arrived_while_speaking = False
@@ -1457,6 +1493,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         elif state_str in ("listening", "idle"):
             speaking_duration = asyncio.get_event_loop().time() - _speaking_start_time
             _speaking_turns_completed += 1
+            # TTS duration Langfuse span (speaking_start → speaking_end)
+            if _lf_trace and _greeting_done and speaking_duration > 0.1:
+                try:
+                    _lf_trace.span(
+                        name=f"tts-turn-{_speaking_turns_completed}",
+                        metadata={
+                            "duration_ms": round(speaking_duration * 1000),
+                            "model": "bulbul:v3-simran",
+                        },
+                    ).end()
+                except Exception:
+                    pass
             if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
                 _bot_resp_watchdog_task.cancel()
                 _bot_resp_watchdog_task = None
@@ -1629,6 +1677,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         elif state_str == "thinking":
             # LLM is generating — pause inactivity timer (bot is actively responding)
             _cancel_inactivity()
+            nonlocal _thinking_start_time
+            _thinking_start_time = asyncio.get_event_loop().time()
         else:
             _log.info(f"[STATE] unhandled state {state_str!r} — no action taken")
 
