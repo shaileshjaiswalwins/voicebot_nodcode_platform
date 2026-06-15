@@ -251,6 +251,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         model="bulbul:v3",
         speaker="simran",
         api_key=SARVAM_API_KEY or None,
+        # Anti-jitter settings:
+        # linear16 = raw PCM, no MP3 frame decode overhead → smoothest streaming
+        output_audio_codec="linear16",
+        speech_sample_rate=24000,
+        # Buffer more text before flushing → larger, consistent audio chunks
+        min_buffer_size=200,
+        max_chunk_length=500,
     )
     vad = ctx.proc.userdata.get("vad")
     if vad is None:
