@@ -1125,6 +1125,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     def _on_user_spoke(ev) -> None:
         nonlocal _turn_counter, _live_transcript, _pending_user_text, _current_window_pcm
         nonlocal _call_ended, _early_inject_done, _abusive_detected, _close_status
+        nonlocal _first_partial_time
         if not _call_ended:
             _reset_inactivity(from_user_speech=True)
         is_final = getattr(ev, "is_final", True)
@@ -1159,7 +1160,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 f"speech_ms={speech_ms_now:.0f}"
             )
             # STT Langfuse span
-            nonlocal _first_partial_time
             if _lf_trace and _first_partial_time > 0:
                 try:
                     _stt_latency_ms = (asyncio.get_event_loop().time() - _first_partial_time) * 1000
@@ -1320,7 +1320,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _had_partial = bool(_pending_user_text)
             if not _had_partial:
                 # First partial of this turn — start STT clock
-                nonlocal _first_partial_time
                 _first_partial_time = asyncio.get_event_loop().time()
             _pending_user_text = transcript_text
             if _had_partial and _live_transcript and _live_transcript[-1]["role"] == "user":
