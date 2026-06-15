@@ -251,13 +251,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         model="bulbul:v3",
         speaker="simran",
         api_key=SARVAM_API_KEY or None,
-        # Anti-jitter settings:
-        # linear16 = raw PCM, no MP3 frame decode overhead → smoothest streaming
-        output_audio_codec="linear16",
+        # opus = WebRTC-native codec, has built-in jitter buffer + FEC,
+        # no resampling artifacts unlike linear16 at non-48k rates
+        output_audio_codec="opus",
+        output_audio_bitrate="192k",
         speech_sample_rate=24000,
-        # Buffer more text before flushing → larger, consistent audio chunks
+        # Buffer more text before flushing → fewer, larger audio chunks
         min_buffer_size=200,
         max_chunk_length=500,
+        temperature=0.3,  # lower variance → more consistent audio
+        pace=0.9,         # slightly slower → reduces compression artifacts in rapid Hindi
     )
     vad = ctx.proc.userdata.get("vad")
     if vad is None:
