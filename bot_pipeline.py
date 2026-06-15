@@ -1722,7 +1722,7 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm_fnc,
-            agent_name="voice-bot-justdial-fallback",
+            agent_name="voice-bot-justdial",
             num_idle_processes=3,
         )
     )

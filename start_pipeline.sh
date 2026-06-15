@@ -2,7 +2,7 @@
 set -e
 cd "$(dirname "$0")"
 
-export BOT_PORT="${BOT_PORT:-8082}"
+export BOT_PORT="${BOT_PORT:-8081}"
 
 # Kill any stale worker on the LiveKit agents port
 fuser -k "${BOT_PORT}/tcp" 2>/dev/null || true
