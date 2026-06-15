@@ -251,16 +251,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         model="bulbul:v3",
         speaker="simran",
         api_key=SARVAM_API_KEY or None,
-        # opus = WebRTC-native codec, has built-in jitter buffer + FEC,
-        # no resampling artifacts unlike linear16 at non-48k rates
-        output_audio_codec="opus",
-        output_audio_bitrate="192k",
-        speech_sample_rate=24000,
+        # Match dialer native format (8kHz linear16 PCM) to avoid resampling chain:
+        # Sarvam(24k) → LiveKit(48k) → dialer(8k) was two lossy resample steps.
+        # Now: Sarvam(8k) → LiveKit(48k) → dialer(8k) = one clean integer downsample.
+        output_audio_codec="linear16",
+        speech_sample_rate=8000,
         # Buffer more text before flushing → fewer, larger audio chunks
         min_buffer_size=200,
         max_chunk_length=500,
-        temperature=0.3,  # lower variance → more consistent audio
-        pace=0.9,         # slightly slower → reduces compression artifacts in rapid Hindi
+        temperature=0.3,
+        pace=0.9,
     )
     vad = ctx.proc.userdata.get("vad")
     if vad is None:
