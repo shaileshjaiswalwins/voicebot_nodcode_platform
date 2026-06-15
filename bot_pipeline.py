@@ -33,6 +33,7 @@ import io
 import json
 import os
 import re
+import sys
 import time
 import unicodedata
 import wave
@@ -109,7 +110,26 @@ SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
 
 # ---------------------------------------------------------------------------
-# File logging — use a distinct log dir so it doesn't collide with bot.py
+# Langfuse — optional observability (no-ops cleanly if creds are absent)
+# ---------------------------------------------------------------------------
+LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
+LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+LANGFUSE_BASE_URL = os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
+
+_langfuse_client = None
+if LANGFUSE_SECRET_KEY and LANGFUSE_PUBLIC_KEY:
+    try:
+        from langfuse import Langfuse as _Langfuse
+        _langfuse_client = _Langfuse(
+            secret_key=LANGFUSE_SECRET_KEY,
+            public_key=LANGFUSE_PUBLIC_KEY,
+            host=LANGFUSE_BASE_URL,
+        )
+    except Exception as _lf_err:
+        logger.warning(f"[LANGFUSE] init failed — traces disabled: {_lf_err}")
+
+# ---------------------------------------------------------------------------
+# Logging setup
 # ---------------------------------------------------------------------------
 _BOT_PORT = os.environ.get("BOT_PIPELINE_PORT", os.environ.get("BOT_PORT", "8082"))
 _LOG_DIR = os.path.join(
@@ -125,6 +145,7 @@ def _log_format(record: dict) -> str:
     return "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:<7} | " + caller_col + "{message}\n"
 
 
+# File handler — everything, rotated daily
 logger.add(
     os.path.join(_LOG_DIR, "{time:YYYY-MM-DD}.log"),
     rotation="00:00",
@@ -133,6 +154,29 @@ logger.add(
     level="INFO",
     enqueue=True,
     format=_log_format,
+)
+
+# Console handler — only the signals that matter for live monitoring
+_CONSOLE_KEYWORDS = (
+    "[TRANSCRIPT]", "[MUTED-CAPTURE]", "[LATENCY]",
+    "[CALL START]", "[CALL END]", "[GREETING]",
+    "[IVR]", "[CLOSE DETECT]", "[INACTIVITY]",
+)
+
+
+def _console_filter(record: dict) -> bool:
+    if record["level"].no >= 30:   # WARNING / ERROR / CRITICAL always shown
+        return True
+    return any(kw in record["message"] for kw in _CONSOLE_KEYWORDS)
+
+
+logger.remove(0)   # remove loguru's default stderr handler
+logger.add(
+    sys.stderr,
+    level="INFO",
+    filter=_console_filter,
+    format=_log_format,
+    colorize=False,
 )
 
 
@@ -213,6 +257,25 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # _caller_identity is set at section 11 (after session.start) but must exist
     # in this scope now so _kick_caller_safe() closure can read it at call time.
     _caller_identity = ""
+
+    # ── Langfuse trace (no-op if client is None) ──
+    _lf_trace = None
+    if _langfuse_client:
+        try:
+            _lf_trace = _langfuse_client.trace(
+                name="voice-call",
+                id=call_state["call_id"],
+                metadata={
+                    "room": room_name,
+                    "mobile": _room_mobile,
+                    "assistant_id": _assistant_id,
+                    "model_llm": "gemini-3.1-flash-lite",
+                    "model_stt": "saaras:v3-codemix",
+                    "model_tts": "bulbul:v3-simran",
+                },
+            )
+        except Exception as _lf_ex:
+            _log.warning(f"[LANGFUSE] trace creation failed: {_lf_ex}")
 
     if _prefetched_lead:
         call_state["record_id"] = _prefetched_lead.get("_id") or _prefetched_lead.get("ref_id")
@@ -438,6 +501,29 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             round(sum(_response_latencies) / len(_response_latencies))
             if _response_latencies else 0
         )
+
+        # Finalise Langfuse trace
+        if _lf_trace:
+            try:
+                _lf_trace.update(
+                    output={
+                        "status": status,
+                        "turn_count": _turn_counter,
+                        "duration_sec": _duration,
+                        "avg_response_latency_ms": _avg_latency_ms,
+                        "response_latencies_ms": _response_latencies,
+                        "ended_naturally": call_state.get("ended_naturally"),
+                    },
+                    metadata={
+                        "lead_id": str(lead_id or ""),
+                        "call_id": call_state.get("call_id", ""),
+                        "mobile": _room_mobile,
+                    },
+                )
+                _langfuse_client.flush()
+            except Exception as _lf_ex:
+                _log.warning(f"[LANGFUSE] flush failed: {_lf_ex}")
+
         _log.info(_SEP)
         _log.info(
             f"[CALL END] room={room_name} | status={status!r} | "
@@ -1278,10 +1364,25 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _last_user_final_time = 0.0
                 _response_latencies.append(_latency_ms)
                 _avg_ms = sum(_response_latencies) / len(_response_latencies)
+                _turn_n = len(_response_latencies)
                 _log.info(
                     f"[LATENCY] response={_latency_ms:.0f}ms | "
-                    f"avg={_avg_ms:.0f}ms over {len(_response_latencies)} turn(s)"
+                    f"avg={_avg_ms:.0f}ms over {_turn_n} turn(s)"
                 )
+                # Langfuse span per turn
+                if _lf_trace:
+                    try:
+                        _lf_trace.span(
+                            name=f"response-turn-{_turn_n}",
+                            input={"user": _last_user_final_text},
+                            metadata={
+                                "latency_ms": round(_latency_ms),
+                                "avg_latency_ms": round(_avg_ms),
+                                "turn": _turn_n,
+                            },
+                        ).end()
+                    except Exception:
+                        pass
             _final_arrived_while_speaking = False
             if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
                 _bot_resp_watchdog_task.cancel()
