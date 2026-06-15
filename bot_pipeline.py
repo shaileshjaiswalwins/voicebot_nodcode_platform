@@ -314,13 +314,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         model="bulbul:v3",
         speaker="simran",
         api_key=SARVAM_API_KEY or None,
-        # Match dialer native format (8kHz linear16 PCM) to avoid resampling chain:
-        # Sarvam(24k) → LiveKit(48k) → dialer(8k) was two lossy resample steps.
-        # Now: Sarvam(8k) → LiveKit(48k) → dialer(8k) = one clean integer downsample.
+        # 22050Hz is Sarvam's native generation rate — no internal Sarvam resampling.
+        # LiveKit owns the full chain: 22050 → 48000 (internal) → 8000 (SIP).
+        # Do NOT set 8000 here: Sarvam downsamples 22050→8000 with a non-integer
+        # ratio (2.75625×) which causes aliasing. Let LiveKit do it cleanly.
         output_audio_codec="linear16",
-        speech_sample_rate=8000,
-        # Buffer more text before flushing → fewer, larger audio chunks
-        min_buffer_size=200,
+        speech_sample_rate=22050,
+        min_buffer_size=100,   # 200 was too aggressive for short bot turns
         max_chunk_length=500,
         temperature=0.3,
         pace=0.9,
