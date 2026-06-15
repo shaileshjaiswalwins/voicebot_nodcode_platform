@@ -1360,6 +1360,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     def _on_agent_state(ev) -> None:
         nonlocal _echo_guard_task, _speaking_unmute_task, _greeting_done, _bot_has_spoken
         nonlocal _barge_in_fired, _bot_resp_watchdog_task, _speaking_start_time
+        nonlocal _thinking_start_time
         nonlocal _speaking_turns_completed, _muted_capture_empty_time, _muted_filler_dropped_time
         nonlocal _last_user_final_text, _final_arrived_while_speaking
         new_state = getattr(ev, "new_state", None)
@@ -1676,7 +1677,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         elif state_str == "thinking":
             # LLM is generating — pause inactivity timer (bot is actively responding)
             _cancel_inactivity()
-            nonlocal _thinking_start_time
             _thinking_start_time = asyncio.get_event_loop().time()
         else:
             _log.info(f"[STATE] unhandled state {state_str!r} — no action taken")
