@@ -258,7 +258,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # and background IVR music that would otherwise pass the muted-capture gate.
     _silero_threshold = float(_bot_config.get("silero_threshold") or 0.7)
     _silero_min_speech_ms = int(_bot_config.get("silero_min_speech_ms") or 1000)
-    _post_speech_hold_ms = int(_bot_config.get("post_speech_hold_ms") or 800)
+    _post_speech_hold_ms = int(_bot_config.get("post_speech_hold_ms") or 400)
     _inactivity_first_rescue_secs = float(_bot_config.get("inactivity_first_rescue_secs") or 4.0)
     _inactivity_first_nudge_gap_secs = float(_bot_config.get("inactivity_first_nudge_gap_secs") or 4.0)
     _inactivity_nudge_secs = float(_bot_config.get("inactivity_nudge_secs") or 10.0)
@@ -1092,16 +1092,27 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         return result
 
     # ── 8. Agent + AgentSession ──
+    # Latency: prepend a very short Hindi acknowledgment so the first TTS chunk
+    # is tiny (e.g. "जी") and plays within ~100ms, while the full answer follows.
+    # The 4-second barge-in unmute timer is unchanged, so the bot cannot be
+    # interrupted during the first 4 seconds of any reply.
+    _LATENCY_HINT = (
+        "\n\nRESPONSE SPEED RULE (mandatory): Start every reply with a 1–3 word Hindi "
+        "acknowledgment ONLY — e.g. 'जी,', 'हाँ,', 'बिल्कुल,', 'ठीक है,' — on its own "
+        "before the full answer. Never skip this opener. This is required so the caller "
+        "hears audio immediately while the rest of the response is still being generated."
+    )
+    system_instruction = system_instruction + _LATENCY_HINT
+
     tools = [FetchCategorySchema, FetchLead] if _function_calling else []
     agent = Agent(instructions=system_instruction, tools=tools)
     # No VAD — Sarvam STT with flush_signal handles speech start/end events natively.
     # turn_detection="stt" tells AgentSession to trust Sarvam's speech boundaries.
-    # min_endpointing_delay=0.07 matches Sarvam's ~70ms processing latency so the
-    # agent moves to LLM as soon as STT finishes — no extra wait.
+    # min_endpointing_delay=0.05 — LLM starts 50ms after STT FINAL (was 70ms).
     session = AgentSession(
         stt=stt, llm=llm, tts=tts,
         turn_detection="stt",
-        min_endpointing_delay=0.07,
+        min_endpointing_delay=0.05,
     )
 
     # ── 9. Event handlers ──
