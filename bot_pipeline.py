@@ -122,11 +122,45 @@ _langfuse_client = None
 if LANGFUSE_SECRET_KEY and LANGFUSE_PUBLIC_KEY:
     try:
         from langfuse import Langfuse as _Langfuse
+        from langfuse.types import TraceContext as _LFTraceContext
+
         _langfuse_client = _Langfuse(
             secret_key=LANGFUSE_SECRET_KEY,
             public_key=LANGFUSE_PUBLIC_KEY,
             host=LANGFUSE_BASE_URL,
         )
+
+        class _LFTraceShim:
+            """Thin v2-compat wrapper over Langfuse v3/v4 start_observation API.
+
+            v2: langfuse.trace() → returns object with .span()/.update()
+            v4: langfuse.start_observation(as_type="trace") + TraceContext for children
+            """
+
+            def __init__(self, obs, client):
+                self._obs = obs
+                self._client = client
+                self._ctx = _LFTraceContext(
+                    trace_id=obs.trace_id,
+                    parent_span_id=obs.id,
+                )
+
+            def span(self, *, name, input=None, output=None, metadata=None, **kw):
+                return self._client.start_observation(
+                    name=name,
+                    as_type="span",
+                    trace_context=self._ctx,
+                    input=input,
+                    output=output,
+                    metadata=metadata,
+                )
+
+            def update(self, *, output=None, metadata=None, **kw):
+                self._obs.update(output=output, metadata=metadata)
+
+            def end(self):
+                self._obs.end()
+
     except Exception as _lf_err:
         logger.warning(f"[LANGFUSE] init failed — traces disabled: {_lf_err}")
 
@@ -286,18 +320,20 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _lf_trace = None
     if _langfuse_client:
         try:
-            _lf_trace = _langfuse_client.trace(
+            _lf_obs = _langfuse_client.start_observation(
                 name="voice-call",
-                id=call_state["call_id"],
+                as_type="trace",
                 metadata={
                     "room": room_name,
                     "mobile": _room_mobile,
                     "assistant_id": _assistant_id,
+                    "call_id": call_state["call_id"],
                     "model_llm": "gemini-3.1-flash-lite",
                     "model_stt": "saaras:v3-codemix",
                     "model_tts": "bulbul:v3-simran",
                 },
             )
+            _lf_trace = _LFTraceShim(_lf_obs, _langfuse_client)
         except Exception as _lf_ex:
             _log.warning(f"[LANGFUSE] trace creation failed: {_lf_ex}")
 
@@ -542,6 +578,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         "mobile": _room_mobile,
                     },
                 )
+                _lf_trace.end()
                 _langfuse_client.flush()
             except Exception as _lf_ex:
                 _log.warning(f"[LANGFUSE] flush failed: {_lf_ex}")

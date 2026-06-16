@@ -1302,9 +1302,28 @@ _ABUSIVE_PATTERNS: tuple[str, ...] = (
 
 
 def _is_abusive_text(text: str) -> bool:
-    """Return True if the transcript contains explicit profanity or abuse."""
+    """Return True if the transcript contains explicit profanity or abuse.
+
+    Single-token patterns use space/string boundaries to prevent false positives
+    from brand names that happen to contain a slur as a suffix (e.g. 'ब्रांड'
+    contains 'रांड' but is NOT abusive). Multi-word patterns still use substring
+    matching because space-separated phrases don't embed into other words.
+    Note: Devanagari virama (्) is not \\w, so \\b fails; explicit space/boundary
+    anchors are required.
+    """
     n = unicodedata.normalize("NFC", text or "").lower()
-    return any(p.lower() in n for p in _ABUSIVE_PATTERNS)
+    for p in _ABUSIVE_PATTERNS:
+        p_lower = p.lower()
+        if " " in p_lower:
+            if p_lower in n:
+                return True
+        else:
+            if re.search(
+                r'(?:^|(?<=\s))' + re.escape(p_lower) + r'(?=\s|[,।!?.]|$)',
+                n,
+            ):
+                return True
+    return False
 
 
 # ---------------------------------------------------------------------------
