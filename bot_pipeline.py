@@ -1267,6 +1267,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _muted_transcript_log.pop()
             _muted_inject["text"] = ""
         if is_final:
+            # Pre-filter: FINAL arriving while bot is speaking with mic disabled and barge-in
+            # not yet fired means this is STT pipeline lag — audio buffered during the prior
+            # thinking period (when mic was ON) delivered ~100-200ms after mic is disabled at
+            # speaking-start. This is NOT user speech; discard before turning the counter.
+            if _agent_state_now == "speaking" and not _mic_enabled and not _barge_in_fired:
+                _log.info(
+                    f"[STT] FINAL during muted-speaking (pre-barge-in) — "
+                    f"pipeline-delay noise discarded: {transcript_text!r}"
+                )
+                return
             _turn_counter += 1
             speech_ms_now = len(_current_window_pcm) / 2 / 16_000 * 1000
             _log.info(
@@ -1854,10 +1864,24 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _log.info(f"[STATE] unhandled state {state_str!r} — no action taken")
 
     # ── 10. Subscribe to caller audio for muted-window capture + Sarvam fallback ──
+    _buffering_track_sids: set = set()
+
     @ctx.room.on("track_subscribed")
     def _on_track_subscribed(track, pub, participant) -> None:
-        if isinstance(track, rtc.RemoteAudioTrack):
+        if isinstance(track, rtc.RemoteAudioTrack) and track.sid not in _buffering_track_sids:
+            _buffering_track_sids.add(track.sid)
             asyncio.create_task(_buffer_user_audio(track))
+
+    # SIP audio tracks may be subscribed before the handler above is registered.
+    # Scan already-subscribed remote tracks so _buffer_user_audio always starts.
+    for _rp in ctx.room.remote_participants.values():
+        for _rpub in _rp.track_publications.values():
+            if (
+                isinstance(_rpub.track, rtc.RemoteAudioTrack)
+                and _rpub.track.sid not in _buffering_track_sids
+            ):
+                _buffering_track_sids.add(_rpub.track.sid)
+                asyncio.create_task(_buffer_user_audio(_rpub.track))
 
     # ── Background audio ──
     # thinking_sound is NOT passed here so we control keyboard playback manually
