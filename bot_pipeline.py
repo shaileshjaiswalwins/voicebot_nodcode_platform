@@ -105,7 +105,7 @@ from bot import (
 load_dotenv(override=True)
 
 # Dev API (mirrors bot_dev.py) — overrides the live URLs imported from bot.py
-MIS_API_BASE = "http://192.168.8.67:8000"
+MIS_API_BASE = "http://192.168.14.101:3006"
 CATEGORY_CHANGE_API = f"{MIS_API_BASE}/leads/ai-lead-qualify/search"
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
@@ -2093,7 +2093,8 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm_fnc,
-            agent_name="voice-bot-justdial",
+            agent_name="voice-bot-justdial-fallback",
+            port=8082,
             num_idle_processes=3,
         )
     )
