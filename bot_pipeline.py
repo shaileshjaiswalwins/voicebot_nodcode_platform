@@ -1513,6 +1513,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         nonlocal _thinking_start_time
         nonlocal _speaking_turns_completed, _muted_capture_empty_time, _muted_filler_dropped_time
         nonlocal _last_user_final_text, _final_arrived_while_speaking
+        nonlocal _kb_handle
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
@@ -1530,6 +1531,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _barge_in_fired = False
             _speaking_start_time = asyncio.get_event_loop().time()
             _cancel_inactivity()
+            # Keyboard overlap: play a short KEYBOARD_TYPING2 burst at the exact moment
+            # TTS audio starts so there is NO silence gap between thinking sound and voice.
+            # KEYBOARD_TYPING2 is a short clip that fades naturally while the first TTS
+            # sentence plays — giving a smooth keyboard→voice crossfade.
+            try:
+                if _kb_handle and not _kb_handle.done():
+                    _kb_handle.stop()
+                _kb_handle = _bg_audio.play(
+                    AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.40)
+                )
+            except Exception:
+                pass
             # Latency: time from user FINAL to first bot audio
             nonlocal _last_user_final_time, _response_latencies
             if _last_user_final_time > 0 and _greeting_done:
@@ -1828,6 +1841,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # LLM is generating — pause inactivity timer (bot is actively responding)
             _cancel_inactivity()
             _thinking_start_time = asyncio.get_event_loop().time()
+            # Start keyboard typing sound manually so we control when it stops.
+            try:
+                if _kb_handle and not _kb_handle.done():
+                    _kb_handle.stop()
+                _kb_handle = _bg_audio.play(
+                    AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.55)
+                )
+            except Exception:
+                pass
         else:
             _log.info(f"[STATE] unhandled state {state_str!r} — no action taken")
 
@@ -1837,14 +1859,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if isinstance(track, rtc.RemoteAudioTrack):
             asyncio.create_task(_buffer_user_audio(track))
 
-    # ── Background audio (office ambience + keyboard thinking sounds) ──
+    # ── Background audio ──
+    # thinking_sound is NOT passed here so we control keyboard playback manually
+    # in _on_agent_state. This lets us play a short overlap burst at the start of
+    # speaking so keyboard → TTS is seamless instead of keyboard → silence → TTS.
     _bg_audio = BackgroundAudioPlayer(
-        ambient_sound=AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=0.35),
-        thinking_sound=[
-            AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, volume=0.55, probability=0.65),
-            AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.45, probability=0.35),
-        ],
+        ambient_sound=AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=0.50),
     )
+    _kb_handle = None  # tracks the current keyboard play handle
 
     # ── Start session ──
     try:
