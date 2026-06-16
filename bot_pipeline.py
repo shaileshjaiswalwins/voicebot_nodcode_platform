@@ -45,6 +45,9 @@ from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentSession,
+    AudioConfig,
+    BackgroundAudioPlayer,
+    BuiltinAudioClip,
     JobContext,
     RunContext,
     WorkerOptions,
@@ -231,8 +234,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _language = "hindi"
     _temperature = float(_bot_config.get("temperature") or 0.4)
     _max_call_duration = 300
-    _silero_threshold = float(_bot_config.get("silero_threshold") or 0.5)
-    _silero_min_speech_ms = int(_bot_config.get("silero_min_speech_ms") or 400)
+    # Pipeline mode: higher threshold than bot.py defaults — filters TTS echo
+    # and background IVR music that would otherwise pass the muted-capture gate.
+    _silero_threshold = float(_bot_config.get("silero_threshold") or 0.7)
+    _silero_min_speech_ms = int(_bot_config.get("silero_min_speech_ms") or 1000)
     _post_speech_hold_ms = int(_bot_config.get("post_speech_hold_ms") or 800)
     _inactivity_first_rescue_secs = float(_bot_config.get("inactivity_first_rescue_secs") or 4.0)
     _inactivity_first_nudge_gap_secs = float(_bot_config.get("inactivity_first_nudge_gap_secs") or 4.0)
@@ -303,7 +308,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         mode="transcribe",
         api_key=SARVAM_API_KEY or None,
         flush_signal=True,
-        high_vad_sensitivity=True,
     )
     llm = google.LLM(
         model="gemini-3.1-flash-lite",
@@ -315,9 +319,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         model="bulbul:v3",
         speaker="simran",
         api_key=SARVAM_API_KEY or None,
+        # linear16 at 22050Hz (Sarvam native rate, no internal downsampling).
+        # No MP3 frame-boundary artifacts in streaming mode. LiveKit handles
+        # the 22050→48000→8000 SIP chain with its own high-quality resampler.
         speech_sample_rate=22050,
-        output_audio_codec="mp3",
-        output_audio_bitrate="128k",
+        output_audio_codec="linear16",
         temperature=0.3,
         pace=0.9,
         send_completion_event=True,
@@ -535,6 +541,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             await asyncio.sleep(1.0)
         await save_call_data(status)
         asyncio.create_task(_delete_room_safe())
+        try:
+            await _bg_audio.aclose()
+        except Exception:
+            pass
         try:
             await session.aclose()
         except Exception:
@@ -1688,6 +1698,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if isinstance(track, rtc.RemoteAudioTrack):
             asyncio.create_task(_buffer_user_audio(track))
 
+    # ── Background audio (office ambience + keyboard thinking sounds) ──
+    _bg_audio = BackgroundAudioPlayer(
+        ambient_sound=AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=0.35),
+        thinking_sound=[
+            AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, volume=0.55, probability=0.65),
+            AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.45, probability=0.35),
+        ],
+    )
+
     # ── Start session ──
     try:
         await session.start(
@@ -1713,6 +1732,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         else:
             _log.error(f"[LLM-ERR-UNKNOWN] session.start() failed — {_key_tag} | {_start_exc}")
         raise
+
+    await _bg_audio.start(room=ctx.room, agent_session=session)
 
     call_state["call_start_time"] = time.time()
 
