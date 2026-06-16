@@ -792,6 +792,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         "पीछे से",
     ]
     _BYSTANDER_HYPHEN_REPEAT_RE = re.compile(r'(\S+)-\1(?:-\1)+')
+    # Space-separated repetition: catches STT babble like "पास पास पास पास पास पास"
+    # (same word repeated 4+ times with spaces — not covered by the hyphen regex)
+    _SPACE_REPEAT_RE = re.compile(r'(?:^|\s)(\S{2,})(?:\s+\1){3,}(?=\s|$)', re.UNICODE)
 
     def _is_bystander_speech(text: str) -> bool:
         normalized = unicodedata.normalize("NFC", text)
@@ -800,6 +803,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if _BYSTANDER_HYPHEN_REPEAT_RE.search(normalized):
             return True
         return False
+
+    def _is_repetitive_babble(text: str) -> bool:
+        """Return True when STT produces 4+ consecutive repetitions of the same word."""
+        normalized = unicodedata.normalize("NFC", text)
+        return bool(_SPACE_REPEAT_RE.search(normalized))
 
     def _normalize_stt_tokens(text: str) -> list[str]:
         text = unicodedata.normalize("NFC", text).lower()
@@ -821,6 +829,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         "जी", "हाँ", "हां", "हा", "ना", "नहीं", "नहि",
         "yes", "no", "ok", "okay", "हाँजी", "हांजी",
         "ठीक", "बिल्कुल", "सही", "sure", "bilkul",
+    })
+
+    # Impatience-signal tokens: user says these while bot is "thinking".
+    # Passing them through causes livekit-agents to cancel the LLM generation
+    # on every occurrence — creating a thinking→listening loop.
+    _THINKING_FILLER_TOKENS: frozenset = frozenset(unicodedata.normalize("NFC", w) for w in {
+        "हेलो", "हैलो", "हेल्लो", "hello", "hi", "हाय",
+        "हाँ", "हां", "हा", "जी", "ok", "okay", "ओके",
+        "हाँजी", "हांजी", "हेलो।", "hello।",
     })
 
     # ── Speaking / watchdog state ──
@@ -1296,6 +1313,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     _live_transcript.pop()
                 _silero_rejected_turns.add(transcript_text)
                 return
+            # Space-repetition babble filter (e.g. "पास पास पास पास पास पास" from STT)
+            if _is_repetitive_babble(transcript_text):
+                _log.info(f"[NOISE] Repetitive-word babble discarded: {transcript_text!r}")
+                if _had_partial and _live_transcript and _live_transcript[-1]["role"] == "user":
+                    _live_transcript.pop()
+                elif _live_transcript and _live_transcript[-1] == {"role": "user", "text": transcript_text}:
+                    _live_transcript.pop()
+                _silero_rejected_turns.add(transcript_text)
+                _muted_transcript_log.append(f"[babble-filtered] {transcript_text}")
+                return
             # IVR / busy-line detection
             if _is_ivr_message(transcript_text):
                 _log.info(f"[IVR] busy-line/voicemail detected — ending call: {transcript_text!r}")
@@ -1323,6 +1350,31 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 asyncio.create_task(_kick_caller_safe())
                 asyncio.create_task(_save_and_close("abusive"))
                 return
+            # Thinking-state impatience guard: if the bot is already generating a
+            # reply and the user says a short filler like "हेलो" or "हाँ", don't
+            # treat it as a new real turn. livekit-agents will still internally
+            # cancel the LLM (we can't prevent that), but we suppress it from our
+            # transcript and watchdogs so the bot eventually responds to the LAST
+            # real user turn instead of getting stuck in a thinking→listening loop.
+            if (
+                _agent_state_now == "thinking"
+                and not _call_ended
+                and not _closing_triggered
+                and _greeting_done
+            ):
+                _toks = set(_normalize_stt_tokens(transcript_text))
+                if _toks and _toks <= (_SHORT_TERMINAL_TOKENS | _THINKING_FILLER_TOKENS):
+                    _log.info(
+                        f"[BARGE-THINK] Filler during thinking suppressed "
+                        f"(won't displace pending LLM turn): {transcript_text!r}"
+                    )
+                    if _had_partial and _live_transcript and _live_transcript[-1]["role"] == "user":
+                        _live_transcript.pop()
+                    elif _live_transcript and _live_transcript[-1] == {"role": "user", "text": transcript_text}:
+                        _live_transcript.pop()
+                    _silero_rejected_turns.add(transcript_text)
+                    return
+
             _user_entry: dict = {"role": "user", "text": transcript_text}
             if _had_partial and _live_transcript and _live_transcript[-1]["role"] == "user":
                 _live_transcript[-1] = _user_entry
