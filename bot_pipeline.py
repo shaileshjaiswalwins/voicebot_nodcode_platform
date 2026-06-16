@@ -201,7 +201,7 @@ async def _preload_hold_message(tts_instance) -> None:
         return
     try:
         frames: list[rtc.AudioFrame] = []
-        async for event in tts_instance.synthesize("एक क्षण रुकिए, मैं अभी चेक करता हूं।"):
+        async for event in tts_instance.synthesize("एक क्षण रुकिए, मैं अभी चेक करती हूँ।"):
             frames.append(event.frame)
         _HOLD_FRAMES = frames
         logger.info(f"[HOLD-TTS] Preloaded {len(_HOLD_FRAMES)} frames for tool hold message")
@@ -1046,7 +1046,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             for frame in _HOLD_FRAMES:
                 yield frame
         return tool_ctx.session.say(
-            "एक क्षण रुकिए, मैं अभी चेक करता हूं।",
+            "एक क्षण रुकिए, मैं अभी चेक करती हूँ।",
             audio=_cached_audio(),
             add_to_chat_ctx=False,
         )
@@ -1085,13 +1085,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     async def FetchLead(tool_ctx: RunContext, lead_id: str = "", mobile: str = "") -> dict:
         """Fetch customer lead details from Justdial MIS API. Pass lead_id or mobile."""
         _log.info(f"[FetchLead] called | lead_id={lead_id!r} | mobile={mobile!r}")
-        hold_handle = _play_hold_message(tool_ctx)
         result = await _execute_function_call(
             "FetchLead", {"lead_id": lead_id, "mobile": mobile},
             functions=_functions, call_state=call_state,
         )
-        if hold_handle and not hold_handle.interrupted and not hold_handle.done():
-            hold_handle.interrupt()
         return result
 
     # ── 8. Agent + AgentSession ──
