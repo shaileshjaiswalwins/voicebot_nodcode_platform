@@ -4,17 +4,16 @@ Pipeline (STT → LLM → TTS) version of the Justdial voice bot.
 
 Unlike bot.py (which uses Gemini Live s2s / RealtimeModel), this file runs a
 classic three-stage pipeline:
-  STT:  sarvam.STT (saaras:v3 codemix, Hinglish)          [needs SARVAM_API_KEY]
-  LLM:  google.LLM (Gemini 3.1 Flash Lite)                 [needs GEMINI_LIVE_API_KEY]
-  TTS:  sarvam.TTS (bulbul:v3, simran, hi-IN)              [needs SARVAM_API_KEY]
-  VAD:  silero.VAD (loaded in prewarm_fnc)
+  STT:  sarvam.STT (saaras:v3 transcribe, flush_signal)     [needs SARVAM_API_KEY]
+  LLM:  google.LLM (Gemini 3.1 Flash Lite)                 [needs GEMINI_API_KEY]
+  TTS:  sarvam.TTS (bulbul:v3, simran, mp3/22050)           [needs SARVAM_API_KEY]
 
 All genuine business logic (config fetch, prompt building, transcript save, IVR
 detection, closing-phrase detection, function tools, muted-window audio capture,
 4s barge-in timing, echo/filler guards) is preserved and mostly imported from bot.py.
 
 Only the realtime I/O layer changes:
-  • RealtimeModel                            →  AgentSession(stt, llm, tts, vad)
+  • RealtimeModel                            →  AgentSession(stt, llm, tts, turn_detection="stt")
   • _rt._send_client_event(LiveClientContent) →  session.say() / session.generate_reply()
   • Greeting trigger (24s retry dance)       →  session.say(greeting_text) [mute kept]
   • _speak_via_gemini(phrase)               →  session.say(phrase)
@@ -52,7 +51,6 @@ from livekit.agents import (
     cli,
     function_tool,
 )
-from livekit.agents.tts import TTSCapabilities
 from livekit.agents.voice.room_io import RoomOptions as _RoomOptionsCls
 from livekit.api import DeleteRoomRequest, LiveKitAPI
 
@@ -63,7 +61,7 @@ except ImportError:
 
 import aiohttp
 
-from livekit.plugins import google, silero, sarvam
+from livekit.plugins import google, sarvam
 
 # ---------------------------------------------------------------------------
 # Import all reusable module-level helpers from bot.py
@@ -182,30 +180,10 @@ logger.add(
 
 
 # ---------------------------------------------------------------------------
-# HTTP-batch TTS — same path as session.say().
-# Declaring streaming=False makes Agent.default.tts_node wrap with StreamAdapter
-# which calls tts.synthesize() (HTTP POST) per sentence, identical to session.say().
-# ---------------------------------------------------------------------------
-class _BatchSarvamTTS(sarvam.TTS):
-    """sarvam.TTS with streaming=False so the framework uses synthesize() (HTTP) for all TTS."""
-
-    @property
-    def capabilities(self) -> TTSCapabilities:
-        return TTSCapabilities(streaming=False, aligned_transcript=False)
-
-
-# ---------------------------------------------------------------------------
-# Prewarm: load Silero VAD once per worker process
+# Prewarm: nothing to preload — Sarvam STT handles turn detection internally
 # ---------------------------------------------------------------------------
 def prewarm_fnc(proc) -> None:
-    proc.userdata["vad"] = silero.VAD.load(
-        # Raise threshold from default 0.5 to reduce false triggers on breath/noise
-        activation_threshold=0.65,
-        # Require 150ms of sustained speech (was 50ms default — too trigger-happy)
-        min_speech_duration=0.15,
-        # Wait 700ms of silence before ending a speech segment (was 550ms default)
-        min_silence_duration=0.7,
-    )
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -312,42 +290,38 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _prefetched_lead, lang_key=_language, bot_config=_bot_config
     )
 
-    # ── 5. Pipeline plugins: Sarvam STT → Gemini LLM → Sarvam TTS + Silero VAD ──
-    # STT: saaras:v3 codemix — handles Hinglish (Hindi + English code-mix)
-    # TTS: bulbul:v3 simran — female customer-care voice
-    # LLM: gemini-3.1-flash-lite — low-latency text completions
+    # ── 5. Pipeline plugins: Sarvam STT → Gemini LLM → Sarvam TTS ──
+    # STT: saaras:v3 transcribe with flush_signal — Sarvam handles turn detection
+    # TTS: bulbul:v3 simran — mp3/22050 (official guide defaults)
+    # LLM: gemini-3.1-flash-lite
     _gemini_api_key = os.getenv("GEMINI_API_KEY", "")
     _log.info(f"[LLM] Using GEMINI_API_KEY ...{_gemini_api_key[-6:] if _gemini_api_key else 'NOT SET'}")
 
     stt = sarvam.STT(
         language="hi-IN",
         model="saaras:v3",
-        mode="codemix",
+        mode="transcribe",
         api_key=SARVAM_API_KEY or None,
+        flush_signal=True,
+        high_vad_sensitivity=True,
     )
     llm = google.LLM(
         model="gemini-3.1-flash-lite",
         api_key=_gemini_api_key or None,
         temperature=_temperature,
     )
-    tts = _BatchSarvamTTS(
+    tts = sarvam.TTS(
         target_language_code="hi-IN",
         model="bulbul:v3",
         speaker="simran",
         api_key=SARVAM_API_KEY or None,
-        # 22050Hz is Sarvam's native generation rate — no internal Sarvam resampling.
-        # LiveKit owns the full chain: 22050 → 48000 (internal) → 8000 (SIP).
-        # Do NOT set 8000 here: Sarvam downsamples 22050→8000 with a non-integer
-        # ratio (2.75625×) which causes aliasing. Let LiveKit do it cleanly.
-        output_audio_codec="linear16",
         speech_sample_rate=22050,
+        output_audio_codec="mp3",
+        output_audio_bitrate="128k",
         temperature=0.3,
         pace=0.9,
+        send_completion_event=True,
     )
-    vad = ctx.proc.userdata.get("vad")
-    if vad is None:
-        _log.warning("[VAD] Silero VAD not pre-loaded — loading inline (slower cold start)")
-        vad = silero.VAD.load()
 
     # ── 6. Inner helpers ──
 
@@ -1071,22 +1045,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # ── 8. Agent + AgentSession ──
     tools = [FetchCategorySchema, FetchLead] if _function_calling else []
     agent = Agent(instructions=system_instruction, tools=tools)
+    # No VAD — Sarvam STT with flush_signal handles speech start/end events natively.
+    # turn_detection="stt" tells AgentSession to trust Sarvam's speech boundaries.
+    # min_endpointing_delay=0.07 matches Sarvam's ~70ms processing latency so the
+    # agent moves to LLM as soon as STT finishes — no extra wait.
     session = AgentSession(
-        stt=stt, llm=llm, tts=tts, vad=vad,
-        turn_handling={
-            "interruption": {
-                # Require 1s of sustained speech to count as real interruption (default: 0.5s)
-                "min_duration": 1.0,
-                # Require at least 3 words so single-word reactions don't cut the bot off
-                "min_words": 3,
-                # Classify short-lived interruptions as false after 3s of silence (default: 2s)
-                "false_interruption_timeout": 3.0,
-            },
-            "endpointing": {
-                # Wait 800ms of silence after user stops speaking before processing (default: 500ms)
-                "min_delay": 0.8,
-            },
-        },
+        stt=stt, llm=llm, tts=tts,
+        turn_detection="stt",
+        min_endpointing_delay=0.07,
     )
 
     # ── 9. Event handlers ──
