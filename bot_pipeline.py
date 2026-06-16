@@ -883,6 +883,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _mic_enabled: bool = False
     _barge_in_fired: bool = False
     _bot_resp_watchdog_task: asyncio.Task | None = None
+    _kb_auto_stop_task: asyncio.Task | None = None
     _last_user_final_text: str = ""
     _last_user_final_turn: int = 0
     _speaking_start_time: float = 0.0
@@ -996,10 +997,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _log.info(f"[MUTED-CAPTURE] dropped all-filler {text!r} [sarvam=filler]")
             _muted_filler_dropped_time = asyncio.get_event_loop().time()
             return
-        if len(tokens) >= 2 and len(set(tokens)) == 1:
+        # Single-token repeat (e.g. "हाँ हाँ हाँ") OR pair-repeat babble
+        # (e.g. "हाँ जी हाँ जी हाँ जी" — 2 unique tokens repeating ≥ 4 times total)
+        if len(tokens) >= 4 and len(set(tokens)) <= 2:
             _log.info(
                 f"[MUTED-CAPTURE] repeated-token hallucination {text!r} — dropped"
             )
+            _muted_filler_dropped_time = asyncio.get_event_loop().time()
+            return
+        # Space-repetition babble (4+ repetitions of same word: "पास पास पास पास")
+        if _is_repetitive_babble(text):
+            _log.info(f"[MUTED-CAPTURE] space-repetition babble dropped: {text!r}")
             _muted_filler_dropped_time = asyncio.get_event_loop().time()
             return
         _log.info(
@@ -1240,7 +1248,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     def _on_user_spoke(ev) -> None:
         nonlocal _turn_counter, _live_transcript, _pending_user_text, _current_window_pcm
         nonlocal _call_ended, _early_inject_done, _abusive_detected, _close_status
-        nonlocal _first_partial_time
+        nonlocal _first_partial_time, _silero_rejected_turns
         if not _call_ended:
             _reset_inactivity(from_user_speech=True)
         is_final = getattr(ev, "is_final", True)
@@ -1271,11 +1279,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # not yet fired means this is STT pipeline lag — audio buffered during the prior
             # thinking period (when mic was ON) delivered ~100-200ms after mic is disabled at
             # speaking-start. This is NOT user speech; discard before turning the counter.
+            # Add to _silero_rejected_turns so conversation_item_added also skips it,
+            # preventing the pipeline from triggering a second LLM generate_reply.
             if _agent_state_now == "speaking" and not _mic_enabled and not _barge_in_fired:
                 _log.info(
                     f"[STT] FINAL during muted-speaking (pre-barge-in) — "
                     f"pipeline-delay noise discarded: {transcript_text!r}"
                 )
+                _silero_rejected_turns.add(transcript_text)
                 return
             _turn_counter += 1
             speech_ms_now = len(_current_window_pcm) / 2 / 16_000 * 1000
@@ -1305,11 +1316,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _early_inject_done = False
             _had_partial = bool(_pending_user_text)
             _pending_user_text = ""
+            _pcm_snapshot = bytes(_current_window_pcm)  # save before reset
             _current_window_pcm = bytearray()  # reset window for next turn
-            # Silero sanity-check on the just-captured PCM
+            # Silero sanity-check on the captured PCM
             _voiced = 0
-            if _current_window_pcm:  # note: already cleared above; guard kept for re-use
-                _voiced = _silero_voiced_ms(bytes(_current_window_pcm), _silero_threshold)
+            if _pcm_snapshot:
+                _voiced = _silero_voiced_ms(_pcm_snapshot, _silero_threshold)
                 if _voiced < _silero_min_speech_ms:
                     _voiced_ratio = _voiced / speech_ms_now if speech_ms_now > 0 else 0.0
                     if _voiced >= 60 or _voiced_ratio >= 0.08:
@@ -1523,7 +1535,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         nonlocal _thinking_start_time
         nonlocal _speaking_turns_completed, _muted_capture_empty_time, _muted_filler_dropped_time
         nonlocal _last_user_final_text, _final_arrived_while_speaking
-        nonlocal _kb_handle
+        nonlocal _kb_handle, _kb_auto_stop_task
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
@@ -1546,6 +1558,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # KEYBOARD_TYPING2 is a short clip that fades naturally while the first TTS
             # sentence plays — giving a smooth keyboard→voice crossfade.
             try:
+                if _kb_auto_stop_task and not _kb_auto_stop_task.done():
+                    _kb_auto_stop_task.cancel()
+                    _kb_auto_stop_task = None
                 if _kb_handle and not _kb_handle.done():
                     _kb_handle.stop()
                 _kb_handle = _bg_audio.play(
@@ -1851,15 +1866,29 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # LLM is generating — pause inactivity timer (bot is actively responding)
             _cancel_inactivity()
             _thinking_start_time = asyncio.get_event_loop().time()
-            # Start keyboard typing sound manually so we control when it stops.
-            try:
-                if _kb_handle and not _kb_handle.done():
-                    _kb_handle.stop()
-                _kb_handle = _bg_audio.play(
-                    AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.55)
-                )
-            except Exception:
-                pass
+            # Keyboard only when the user just spoke (listening → thinking).
+            # Skip for speaking → thinking (watchdog re-inject, tool-call second pass)
+            # so the user doesn't hear keyboard noise with no new user turn.
+            if old_str == "listening":
+                try:
+                    if _kb_auto_stop_task and not _kb_auto_stop_task.done():
+                        _kb_auto_stop_task.cancel()
+                    if _kb_handle and not _kb_handle.done():
+                        _kb_handle.stop()
+                    _kb_handle = _bg_audio.play(
+                        AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.55)
+                    )
+                    # Auto-stop after 4 s so long tool calls don't loop the sound
+                    async def _auto_stop_kb(_h=_kb_handle) -> None:
+                        await asyncio.sleep(4.0)
+                        try:
+                            if _h and not _h.done():
+                                _h.stop()
+                        except Exception:
+                            pass
+                    _kb_auto_stop_task = asyncio.create_task(_auto_stop_kb())
+                except Exception:
+                    pass
         else:
             _log.info(f"[STATE] unhandled state {state_str!r} — no action taken")
 
