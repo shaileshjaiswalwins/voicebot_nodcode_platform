@@ -741,6 +741,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _muted_inject_sent_time: float = 0.0
     _muted_capture_empty_time: float = 0.0
     _muted_filler_dropped_time: float = 0.0
+    # Set when a FINAL is rejected as noise (Silero/calibration/short-noise/
+    # bystander/babble). LiveKit's turn_detection="stt" still auto-fires an LLM
+    # reply off the rejected FINAL; this timestamp lets the speaking-start guard
+    # kill that spurious turn. Reset on every legitimate reply path so only the
+    # implicit noise-driven auto-reply reaches the guard with it set.
+    _silero_rejected_time: float = 0.0
     _muted_transcript_log: list = []
     _close_status = "completed"
     _abusive_detected = False
@@ -1248,7 +1254,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     def _on_user_spoke(ev) -> None:
         nonlocal _turn_counter, _live_transcript, _pending_user_text, _current_window_pcm
         nonlocal _call_ended, _early_inject_done, _abusive_detected, _close_status
-        nonlocal _first_partial_time, _silero_rejected_turns
+        nonlocal _first_partial_time, _silero_rejected_turns, _silero_rejected_time
         if not _call_ended:
             _reset_inactivity(from_user_speech=True)
         is_final = getattr(ev, "is_final", True)
@@ -1337,6 +1343,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         if _live_transcript and _live_transcript[-1]["role"] == "user":
                             _live_transcript.pop()
                         _silero_rejected_turns.add(transcript_text)
+                        _silero_rejected_time = asyncio.get_event_loop().time()
                         _muted_transcript_log.append(f"[low-confidence] {transcript_text}")
                         return
                 _log.info(f"[STT] Silero confirmed FINAL (voiced_ms={_voiced:.0f})")
@@ -1347,6 +1354,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 if _live_transcript and _live_transcript[-1]["role"] == "user":
                     _live_transcript.pop()
                 _silero_rejected_turns.add(transcript_text)
+                _silero_rejected_time = asyncio.get_event_loop().time()
                 return
             # Short noise filter (speech_ms_now was computed before window reset)
             if speech_ms_now < 350:
@@ -1363,6 +1371,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     if _live_transcript and _live_transcript[-1]["role"] == "user":
                         _live_transcript.pop()
                     _silero_rejected_turns.add(transcript_text)
+                    _silero_rejected_time = asyncio.get_event_loop().time()
                     _muted_transcript_log.append(f"[noise-filtered] {transcript_text}")
                     return
             # Bystander filter
@@ -1371,6 +1380,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 if _live_transcript and _live_transcript[-1]["role"] == "user":
                     _live_transcript.pop()
                 _silero_rejected_turns.add(transcript_text)
+                _silero_rejected_time = asyncio.get_event_loop().time()
                 return
             # Space-repetition babble filter (e.g. "पास पास पास पास पास पास" from STT)
             if _is_repetitive_babble(transcript_text):
@@ -1380,6 +1390,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 elif _live_transcript and _live_transcript[-1] == {"role": "user", "text": transcript_text}:
                     _live_transcript.pop()
                 _silero_rejected_turns.add(transcript_text)
+                _silero_rejected_time = asyncio.get_event_loop().time()
                 _muted_transcript_log.append(f"[babble-filtered] {transcript_text}")
                 return
             # IVR / busy-line detection
@@ -1434,6 +1445,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     _silero_rejected_turns.add(transcript_text)
                     return
 
+            # Real turn accepted — clear the noise flag so the auto-reply for
+            # THIS turn is not mistaken for a spurious one by the speaking guard.
+            _silero_rejected_time = 0.0
             _user_entry: dict = {"role": "user", "text": transcript_text}
             if _had_partial and _live_transcript and _live_transcript[-1]["role"] == "user":
                 _live_transcript[-1] = _user_entry
@@ -1519,6 +1533,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _tokens = set(_normalize_stt_tokens(transcript_text))
                 if _tokens and _tokens <= _SHORT_TERMINAL_TOKENS:
                     try:
+                        _silero_rejected_time = 0.0  # explicit real-turn reply
                         session.generate_reply(user_input=transcript_text)
                         _early_inject_done = True
                         _log.info(
@@ -1534,7 +1549,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         nonlocal _barge_in_fired, _bot_resp_watchdog_task, _speaking_start_time
         nonlocal _thinking_start_time
         nonlocal _speaking_turns_completed, _muted_capture_empty_time, _muted_filler_dropped_time
-        nonlocal _last_user_final_text, _final_arrived_while_speaking
+        nonlocal _last_user_final_text, _final_arrived_while_speaking, _silero_rejected_time
         nonlocal _kb_handle, _kb_auto_stop_task
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
@@ -1622,8 +1637,28 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 if _muted_transcript_log and _muted_transcript_log[-1] == _muted_inject["text"]:
                     _muted_transcript_log.pop()
                 _muted_inject["text"] = ""
-            # Echo guard: new speaking turn within 200ms of empty muted-capture
             _now_eg = asyncio.get_event_loop().time()
+            # Silero-reject guard: this speaking turn was auto-fired by LiveKit's
+            # turn_detection="stt" off a FINAL we rejected as noise. _on_user_spoke
+            # can suppress the transcript but cannot stop the auto-reply, so kill the
+            # spurious turn here before any audio plays. A real accepted turn or any
+            # explicit generate_reply resets _silero_rejected_time, so only the
+            # implicit noise-driven reply reaches here with the flag set.
+            if (
+                _greeting_done
+                and _silero_rejected_time > 0
+                and (_now_eg - _silero_rejected_time) < 4.0
+            ):
+                _log.warning(
+                    f"[SILERO-GUARD] speaking turn {(_now_eg - _silero_rejected_time)*1000:.0f}ms "
+                    "after Silero-rejected FINAL — spurious auto-reply, interrupting"
+                )
+                _silero_rejected_time = 0.0
+                _last_user_final_text = ""
+                _barge_in_fired = True
+                session.interrupt()
+                return
+            # Echo guard: new speaking turn within 200ms of empty muted-capture
             if (
                 _greeting_done
                 and _muted_capture_empty_time > 0
