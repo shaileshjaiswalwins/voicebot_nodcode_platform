@@ -1836,7 +1836,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if (
                 _greeting_done
                 and _muted_filler_dropped_time > 0
-                and (_now_eg - _muted_filler_dropped_time) < 1.5
+                and (_now_eg - _muted_filler_dropped_time) < 0.8
             ):
                 _log.warning(
                     f"[FILLER-GUARD] new speaking turn {(_now_eg - _muted_filler_dropped_time)*1000:.0f}ms "
