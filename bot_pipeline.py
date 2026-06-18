@@ -290,7 +290,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _max_call_duration = 300
     # Pipeline mode: higher threshold than bot.py defaults — filters TTS echo
     # and background IVR music that would otherwise pass the muted-capture gate.
-    _silero_threshold = float(_bot_config.get("silero_threshold") or 0.7)
+    _silero_threshold = float(_bot_config.get("silero_threshold") or 0.6)
     _silero_min_speech_ms = int(_bot_config.get("silero_min_speech_ms") or 1000)
     _post_speech_hold_ms = int(_bot_config.get("post_speech_hold_ms") or 400)
     _inactivity_first_rescue_secs = float(_bot_config.get("inactivity_first_rescue_secs") or 4.0)
@@ -350,6 +350,22 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     system_instruction = build_system_prompt(
         _prefetched_lead, lang_key=_language, bot_config=_bot_config
     )
+
+    # Log the exact qualification questions the backend returned for this lead, so
+    # the set the bot is supposed to ask is visible in the call logs. Source: the
+    # FetchLead API response → results.search_result.question array, stored on the
+    # lead record as qualification_schema["question"]. NOTE: the bot also asks
+    # hardcoded steps on top of these (product confirmation + business name + city
+    # via the BUSINESS GATE), so total asks > backend question count by design.
+    try:
+        _qs = ((_prefetched_lead or {}).get("qualification_schema") or {}).get("question") or []
+        _q_texts = [q.get("text", "").strip() for q in _qs]
+        _log.info(
+            f"[QUESTIONS] backend returned {len(_qs)} qualification question(s) "
+            f"for catname={(_prefetched_lead or {}).get('catname')!r}: {_q_texts}"
+        )
+    except Exception as _q_ex:
+        _log.warning(f"[QUESTIONS] could not read qualification_schema: {_q_ex}")
 
     # ── 5. Pipeline plugins: Sarvam STT → Gemini LLM → Sarvam TTS ──
     # STT: saaras:v3 transcribe with flush_signal — Sarvam handles turn detection
@@ -1369,10 +1385,25 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _voiced = _silero_voiced_ms(_pcm_snapshot, _silero_threshold)
                 if _voiced < _silero_min_speech_ms:
                     _voiced_ratio = _voiced / speech_ms_now if speech_ms_now > 0 else 0.0
+                    _distinct_words = len(set(_normalize_stt_tokens(transcript_text)))
                     if _voiced >= 60 or _voiced_ratio >= 0.08:
                         _log.info(
                             f"[STT] Silero weak but trace speech present — accepting "
                             f"{transcript_text!r} (voiced_ms={_voiced:.0f}, ratio={_voiced_ratio:.2%})"
+                        )
+                    elif _distinct_words >= 3:
+                        # Silero found ~zero voiced energy — typically the user spoke
+                        # over/right after the bot's audio, so the window is echo-polluted
+                        # or quiet. But a coherent 3+ distinct-word phrase is almost
+                        # certainly real speech; Sarvam STT does not fabricate that from
+                        # line noise. Trust the STT here so genuine answers aren't dropped
+                        # (which forces the bot to re-ask). Short/single-token and repeated
+                        # hallucinations stay strictly gated, and the calibration /
+                        # short-noise / bystander / babble filters below still apply.
+                        _log.info(
+                            f"[STT] Silero near-zero but multi-word coherent phrase — "
+                            f"trusting STT: {transcript_text!r} "
+                            f"(distinct_words={_distinct_words}, voiced_ms={_voiced:.0f})"
                         )
                     else:
                         _log.info(
