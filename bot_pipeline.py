@@ -1873,33 +1873,60 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
         elif state_str in ("listening", "idle"):
             speaking_duration = asyncio.get_event_loop().time() - _speaking_start_time
-            _speaking_turns_completed += 1
-            # TTS duration Langfuse span (speaking_start → speaking_end)
-            if _lf_trace and _greeting_done and speaking_duration > 0.1:
-                try:
-                    _lf_trace.span(
-                        name=f"tts-turn-{_speaking_turns_completed}",
-                        metadata={
-                            "duration_ms": round(speaking_duration * 1000),
-                            "model": "bulbul:v3-simran",
-                        },
-                    ).end()
-                except Exception:
-                    pass
-            if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
-                _bot_resp_watchdog_task.cancel()
-                _bot_resp_watchdog_task = None
-            if (
-                not _call_ended and not _closing_triggered
+            if old_str == "speaking":
+                # A real bot turn just ended (spoken to completion or barged into).
+                _speaking_turns_completed += 1
+                # TTS duration Langfuse span (speaking_start → speaking_end)
+                if _lf_trace and _greeting_done and speaking_duration > 0.1:
+                    try:
+                        _lf_trace.span(
+                            name=f"tts-turn-{_speaking_turns_completed}",
+                            metadata={
+                                "duration_ms": round(speaking_duration * 1000),
+                                "model": "bulbul:v3-simran",
+                            },
+                        ).end()
+                    except Exception:
+                        pass
+                if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
+                    _bot_resp_watchdog_task.cancel()
+                    _bot_resp_watchdog_task = None
+                if (
+                    not _call_ended and not _closing_triggered
+                    and _last_user_final_text
+                    and speaking_duration < 1.5
+                    and not _final_arrived_while_speaking
+                ):
+                    _bot_resp_watchdog_task = asyncio.create_task(
+                        _bot_response_watchdog(
+                            _last_user_final_text, _last_user_final_turn, timeout=1.0,
+                            speaking_count_at_start=_speaking_turns_completed,
+                        )
+                    )
+            elif (
+                old_str == "thinking"
+                and not _call_ended and not _closing_triggered
                 and _last_user_final_text
-                and speaking_duration < 1.5
-                and not _final_arrived_while_speaking
             ):
+                # thinking → listening = the LLM generation was cancelled before any
+                # audio (a new user FINAL arrived mid-thinking, or an empty/errored
+                # generation). This is NOT a completed turn: do NOT count it (counting
+                # it fooled the response-watchdog into thinking the bot had replied
+                # and left the call permanently silent). Re-inject the latest user
+                # turn fast so it still gets answered. If LiveKit re-enters "thinking"
+                # on its own first, the watchdog's thinking/speaking guard suppresses
+                # this, so there's no duplicate reply.
+                if _bot_resp_watchdog_task and not _bot_resp_watchdog_task.done():
+                    _bot_resp_watchdog_task.cancel()
                 _bot_resp_watchdog_task = asyncio.create_task(
                     _bot_response_watchdog(
                         _last_user_final_text, _last_user_final_turn, timeout=1.0,
                         speaking_count_at_start=_speaking_turns_completed,
                     )
+                )
+                _log.info(
+                    f"[LLM-WATCHDOG] generation cancelled mid-thinking — fast re-inject "
+                    f"scheduled (turn={_last_user_final_turn}): {_last_user_final_text!r}"
                 )
             if _bot_has_spoken and not _greeting_done:
                 _greeting_done = True
