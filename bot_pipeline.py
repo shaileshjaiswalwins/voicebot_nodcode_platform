@@ -747,6 +747,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # kill that spurious turn. Reset on every legitimate reply path so only the
     # implicit noise-driven auto-reply reaches the guard with it set.
     _silero_rejected_time: float = 0.0
+    # Consecutive Silero rejections (reset whenever a turn is accepted). If Silero
+    # starts rejecting genuine speech in a sustained streak (degraded audio path /
+    # model failure), the guard must stop interrupting — otherwise it mutes the
+    # whole call. Real conversations don't produce long runs of pure noise turns.
+    _consecutive_silero_rejects: int = 0
     _muted_transcript_log: list = []
     _close_status = "completed"
     _abusive_detected = False
@@ -923,9 +928,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _muted_capture["frames"].append(chunk)
                 _muted_capture["speech_ms"] += frame_ms
             else:
-                # Live window: accumulate for Silero gate on FINAL STT events
-                if len(_current_window_pcm) < _MAX_WINDOW:
-                    _current_window_pcm += chunk
+                # Live window: rolling last ~5 s for the Silero gate on FINAL STT
+                # events. Must be a ROLLING window (keep the most recent audio),
+                # not fill-then-drop: the mic unmutes ~4 s into a ~10 s bot turn
+                # (4s-speaking-unmute for barge-in), so bot-echo/line-silence
+                # accumulates first. A fixed cap that dropped new audio filled the
+                # window with that echo and starved Silero of the user's actual
+                # speech (voiced_ms=0 → false rejection). Trimming the front keeps
+                # the user's words, which are always the most recent samples.
+                _current_window_pcm += chunk
+                _overflow = len(_current_window_pcm) - _MAX_WINDOW
+                if _overflow > 0:
+                    del _current_window_pcm[:_overflow]
 
     async def _transcribe_muted_period(frames: list, speech_ms: float) -> None:
         """Transcribe audio captured during a muted window using Sarvam batch STT.
@@ -1255,6 +1269,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         nonlocal _turn_counter, _live_transcript, _pending_user_text, _current_window_pcm
         nonlocal _call_ended, _early_inject_done, _abusive_detected, _close_status
         nonlocal _first_partial_time, _silero_rejected_turns, _silero_rejected_time
+        nonlocal _consecutive_silero_rejects
         if not _call_ended:
             _reset_inactivity(from_user_speech=True)
         is_final = getattr(ev, "is_final", True)
@@ -1344,9 +1359,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             _live_transcript.pop()
                         _silero_rejected_turns.add(transcript_text)
                         _silero_rejected_time = asyncio.get_event_loop().time()
+                        _consecutive_silero_rejects += 1
                         _muted_transcript_log.append(f"[low-confidence] {transcript_text}")
                         return
+                    _consecutive_silero_rejects = 0  # weak-but-accepted counts as a real turn
                 _log.info(f"[STT] Silero confirmed FINAL (voiced_ms={_voiced:.0f})")
+                _consecutive_silero_rejects = 0
             # Calibration hallucination filter
             _norm_transcript = unicodedata.normalize("NFC", transcript_text.strip())
             if _norm_transcript in _GEMINI_CALIBRATION_HALLUCINATIONS:
@@ -1448,6 +1466,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # Real turn accepted — clear the noise flag so the auto-reply for
             # THIS turn is not mistaken for a spurious one by the speaking guard.
             _silero_rejected_time = 0.0
+            _consecutive_silero_rejects = 0
             _user_entry: dict = {"role": "user", "text": transcript_text}
             if _had_partial and _live_transcript and _live_transcript[-1]["role"] == "user":
                 _live_transcript[-1] = _user_entry
@@ -1550,6 +1569,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         nonlocal _thinking_start_time
         nonlocal _speaking_turns_completed, _muted_capture_empty_time, _muted_filler_dropped_time
         nonlocal _last_user_final_text, _final_arrived_while_speaking, _silero_rejected_time
+        nonlocal _consecutive_silero_rejects
         nonlocal _kb_handle, _kb_auto_stop_task
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
@@ -1649,15 +1669,25 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 and _silero_rejected_time > 0
                 and (_now_eg - _silero_rejected_time) < 4.0
             ):
-                _log.warning(
-                    f"[SILERO-GUARD] speaking turn {(_now_eg - _silero_rejected_time)*1000:.0f}ms "
-                    "after Silero-rejected FINAL — spurious auto-reply, interrupting"
-                )
-                _silero_rejected_time = 0.0
-                _last_user_final_text = ""
-                _barge_in_fired = True
-                session.interrupt()
-                return
+                if _consecutive_silero_rejects >= 2:
+                    # Sustained rejection streak — Silero is likely wrong about real
+                    # speech (degraded audio path). Stop interrupting so the call
+                    # isn't muted; let the bot speak.
+                    _log.warning(
+                        f"[SILERO-GUARD] {_consecutive_silero_rejects} consecutive rejects "
+                        "— Silero likely misfiring, allowing bot to speak"
+                    )
+                    _silero_rejected_time = 0.0
+                else:
+                    _log.warning(
+                        f"[SILERO-GUARD] speaking turn {(_now_eg - _silero_rejected_time)*1000:.0f}ms "
+                        "after Silero-rejected FINAL — spurious auto-reply, interrupting"
+                    )
+                    _silero_rejected_time = 0.0
+                    _last_user_final_text = ""
+                    _barge_in_fired = True
+                    session.interrupt()
+                    return
             # Echo guard: new speaking turn within 200ms of empty muted-capture
             if (
                 _greeting_done
