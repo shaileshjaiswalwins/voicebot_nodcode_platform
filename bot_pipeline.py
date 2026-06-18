@@ -1208,6 +1208,44 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         )
         if hold_handle and not hold_handle.interrupted and not hold_handle.done():
             hold_handle.interrupt()
+        # Log + dump the questions fetched for this product. Test numbers have no
+        # lead attached, so questions arrive ONLY here (via the product search),
+        # not at call start — this is the authoritative count to send the backend.
+        # _execute_function_call persists the schema onto the lead record, so the
+        # raw question objects are read back from there.
+        try:
+            _sch = (call_state.get("lead_record") or {}).get("qualification_schema") or {}
+            _qs = _sch.get("question") or []
+            _q_texts = [q.get("text", "").strip() for q in _qs]
+            _log.info(
+                f"[QUESTIONS] FetchCategorySchema(srchterm={srchterm!r}) → "
+                f"{result.get('total_questions', len(_qs))} question(s) for "
+                f"product={result.get('product', '?')!r}: {_q_texts}"
+            )
+            try:
+                _safe_term = re.sub(r"[^A-Za-z0-9]+", "_", srchterm)[:30] or "term"
+                _ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                _dump_path = f"question_api_response_{_room_mobile or 'unknown'}_{_safe_term}_{_ts}.json"
+                with open(_dump_path, "w", encoding="utf-8") as _f:
+                    json.dump(
+                        {
+                            "fetched_at": datetime.now(timezone.utc).isoformat(),
+                            "mobile": _room_mobile,
+                            "srchterm": srchterm,
+                            "product": result.get("product"),
+                            "question_count": len(_qs),
+                            "questions": _qs,
+                            "qualification_schema": _sch,
+                        },
+                        _f,
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                _log.info(f"[QUESTIONS] raw FetchCategorySchema payload dumped → {_dump_path}")
+            except Exception as _dump_ex:
+                _log.warning(f"[QUESTIONS] FetchCategorySchema dump failed: {_dump_ex}")
+        except Exception as _q_ex:
+            _log.warning(f"[QUESTIONS] could not read FetchCategorySchema questions: {_q_ex}")
         return result
 
     @function_tool
