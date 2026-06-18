@@ -1063,15 +1063,19 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             return
         try:
             _agent_s_val = getattr(session.agent_state, "value", None) or str(session.agent_state)
-            if _agent_s_val == "speaking":
+            # Suppress when a generation is already in flight. Both "thinking"
+            # (LLM generating) and "speaking" (TTS playing) mean a reply is coming;
+            # re-injecting stacks a duplicate turn. Only re-inject from a quiescent
+            # state (listening/idle) where nothing is actually responding.
+            if _agent_s_val in ("thinking", "speaking"):
                 _log.info(
-                    f"[LLM-WATCHDOG] Bot currently speaking — suppressing re-inject (turn={turn})"
+                    f"[LLM-WATCHDOG] Bot currently {_agent_s_val} — suppressing re-inject (turn={turn})"
                 )
                 return
         except Exception:
             pass
         _log.warning(
-            f"[LLM-WATCHDOG] No response to {user_text!r} in 8s — re-injecting (turn={turn})"
+            f"[LLM-WATCHDOG] No response to {user_text!r} in {timeout:.0f}s — re-injecting (turn={turn})"
         )
         try:
             session.generate_reply(user_input=user_text)
@@ -1092,8 +1096,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             return
         try:
             _agent_s_val = getattr(session.agent_state, "value", None) or str(session.agent_state)
-            if _agent_s_val == "speaking":
-                _log.info(f"[STALE-PARTIAL] Bot already speaking — suppressing re-inject for {text!r}")
+            # Suppress while a generation is in flight (thinking = LLM generating,
+            # speaking = TTS playing); re-injecting either way stacks a duplicate.
+            if _agent_s_val in ("thinking", "speaking"):
+                _log.info(f"[STALE-PARTIAL] Bot already {_agent_s_val} — suppressing re-inject for {text!r}")
                 return
         except Exception:
             pass
