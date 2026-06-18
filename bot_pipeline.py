@@ -364,6 +364,31 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             f"[QUESTIONS] backend returned {len(_qs)} qualification question(s) "
             f"for catname={(_prefetched_lead or {}).get('catname')!r}: {_q_texts}"
         )
+        # Dump the raw lead record (incl. qualification_schema) the question-fetch
+        # API returned, so it can be handed to the backend team as evidence of the
+        # exact question payload received (e.g. when more questions arrive than
+        # expected). One file per call, named by mobile + UTC timestamp.
+        try:
+            _ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            _dump_path = f"question_api_response_{_room_mobile or 'unknown'}_{_ts}.json"
+            with open(_dump_path, "w", encoding="utf-8") as _f:
+                json.dump(
+                    {
+                        "fetched_at": datetime.now(timezone.utc).isoformat(),
+                        "mobile": _room_mobile,
+                        "lead_id": (_prefetched_lead or {}).get("_id"),
+                        "catname": (_prefetched_lead or {}).get("catname"),
+                        "question_count": len(_qs),
+                        "questions": _qs,
+                        "lead_record": _prefetched_lead,
+                    },
+                    _f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            _log.info(f"[QUESTIONS] raw question-API payload dumped → {_dump_path}")
+        except Exception as _dump_ex:
+            _log.warning(f"[QUESTIONS] schema dump failed: {_dump_ex}")
     except Exception as _q_ex:
         _log.warning(f"[QUESTIONS] could not read qualification_schema: {_q_ex}")
 
