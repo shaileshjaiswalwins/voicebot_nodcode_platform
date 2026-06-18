@@ -1252,7 +1252,20 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     _early_close_muting = True
                     _set_mic(False, reason="commit-closing-phrase")
                     _log.info("[CLOSE DETECT] Partial closing phrase detected in commit — mic muted")
-            if _is_closing_phrase(_closing_buffer):
+            # Closing detection. Evaluate the CURRENT turn (text), not the
+            # accumulated _closing_buffer: a polite "शुक्रिया"/"धन्यवाद" in an
+            # earlier turn must not end a later one. And a turn that still asks a
+            # question is mid-conversation, NOT a close — bare thank-you words are
+            # in _CLOSE_MARKERS and the bot uses them politely before its next
+            # question. Only a strong "sellers will contact / details मिल गईं"
+            # signal forces a close regardless of phrasing.
+            _strong_close = any(m in text.lower() for m in (
+                "details मिल गईं",
+                "sellers आपसे contact",
+                "sellers will contact",
+                "all details",
+            ))
+            if _is_closing_phrase(text) and (_strong_close or "?" not in text):
                 _closing_triggered = True
                 call_state["ended_naturally"] = True
                 if _is_not_interested_close(text):
@@ -1263,6 +1276,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _log.info(f"[CLOSE DETECT] Closing phrase matched — status={_close_status!r} — scheduling end")
                 _set_mic(False, reason="closing-phrase-matched")
                 asyncio.create_task(_handle_close())
+            elif _is_closing_phrase(text):
+                _log.info(
+                    f"[CLOSE DETECT] closing marker in a mid-conversation question turn "
+                    f"— ignoring: {text!r}"
+                )
 
     @session.on("user_input_transcribed")
     def _on_user_spoke(ev) -> None:
