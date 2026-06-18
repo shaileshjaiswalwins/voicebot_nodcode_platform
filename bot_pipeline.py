@@ -1272,7 +1272,52 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     system_instruction = system_instruction + _LATENCY_HINT
 
     tools = [FetchCategorySchema, FetchLead] if _function_calling else []
-    agent = Agent(instructions=system_instruction, tools=tools)
+
+    # Sanitize text before it reaches Sarvam TTS. The LLM occasionally leaks
+    # bracketed stage-directions into spoken text (e.g. the product-change line
+    # "जी, एक second जी — देख रहे हैं। (Calling FetchCategorySchema...)"). A segment
+    # with no Hindi/English/digit character makes Sarvam return HTTP 400 ("Text
+    # must contain at least one character from the allowed languages"), which
+    # crashes the whole TTS turn and leaves the bot silent until the inactivity
+    # nudge. Strip "(...)" parentheticals and drop punctuation-only segments so
+    # Sarvam only ever receives speakable text.
+    _TTS_SPEAKABLE_RE = re.compile(r"[A-Za-z0-9ऀ-ॿ]")
+
+    class _TTSSanitizingAgent(Agent):
+        async def tts_node(self, text, model_settings):
+            async def _clean():
+                depth = 0
+                dropped: list[str] = []
+                async for chunk in text:
+                    if not chunk:
+                        continue
+                    keep, drop = [], []
+                    for ch in chunk:
+                        if ch == "(":
+                            depth += 1
+                            drop.append(ch)
+                        elif ch == ")":
+                            drop.append(ch)
+                            if depth > 0:
+                                depth -= 1
+                        elif depth > 0:
+                            drop.append(ch)
+                        else:
+                            keep.append(ch)
+                    cleaned = "".join(keep)
+                    if cleaned and (cleaned.isspace() or _TTS_SPEAKABLE_RE.search(cleaned)):
+                        yield cleaned
+                    elif cleaned:
+                        drop.append(cleaned)  # non-whitespace, no speakable char
+                    if drop:
+                        dropped.append("".join(drop))
+                if dropped:
+                    _log.info(f"[TTS-SANITIZE] removed non-speakable text from TTS: {''.join(dropped)!r}")
+
+            async for frame in Agent.default.tts_node(self, _clean(), model_settings):
+                yield frame
+
+    agent = _TTSSanitizingAgent(instructions=system_instruction, tools=tools)
     # No VAD — Sarvam STT with flush_signal handles speech start/end events natively.
     # turn_detection="stt" tells AgentSession to trust Sarvam's speech boundaries.
     # min_endpointing_delay=0.05 — LLM starts 50ms after STT FINAL (was 70ms).
