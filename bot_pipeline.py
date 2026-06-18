@@ -1095,8 +1095,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     f"[LLM-WATCHDOG] Bot currently {_agent_s_val} — suppressing re-inject (turn={turn})"
                 )
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning(
+                f"[LLM-WATCHDOG] Could not read agent_state — suppressing re-inject (turn={turn}): {e}"
+            )
+            return
         _log.warning(
             f"[LLM-WATCHDOG] No response to {user_text!r} in {timeout:.0f}s — re-injecting (turn={turn})"
         )
