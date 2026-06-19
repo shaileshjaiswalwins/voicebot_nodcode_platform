@@ -78,6 +78,8 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
         "call_outcome_description": analysis.get("call_outcome_description", ""),
         "call_summary": analysis.get("call_summary", ""),
         "is_business": analysis.get("is_business", ""),
+        "business_intent": analysis.get("business_intent", ""),
+        "b2b_user": analysis.get("b2b_user", ""),
         "business_name": analysis.get("business_name", ""),
         "business_city": analysis.get("business_city", ""),
         "qna": analysis.get("qna") or [],
