@@ -225,7 +225,7 @@ CATEGORY_CHANGE_API = f"{MIS_API_BASE}/leads/ai-lead-qualify/search"
 IST = timezone(timedelta(hours=5, minutes=30))
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://192.168.13.65:27017")
-MONGO_DB = "ai_lead_qualify_dev"
+MONGO_DB = "ai_lead_qualify"
 MONGO_COLLECTION = "call_transcripts"
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
