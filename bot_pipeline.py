@@ -6,7 +6,7 @@ Unlike bot.py (which uses Gemini Live s2s / RealtimeModel), this file runs a
 classic three-stage pipeline:
   STT:  sarvam.STT (saaras:v3 transcribe, flush_signal)     [needs SARVAM_API_KEY]
   LLM:  google.LLM (Gemini 3.1 Flash Lite)                 [needs GEMINI_API_KEY]
-  TTS:  sarvam.TTS (bulbul:v3, simran, mp3/22050)           [needs SARVAM_API_KEY]
+  TTS:  sarvam.TTS (bulbul:v3, simran, linear16/24000)       [needs SARVAM_API_KEY]
 
 All genuine business logic (config fetch, prompt building, transcript save, IVR
 detection, closing-phrase detection, function tools, muted-window audio capture,
@@ -398,10 +398,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         model="bulbul:v3",
         speaker="simran",
         api_key=SARVAM_API_KEY or None,
-        # linear16 at 22050Hz (Sarvam native rate, no internal downsampling).
-        # No MP3 frame-boundary artifacts in streaming mode. LiveKit handles
-        # the 22050→48000→8000 SIP chain with its own high-quality resampler.
-        speech_sample_rate=22050,
+        # linear16 at 24000Hz: 24000×50ms = 1200 samples (integer, no drift).
+        # 22050Hz gave 1102.5 samples/frame causing accumulating timing jitter.
+        # 24000→48000Hz is exact 2× upsample (no aliasing vs 22050's 2.177×).
+        speech_sample_rate=24000,
         output_audio_codec="linear16",
         temperature=0.75,
         pace=1.0,
