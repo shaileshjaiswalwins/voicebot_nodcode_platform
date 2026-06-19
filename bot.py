@@ -363,7 +363,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "NO:\n"
         "→ \"कोई और product देख रहे हैं?\"\n"
         "→ Different product → treat as product change\n"
-        "→ Nothing needed → \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop\n\n"
+        "→ Nothing needed → say the NOT-INTERESTED close (defined above) → stop\n\n"
         "Unclear / partial / side question:\n"
         "→ Read intent. If clearly interested: bridge and ask Q1.\n"
         "→ If unclear: \"जी, तो क्या आपको [product] चाहिए?\"\n"
@@ -373,7 +373,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "→ CRITICAL: 'info', 'इनफो', 'information', 'jankari', 'details', 'bata do', 'batao' alone are NOT product confirmations — the caller is asking what this call is about, not saying they need the product. Re-ask: \"जी, तो क्या आपको [product] चाहिए?\"\n"
         "→ CRITICAL: If the opening response bundles a bare acknowledgement ('हां', 'हेलो', 'जी') WITH an identity or origin question — 'आप कहां से बोल रहे हो?', 'कौन बोल रहा है?', 'कंप्यूटर कॉल?', 'कौन सी company है?' — it is NOT a product confirmation. First address the identity question briefly: 'जी, मैं Simran बोल रही हूँ Justdial से.' Then re-ask: 'तो क्या आपको [product] चाहिए?' Do NOT advance to Q1 until you have a standalone product confirmation.\n"
         "→ Re-ask the opening once: \"जी, तो क्या आपको [product] चाहिए?\"\n"
-        "→ If still no clear answer after one re-ask → \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop.\n\n"
+        "→ If still no clear answer after one re-ask → say the NOT-INTERESTED close (defined above) → stop.\n\n"
         "Step 2 — Questions\n"
         "In order. ONE question per turn — this is a hard rule with no exceptions.\n"
         "HARD RULE: If you find yourself writing 'और', 'or', 'साथ में', 'also', or any conjunction that links two questions — DELETE the second question. Ask it next turn.\n"
@@ -524,14 +524,14 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Off-topic / irrelevant:\n"
         "Brief warm acknowledge, then re-ask: \"हाँ — तो [current question]?\"\n"
         "Persistent off-topic loop (3+ times): \"मैं सिर्फ requirements note कर रही हूँ — [current question]?\"\n\n"
-        "Not interested: \"ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop\n"
+        "Not interested: say the NOT-INTERESTED close (defined above) → stop\n"
         "Job-seeking caller — TWO cases, handled differently:\n"
         "\n"
         "CASE A — Explicit upfront signal: caller directly states they want a job before any qualification questions begin.\n"
         "Signals (common examples — not exhaustive): \"नौकरी चाहिए\", \"जॉब चाहिए\", \"job chahiye\", \"naukri chahiye\", \"rozgar chahiye\", \"job milega\", \"vacancy hai kya\", \"apply karna hai\", \"job ke liye apply\", \"job se related hoon\", \"जॉब से रिलेटेड\", \"job search kar raha/rahi hoon\", \"job dhundh raha/rahi hoon\", \"interview ke liye call\", \"resume bheja tha\", \"fresher hoon\", \"part time job chahiye\", \"ghar se kaam chahiye\".\n"
         "Core rule: if the caller's first substantive response makes clear they are personally seeking employment — not buying a product — close immediately. Do NOT ask a clarifying question for Case A.\n"
         "Action: acknowledge in one sentence, then close immediately with the NOT-INTERESTED phrase.\n"
-        "Example: \"जी, यह Justdial का product enquiry number है — job opportunities के लिए हम help नहीं कर सकते. ठीक है जी, कोई बात नहीं. Future में कोई product की ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.\" → stop\n"
+        "Example: one line — \"जी, यह Justdial का product enquiry number है — job opportunities के लिए हम help नहीं कर सकते.\" — then the NOT-INTERESTED close (defined above). → stop\n"
         "\n"
         "CASE B — Mid-conversation signal: caller has already confirmed the product, but their answers to qualification questions reveal they are describing their OWN experience, qualifications, or career (not a hiring need).\n"
         "Examples of mid-conversation signals: \"mera experience 5 saal hai\", \"maine CNC operate kiya\", \"mujhe job karna tha\", \"main khud job dhundh raha hoon\", \"मैंने diploma किया है\", \"experience है मेरे पास\".\n"
@@ -542,7 +542,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "  → If still unclear after clarification: treat as job-seeker and close. → stop\n"
         "Rude, abusive, or profane language: close immediately — \"ठीक है जी, शुक्रिया.\" → stop. Do NOT respond to the content of abusive speech.\n"
         "Reschedule: \"ठीक है जी, [time] पे बात करते हैं.\" → stop\n"
-        "EXCEPTION — enrichment complete: if ALL qualification questions are already answered (every question has a real answer or Not Sure), do NOT use the reschedule phrase regardless of whether a specific time was given. Instead say the success closing: \"ठीक है जी, सारी details मिल गईं — relevant sellers आपको directly call करेंगे. आपका समय देने के लिए शुक्रिया.\" → stop\n"
+        "EXCEPTION — enrichment complete: if ALL qualification questions are already answered (every question has a real answer or Not Sure), do NOT use the reschedule phrase regardless of whether a specific time was given. Instead say the Step 3 closing line (defined above). → stop\n"
         "CRITICAL — TIME-REFERENCE OVERRIDES QUANTITY: If the buyer says any number word (चार, पाँच, दस, 4, 5, etc.) followed by OR near a time-of-day word (बजे, o'clock, AM, PM, बजे के बाद, बजे तक, घंटे बाद) — treat the ENTIRE utterance as a reschedule request, NOT as a quantity answer. Even if you are currently on the quantity question. Even if the number appears first and the time word appears in a fragment you only partially heard. Respond: \"ठीक है जी, [time] पे बात करते हैं.\" → stop immediately. Do NOT ask the quantity question again.\n"
         "Example: buyer says 'मैम, चार बजे बात कर रहे हैं' or just 'चार बजे' or 'four बजे' while you are asking about quantity → this is reschedule, not an answer of 4 units.\n\n"
 
@@ -940,16 +940,11 @@ def build_questions_text(schema: dict, is_business=None) -> str:
             else:
                 lines.append(f"{i}. {text}")
 
-    if is_business == "":
-        n = len(questions)
-        lines.append(f"")
-        lines.append(f"[BUSINESS GATE — applies mid-call, not at end]")
-        lines.append(f"If gate triggers during Q1–Q{n} (qty ≥ 100 bulk/count unit, or business keyword):")
-        lines.append(f"  → Acknowledge plainly, then ask 'आपके business का नाम क्या है?' → then for city: if buyer mentioned a city earlier reconfirm 'क्या आपका business [city] में है?', else ask 'और कौन से city में?' → then resume remaining questions.")
-        lines.append(f"If gate does NOT trigger:")
-        lines.append(f"  → After Q{n}, ask 'एक बात और — क्या यह business के लिए है?'")
-        lines.append(f"  → If YES: ask business name → city → closing.")
-        lines.append(f"  → If NO/personal: go straight to closing.")
+    # NOTE: The business-gate handling that used to be restated here is now
+    # emitted once via business_prompt_section in build_system_prompt() (the
+    # detailed version), which is present in the same assembled prompt whenever
+    # is_business == "". The `is_business` param is retained for call-site
+    # compatibility but no longer appends a duplicate block here.
 
     return "\n".join(lines)
 
@@ -1051,8 +1046,17 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
             f"आपको {product_name} की requirement है ना?"
         )
 
-    questions_block = build_questions_text(schema, is_business=is_business if is_business == "" else None)
-    mapping_block = "\n" + _build_question_phrase_rules(questions) + "\n"
+    # Single source for the question list: _build_question_phrase_rules carries
+    # the numbered "meaning → ask in Hindi" framing AND per-type answer
+    # validation (quantity/radio/brand/yes-no) plus options/units — a superset
+    # of build_questions_text's plain list. Emitting it once (instead of once
+    # here and again as a trailing mapping_block) removes a full duplicate copy
+    # of the questions. build_questions_text is still used by the product-change
+    # tool path (_execute_function_call).
+    questions_block = (
+        _build_question_phrase_rules(questions)
+        or "No specific questions — gather general requirements naturally."
+    )
 
     closing_instruction = (
         _bc.get("call_end_text")
@@ -1066,33 +1070,10 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
         business_prompt_section = f"""
 ━━━ BUSINESS USE — CONVERSATIONAL HANDLING ━━━
 
-BUSINESS GATE — triggers when buyer gives a high-quantity answer or uses a business keyword DURING qualification questions.
-
-Triggers:
-  • Quantity ≥ 100 of a BULK or COUNT unit: pieces / pcs / units / sets / boxes / cartons / packets / bags / dozen / rolls / kg / litre / ton / quintal / bori / nag / sack / drum
-  • RANGE ANSWERS: If buyer gives a range (e.g. "30 to 50 units", "50 se 100 kg"), use the HIGHER number for the ≥ 100 check. NEVER concatenate the two numbers — "30 to 50" = range of 30–50 (NOT 3250). Record the full range as given.
-  • NOT triggered by small-measure units: gram / gm / mg / ml / cc / cm / mm / inch / feet — "500 ml" or "100 gram" is personal-scale.
-  • Also triggers on keywords (any quantity):
-      English: "wholesale", "bulk", "shop", "dukaan", "factory", "warehouse", "godown", "B2B", "resale", "retail sale", "food service", "catering", "restaurant", "hotel", "canteen", "office", "commercial", "hospital", "school", "institution"
-      Hindi: "कैटरिंग", "रिटेल", "रिटेल सेल", "फूड सर्विस", "रेस्टोरेंट", "होटल", "दुकान", "फैक्ट्री", "ऑफिस", "थोक", "होलसेल", "रिसेल", "कैंटीन", "अस्पताल", "स्कूल"
-  • RADIO OPTION RULE: If a qualification question offers options and the buyer picks a clearly commercial one (retail sale / food service / catering / wholesale / restaurant / hotel / canteen / institutional — or Hindi equivalents like कैटरिंग / रिटेल / फूड सर्विस) — treat as business trigger. The ONLY non-business options are: "personal consumption", "ghar ke liye", "khud ke liye", "personal use", "पर्सनल", "खुद के लिए", "घर के लिए".
-
-EXACT SEQUENCE when gate triggers — follow this order, no deviations:
-  1. Acknowledge plainly: "इतनी quantity — business के लिए होगी।" (vary wording, NEVER echo the number)
-  2. Ask immediately: "आपके business का नाम क्या है?"
-  3. Wait for answer. Then, for the city:
-     • If the buyer mentioned a city name at ANY point earlier in this call — ask to reconfirm: "क्या आपका business [city] में है?"
-       → If yes: accept it and move on.
-       → If no: ask "तो किस city में है?"
-     • If no city was mentioned yet — ask fresh: "और कौन से city में?"
-  4. Wait for answer. Then continue the remaining qualification questions one at a time.
-  5. After ALL qualification questions are answered, say the closing line.
-
-NEVER ask "business या personal?" — the gate has already answered it.
-NEVER put business name/city at the end — they are asked RIGHT WHEN THE GATE TRIGGERS, before continuing other questions.
+The BUSINESS GATE — its triggers (quantity ≥ 100 of a bulk/count unit, business keywords, commercial radio options) and its exact mid-call sequence (acknowledge plainly without echoing the number → "आपके business का नाम क्या है?" → city → resume remaining questions) — is defined in the "HIGH-QUANTITY → BUSINESS GATE" section above. Apply those rules exactly as written. Business name/city are asked RIGHT WHEN THE GATE TRIGGERS, never at the end, and you NEVER ask "business या personal?" once the gate has triggered.
 
 ─────────────────────────────────────────────────
-If the skip condition is NOT triggered (quantity < 100, no business keywords):
+If the gate is NOT triggered during qualification (quantity < 100, no business keywords):
 
 After ALL qualification questions are answered, ask naturally:
   "एक बात और — क्या यह {product_name} business के लिए चाहिए आपको?"
@@ -1162,7 +1143,7 @@ NEVER move to the next question or close the call if the current question has no
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {business_prompt_section}"""
-    return base + lead_section + mapping_block
+    return base + lead_section
 
 
 # ---------------------------------------------------------------------------
