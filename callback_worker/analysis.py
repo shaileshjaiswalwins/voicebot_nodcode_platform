@@ -1221,6 +1221,15 @@ GLOBAL PRINCIPLES (defined once — referenced by name throughout)
 GP-1  POSITIVE PROGRESSION: A reflex "नहीं" followed by spec details, a product question, or
       continued engagement means product IS confirmed. Classify on the final positive stance,
       not the opening negative.
+      SUB-QUESTION "नहीं": "नहीं" / "नहीं है" / "नहीं पता" / "नहीं है सो" / "कुछ नहीं है
+      पसंद" / "वैसे तो कुछ नहीं चाहिए" spoken in reply to a spec sub-question (quantity,
+      type, size, grade, preference — any question AFTER the opening product question) means
+      "I don't have / don't know that spec / no strong preference," NOT product rejection.
+      The agent continuing to ask the next spec question is structural proof (GP-7) that the
+      requirement is still alive. Do NOT treat this as a rejection.
+      ACTIVE BROWSING: buyer saying "लेना था" / "check kar raha tha" / "dekhna tha" /
+      "सोच रहा था" with no explicit final rejection signals live consideration — treat as
+      Interested, not Not Interested.
 
 GP-2  FINAL STATE WINS:
       • Explicit final rejection overrides earlier weak interest.
@@ -1351,6 +1360,12 @@ SHORT HANGUP
     YES → do NOT use Short Hangup.   NO → Short Hangup.
   NOT ALLOWED IF: buyer said "नहीं" in response to the product question (that IS product
     engagement). Short Hangup requires zero product engagement.
+  NOT ALLOWED IF: buyer said "हाँ" / "जी" / "हाँ जी" directly in response to the opening
+    product requirement question — this IS product confirmation, not a bare presence signal.
+    "जी" answering "आपको X की requirement है ना?" = product_confirmed TRUE. Use Interested.
+  NOT ALLOWED IF: the agent asked any qualification spec question (body type, quantity, size,
+    type, grade, etc.) — GP-7 applies, product topic was reached and product_confirmed is TRUE.
+    Use Interested minimum, never Short Hangup.
   → "Short Hangup"
 
 VOICEMAIL
@@ -1408,7 +1423,9 @@ ALREADY SPOKEN
   Examples: "already purchased", "kaam ho gaya", "le liya", "sorted", "already spoken to seller",
     "ab nahi hai" / "nahi ab nahi hai" (not anymore — requirement existed but is now gone/fulfilled),
     "ho gaya" / "khatam ho gaya" / "pura ho gaya" (done / finished / completed),
-    "already hua" / "already le liya" / "already connected" / "already kisi ne baat ki".
+    "already hua" / "already le liya" / "already connected" / "already kisi ne baat ki",
+    "requirement complete ho gaya" / "jo requirement tha wo complete ho chuka hai" /
+    "already requirement complete" — requirement existed and has since been fulfilled.
   KEY RULE: if the buyer uses "ab" (now/anymore) to negate the requirement — "ab nahi chahiye",
     "ab nahi hai", "pehle tha ab nahi", "ab zaroorat nahi" — treat as Already Spoken, NOT Not
     Interested. The "ab" signals the requirement existed before and has since been resolved.
@@ -1513,6 +1530,14 @@ NOT INTERESTED
     ✓ NO positive engagement, NO spec answers, NO product questions anywhere in the call
     ✓ buyer's FINAL overall stance is negative
     ✓ cannot be explained by Seller Intent / Will do it Myself / Already Spoken / Wrong Number
+  STRICT EXCLUSION — sub-question "नहीं": if the buyer said "नहीं" / "नहीं है" /
+    "कुछ नहीं है पसंद" / "वैसे तो कुछ नहीं चाहिए" in reply to a spec sub-question
+    (quantity, type, size, grade, preference — anything after the opening) AND the agent then
+    continued asking further spec questions, product_confirmed is TRUE (GP-7). NOT ALLOWED
+    here — classify as Enriched or Interested minimum.
+  STRICT EXCLUSION — active browsing: buyer saying "लेना था" / "check kar raha tha" /
+    "dekhna tha" / "सोच रहा था लेना" with no clear final rejection — apply GP-1 (active
+    consideration). NOT ALLOWED here — classify as Interested or Could Not Confirm.
   STRICT EXCLUSION: if buyer uses temporal language — "ab nahi chahiye", "ab nahi hai",
     "pehle tha ab nahi", "nahi ab nahi" — the requirement existed before and is now gone.
     This is Already Spoken (fulfilled), NOT Not Interested.
