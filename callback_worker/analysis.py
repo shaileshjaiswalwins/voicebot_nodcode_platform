@@ -244,22 +244,41 @@ async def generate_call_analysis(
     # turn instead of the product greeting, agent progression is unreliable — the bot may
     # have advanced on ambient noise or background conversation, not product confirmation.
     _first_agent_text_lower = (_agent_turns_with_text[0].get("text") or "").lower() if _agent_turns_with_text else ""
+
+    # ── Positional anchor: find the first agent turn containing the product question. ──
+    # Used to detect whether the user responded AFTER the product question was asked.
+    # With two-step greeting, Step 1 (identity-only) is agent turn 0; the LLM asks the
+    # product question as agent turn 1+. Any positive response AFTER that is a genuine
+    # product confirmation — not a phone-pickup reflex.
+    _PRODUCT_Q_MARKERS = (
+        "requirement", "है ना", "चाहिए", "chahiye", "zaroorat",
+        "देख रहे", "dekh rahe", "dekh rhe",
+    )
+    _product_q_turn_idx = None
+    for _pq_i, _pq_t in enumerate(transcript):
+        if _pq_t.get("role") == "assistant" and any(
+            m in (_pq_t.get("text") or "").lower() for m in _PRODUCT_Q_MARKERS
+        ):
+            _product_q_turn_idx = _pq_i
+            break
+    _product_q_asked = _product_q_turn_idx is not None
+    # True when at least one non-empty user turn exists AFTER the product question in the transcript.
+    _user_after_product_q = _product_q_asked and any(
+        _pq_t.get("role") == "user" and (_pq_t.get("text") or "").strip()
+        for _pq_t in transcript[_product_q_turn_idx + 1:]
+    )
+
     # Also detect a truncated greeting: agent started with "हेलो…" but the TTS was cut
     # before the product question ("requirement है ना?" / "चाहिए?" / "चाहिए थे?").
     # In that case the user's "हाँ/जी" was a response to an incomplete utterance, NOT to
     # the product question — agent progression cannot be used to infer product confirmation.
+    # Two-step greeting: scan the first TWO agent turns so we don't falsely flag Step 1
+    # (identity-only) as a truncated greeting when the product question is in Step 2.
     _greeting_start = any(
         _first_agent_text_lower.startswith(p)
         for p in ("हेलो", "hello", "helo", "नमस्ते", "namaste")
     )
-    _greeting_has_product_q = any(
-        kw in _first_agent_text_lower
-        for kw in (
-            "requirement", "है ना", "चाहिए", "chahiye", "zaroorat",
-            # new 2-step greeting: Step 1a
-            "देख रहे", "dekh rahe", "dekh rhe",
-        )
-    )
+    _greeting_has_product_q = _product_q_asked and _product_q_turn_idx < 2
     _truncated_greeting = _greeting_start and not _greeting_has_product_q
     _wrong_opener = (
         wrong_opener_detected
@@ -846,10 +865,14 @@ async def generate_call_analysis(
                     tokens.add(t)
         return tokens
 
-    if non_empty_user_turns and all(
+    if non_empty_user_turns and not _user_after_product_q and all(
         not (_tokenize_bare(t.get("text") or "") - _BARE_CALL_SIGNAL_TOKENS - _INFO_REQUEST_TOKENS)
         for t in non_empty_user_turns
     ):
+        # Two-step greeting: if the user responded AFTER the product question was asked,
+        # their bare "हाँ" is a genuine product confirmation — skip this guard and let
+        # the LLM classify. Only short-circuit when no response followed the product question.
+        #
         # Distinguish: if all tokens are info-request words (and no bare call-presence signal
         # overlap), the buyer was asking "what is this call about?" — prefer a Short Hangup
         # summary that reflects the info-seeking intent.
@@ -1000,10 +1023,9 @@ async def generate_call_analysis(
     _bot_reask_patterns = (
         "तो क्या आपको", "to kya aapko", "क्या आपको", "kya aapko",
         "do you need", "do you still need", "क्या आप",
-        # Step 1b of new 2-step greeting — agent asking requirement after search confirmation
-        "की requirement है ना", "requirement hai na",
-        # Step 1a re-ask
-        "देख रहे हैं", "dekh rahe hain",
+        # Note: "की requirement है ना" / "requirement hai na" / "देख रहे हैं" were previously
+        # included here but are REMOVED — in the two-step greeting these ARE the legitimate
+        # Step 2 product question in agent turn 1, not a stuck re-ask.
     )
     _agent_reask_opening = any(p in _second_agent_text for p in _bot_reask_patterns)
     # Also block the note when the buyer's first turn contains an explicit "नहीं" —
@@ -1863,19 +1885,19 @@ STRICT OUTPUT RULES:
                     result["qna"] = []
 
                 # 5a-2. Hard sub-20s Interested → Short Hangup regardless of live turns.
-                #       The 2-step greeting alone takes 5+ seconds; in < 20s the bot
-                #       cannot complete Step 1a + Step 1b + even start Q1. Any "Interested"
-                #       returned for a sub-20s call is either a phone-answer reflex or
-                #       Sarvam/post-call STT noise that fooled the LLM — not real engagement.
+                #       Skip when the user explicitly responded AFTER the product question
+                #       (two-step greeting): that is a genuine product confirmation even in
+                #       a short call. Otherwise, sub-20s Interested is almost always a
+                #       phone-answer reflex or STT noise — downgrade to Short Hangup.
                 if (
                     outcome == "Interested"
                     and duration_secs is not None
                     and duration_secs < 20
+                    and not _user_after_product_q
                 ):
                     logger.info(
                         f"[POST-PROC] Interested → Short Hangup: hard sub-20s rule, "
-                        f"duration={duration_secs:.0f}s (live turns present but call too short "
-                        f"for genuine qualification)"
+                        f"duration={duration_secs:.0f}s (no user response after product question)"
                     )
                     outcome = "Short Hangup"
                     result["call_outcome"] = outcome
@@ -1886,12 +1908,14 @@ STRICT OUTPUT RULES:
                 #     Calls at or under 30 s with only bare acknowledgements (हाँ / ji / yes / ok)
                 #     and no valid spec values are almost always Short Hangups — the buyer
                 #     said a reflexive yes and disconnected, not a genuine product confirmation.
-                #     ~10 % of these may be genuine quick yeses; that tradeoff is accepted.
-                #     Boundary is inclusive (≤ 30) to catch exact-30s boundary cases.
+                #     Skip when the user explicitly responded AFTER the product question
+                #     (two-step greeting): that bare "हाँ" was answering the product question,
+                #     not just picking up the phone — it is a genuine confirmation.
                 if (
                     outcome == "Interested"
                     and duration_secs is not None
                     and duration_secs <= 30
+                    and not _user_after_product_q
                 ):
                     _BARE_ACK_SET = {
                         "haan", "ha", "han", "ji", "jee", "yes", "okay", "ok",

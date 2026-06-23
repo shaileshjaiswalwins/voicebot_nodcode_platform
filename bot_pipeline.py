@@ -1994,33 +1994,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                                 _muted_transcript_log.pop()
                             _muted_inject["text"] = ""
                             return
-                        _inject_tokens = {
-                            unicodedata.normalize("NFC", "".join(
-                                c for c in w.lower()
-                                if unicodedata.category(c)[0] not in ("P", "S", "Z")
-                            ))
-                            for w in text.split() if w.strip()
-                        }
-                        _inject_tokens.discard("")
-                        _BARE_GREETING_TOKENS = frozenset(
-                            unicodedata.normalize("NFC", w) for w in {
-                                "हाँ", "हां", "हा", "जी", "हाँजी", "हांजी",
-                                "हेलो", "hello", "हैलो", "hi", "हाय",
-                                "haan", "ha", "han", "ji", "jee", "okay", "ok",
-                                "हाँ", "हां", "बोलो", "bol", "bolo",
-                                "बोला", "bola",
-                                "om",
-                                "हो", "हो जी", "होजी", "हाँ हो",
-                            }
-                        )
-                        if _inject_tokens and not (_inject_tokens - _BARE_GREETING_TOKENS):
-                            _log.info(
-                                f"[MUTED-CAPTURE] post-greeting inject skipped — bare phone-pickup signal: {text!r}"
-                            )
-                            if _muted_transcript_log and _muted_transcript_log[-1] == text:
-                                _muted_transcript_log.pop()
-                            _muted_inject["text"] = ""
-                            return
+                        # Two-step greeting: Step 1 is identity-only, so the user's
+                        # muted-window response (bare "हाँ" or substantive) is their
+                        # pickup reply. Inject it ALL to the LLM — the LLM will ask
+                        # the product question as its first response, turning bare acks
+                        # into a natural two-exchange confirmation flow.
                         _muted_inject["text"] = ""
                         _log.info(f"[MUTED-CAPTURE] post-greeting inject → LLM: {text!r}")
                         try:
@@ -2274,27 +2252,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         call_state["lead_record"] = record
         _log.info(f"[CALL SETUP] Using fallback lead for mobile={caller_mobile!r}")
 
-    # ── 13. Build greeting text from lead (replaces the Gemini "." trigger) ──
+    # ── 13. Build greeting text from lead (two-step: Step 1 = identity only) ──
+    # Step 1 is spoken deterministically (muted). Step 2 (product question) is generated
+    # by the LLM as its first response — this separates pickup reflexes from genuine
+    # product confirmations.
     def _build_greeting(rec: dict) -> str:
-        """Build the deterministic opening line from lead data (mirrors mandatory_opening in bot.py)."""
-        _company = (rec.get("buyer_details") or {}).get("company_name", "").strip()
-        _sc = (rec.get("search_context") or {})
-        _product_name = (
-            (_sc.get("searched_product") or {}).get("product_name", "")
-            or _sc.get("searched_keyword", "")
-            or rec.get("catname", "")
-            or "product"
-        )
-        if _company:
-            return (
-                f"हेलो, {_company}? "
-                f"जी, मैं Simran बोल रही हूँ Justdial से — "
-                f"आपको {_product_name} की requirement है ना?"
-            )
-        return (
-            f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
-            f"आपको {_product_name} की requirement है ना?"
-        )
+        """Identity-only opening line. Product question is asked by the LLM as its first response."""
+        return "हेलो, मैं Simran बोल रही हूँ Justdial से।"
 
     _greeting_text = _build_greeting(record)
     _log.info(f"[GREETING] Text: {_greeting_text!r}")
