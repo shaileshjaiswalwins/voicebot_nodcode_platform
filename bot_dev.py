@@ -778,6 +778,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _muted_transcript_log: list = []
     _close_status = "completed"
     _abusive_detected = False
+    # Substantive user speech that arrived as STT pipeline-delay (during bot speaking,
+    # before barge-in window). Instead of discarding, we buffer and re-inject after
+    # the bot's current turn finishes — so the LLM sees what the user actually said.
+    _pipeline_delay_buffer: str = ""
 
     async def _handle_close() -> None:
         nonlocal _call_ended
@@ -1041,8 +1045,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _muted_filler_dropped_time = asyncio.get_event_loop().time()
             return
         # Single-token repeat (e.g. "हाँ हाँ हाँ") OR pair-repeat babble
-        # (e.g. "हाँ जी हाँ जी हाँ जी" — 2 unique tokens repeating ≥ 4 times total)
-        if len(tokens) >= 4 and len(set(tokens)) <= 2:
+        # (e.g. "हाँ जी हाँ जी हाँ जी हाँ जी" — 2 unique tokens repeating ≥ 8 times total)
+        # Threshold is 8 so natural double-confirmations like "हाँ जी हाँ जी" (4 tokens)
+        # and triple-confirmations like "हाँ जी हाँ जी हाँ जी" (6 tokens) pass through.
+        if len(tokens) >= 8 and len(set(tokens)) <= 2:
             _log.info(
                 f"[MUTED-CAPTURE] repeated-token hallucination {text!r} — dropped"
             )
@@ -1414,15 +1420,24 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if is_final:
             # Pre-filter: FINAL arriving while bot is speaking with mic disabled and barge-in
             # not yet fired means this is STT pipeline lag — audio buffered during the prior
-            # thinking period (when mic was ON) delivered ~100-200ms after mic is disabled at
-            # speaking-start. This is NOT user speech; discard before turning the counter.
-            # Add to _silero_rejected_turns so conversation_item_added also skips it,
-            # preventing the pipeline from triggering a second LLM generate_reply.
+            # thinking period (when mic was ON) delivered after mic is disabled at speaking-start.
+            # If the text is substantive (>= 2 distinct words), buffer it for re-injection
+            # after the bot finishes speaking so the LLM doesn't lose what the user said.
+            # Short/single-word results (e.g. "हाँ") are discarded — not enough signal.
             if _agent_state_now == "speaking" and not _mic_enabled and not _barge_in_fired:
-                _log.info(
-                    f"[STT] FINAL during muted-speaking (pre-barge-in) — "
-                    f"pipeline-delay noise discarded: {transcript_text!r}"
-                )
+                _pd_tokens = _normalize_stt_tokens(transcript_text) if transcript_text else []
+                _pd_distinct = len(set(_pd_tokens))
+                if _pd_distinct >= 2 and not _pipeline_delay_buffer:
+                    _log.info(
+                        f"[STT] FINAL during muted-speaking — buffering for post-speak inject: "
+                        f"{transcript_text!r} ({_pd_distinct} distinct words)"
+                    )
+                    _pipeline_delay_buffer = transcript_text
+                else:
+                    _log.info(
+                        f"[STT] FINAL during muted-speaking (pre-barge-in) — "
+                        f"pipeline-delay noise discarded: {transcript_text!r}"
+                    )
                 _silero_rejected_turns.add(transcript_text)
                 return
             _turn_counter += 1
@@ -1702,6 +1717,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         nonlocal _last_user_final_text, _final_arrived_while_speaking, _silero_rejected_time
         nonlocal _consecutive_silero_rejects
         nonlocal _kb_handle, _kb_auto_stop_task
+        nonlocal _pipeline_delay_buffer
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
         state_str = new_state.value if hasattr(new_state, "value") else str(new_state) if new_state else ""
@@ -1879,6 +1895,20 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             if old_str == "speaking":
                 # A real bot turn just ended (spoken to completion or barged into).
                 _speaking_turns_completed += 1
+                # Re-inject any substantive user speech that arrived as STT pipeline-delay
+                # during the bot's last speaking window (before barge-in was active).
+                # Only inject if barge-in didn't fire — if the user barges in naturally,
+                # their speech already reached the LLM through the normal path.
+                if _pipeline_delay_buffer and not _barge_in_fired and not _call_ended and not _closing_triggered:
+                    _inject_text = _pipeline_delay_buffer
+                    _pipeline_delay_buffer = ""
+                    _log.info(f"[STT] injecting pipeline-delay buffer after speak: {_inject_text!r}")
+                    try:
+                        session.generate_reply(user_input=_inject_text)
+                    except Exception as _e:
+                        _log.warning(f"[STT] pipeline-delay inject failed: {_e}")
+                else:
+                    _pipeline_delay_buffer = ""
                 # TTS duration Langfuse span (speaking_start → speaking_end)
                 if _lf_trace and _greeting_done and speaking_duration > 0.1:
                     try:
@@ -1964,33 +1994,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                                 _muted_transcript_log.pop()
                             _muted_inject["text"] = ""
                             return
-                        _inject_tokens = {
-                            unicodedata.normalize("NFC", "".join(
-                                c for c in w.lower()
-                                if unicodedata.category(c)[0] not in ("P", "S", "Z")
-                            ))
-                            for w in text.split() if w.strip()
-                        }
-                        _inject_tokens.discard("")
-                        _BARE_GREETING_TOKENS = frozenset(
-                            unicodedata.normalize("NFC", w) for w in {
-                                "हाँ", "हां", "हा", "जी", "हाँजी", "हांजी",
-                                "हेलो", "hello", "हैलो", "hi", "हाय",
-                                "haan", "ha", "han", "ji", "jee", "okay", "ok",
-                                "हाँ", "हां", "बोलो", "bol", "bolo",
-                                "बोला", "bola",
-                                "om",
-                                "हो", "हो जी", "होजी", "हाँ हो",
-                            }
-                        )
-                        if _inject_tokens and not (_inject_tokens - _BARE_GREETING_TOKENS):
-                            _log.info(
-                                f"[MUTED-CAPTURE] post-greeting inject skipped — bare phone-pickup signal: {text!r}"
-                            )
-                            if _muted_transcript_log and _muted_transcript_log[-1] == text:
-                                _muted_transcript_log.pop()
-                            _muted_inject["text"] = ""
-                            return
+                        # Two-step greeting: Step 1 is identity-only, so the user's
+                        # muted-window response (bare "हाँ" or substantive) is their
+                        # pickup reply. Inject it ALL to the LLM — the LLM will ask
+                        # the product question as its first response, turning bare acks
+                        # into a natural two-exchange confirmation flow.
                         _muted_inject["text"] = ""
                         _log.info(f"[MUTED-CAPTURE] post-greeting inject → LLM: {text!r}")
                         try:
@@ -2244,27 +2252,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         call_state["lead_record"] = record
         _log.info(f"[CALL SETUP] Using fallback lead for mobile={caller_mobile!r}")
 
-    # ── 13. Build greeting text from lead (replaces the Gemini "." trigger) ──
+    # ── 13. Build greeting text from lead (two-step: Step 1 = identity only) ──
+    # Step 1 is spoken deterministically (muted). Step 2 (product question) is generated
+    # by the LLM as its first response — this separates pickup reflexes from genuine
+    # product confirmations.
     def _build_greeting(rec: dict) -> str:
-        """Build the deterministic opening line from lead data (mirrors mandatory_opening in bot.py)."""
-        _company = (rec.get("buyer_details") or {}).get("company_name", "").strip()
-        _sc = (rec.get("search_context") or {})
-        _product_name = (
-            (_sc.get("searched_product") or {}).get("product_name", "")
-            or _sc.get("searched_keyword", "")
-            or rec.get("catname", "")
-            or "product"
-        )
-        if _company:
-            return (
-                f"हेलो, {_company}? "
-                f"जी, मैं Simran बोल रही हूँ Justdial से — "
-                f"आपको {_product_name} की requirement है ना?"
-            )
-        return (
-            f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
-            f"आपको {_product_name} की requirement है ना?"
-        )
+        """Identity-only opening line. Product question is asked by the LLM as its first response."""
+        return "हेलो, मैं Simran बोल रही हूँ Justdial से।"
 
     _greeting_text = _build_greeting(record)
     _log.info(f"[GREETING] Text: {_greeting_text!r}")
