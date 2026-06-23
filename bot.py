@@ -414,7 +414,10 @@ _HARDCODED_BOT_CONFIG: dict = {
         "When probing: re-ask once, naturally, different phrasing each time, short options reminder.\n"
         "If still unclear after one probe → mark Not Sure, move on. NEVER a third ask. This is a hard rule.\n"
         "COUNTING: Each question gets maximum 2 attempts total (1 original ask + 1 re-ask). After that, Not Sure, next question. No exceptions, no matter how important the answer seems.\n"
-        "Never echo an answer back to 'confirm' it. Valid answer → acknowledge and continue.\n\n"
+        "Never echo an answer back to 'confirm' it. Valid answer → acknowledge and continue.\n"
+        "Never explain, justify, or comment on the buyer's choice. Do NOT say why their answer is good or what it implies.\n"
+        "WRONG: 'बिल्कुल, automatic में less manual effort लगता है।' — this is unsolicited commentary on their choice.\n"
+        "RIGHT: 'बिल्कुल जी।' → next question.\n\n"
 
         "SPECIFIC SITUATIONS\n\n"
         "Buyer asks what the difference between options is:\n"
