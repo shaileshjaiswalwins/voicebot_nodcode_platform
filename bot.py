@@ -966,7 +966,7 @@ def _load_prompt_config() -> dict:
     return {}
 
 
-def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_config: dict | None = None) -> str:
+def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_config: dict | None = None, pipeline_mode: bool = False) -> str:
     _bc = bot_config or {}
     _pc = _bc.get("prompt_config") or {}
     if _bc.get("system_prompt"):
@@ -1040,13 +1040,21 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     questions = schema.get("question", [])
     is_business = buyer.get("is_business", "")
     company_name = record.get("company_name", "").strip()
+    # "bd": 2 → lead derived from a seller's Details Page; company_name is the
+    # seller the buyer was browsing (NOT the buyer's own business).
+    from_details_page = str(record.get("bd", "")) == "2" and bool(company_name)
 
-    if company_name:
-        mandatory_opening = (
-            f"हेलो, {company_name}? "
-            f"जी, मैं Simran बोल रही हूँ Justdial से — "
-            f"आपको {product_name} की requirement है ना?"
-        )
+    if pipeline_mode:
+        # TTS already spoke the intro ("हेलो, मैं Simran बोल रही हूँ Justdial से।").
+        # LLM's first response asks the product question — with seller context when
+        # the lead came from a Details Page.
+        if from_details_page:
+            mandatory_opening = (
+                f"जी, आप {company_name} के product देख रहे थे — "
+                f"आपको {product_name} की requirement है ना?"
+            )
+        else:
+            mandatory_opening = f"आपको {product_name} की requirement है ना?"
     else:
         mandatory_opening = (
             f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
@@ -1108,22 +1116,23 @@ TONE RULES for this section:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
-    _company_context_line = f"Company: {company_name}\n" if company_name else ""
-    _company_handling_block = (
-        f"\n━━━ COMPANY NAME HANDLING ━━━\n"
-        f"The buyer is listed under '{company_name}'. Your opening mentions this name to establish context.\n"
-        f"If the caller says the company name is wrong, or they don't recognise it:\n"
-        f"  → Acknowledge briefly: \"अच्छा जी, कोई बात नहीं.\" and continue with the product question immediately.\n"
-        f"Do NOT treat this as a gate — it is context only. Never repeat or re-ask the company name.\n"
-    ) if company_name else ""
+    _details_page_handling = (
+        f"\n━━━ DETAILS-PAGE CONTEXT ━━━\n"
+        f"This buyer was browsing '{company_name}' on Justdial. Your opening references "
+        f"that company only to set context — it is the SELLER they were viewing, not their own business.\n"
+        f"If the caller says they weren't looking at that company / don't recognise it:\n"
+        f"  → Acknowledge briefly: \"अच्छा जी, कोई बात नहीं.\" and continue with the product "
+        f"question immediately.\n"
+        f"Do NOT treat this as a gate, and never re-ask or insist on the company name.\n"
+    ) if from_details_page else ""
 
     lead_section = f"""
 ━━━ CALL CONTEXT ━━━
 
 Customer: {name}
-{_company_context_line}Product search: {keyword}
+Product search: {keyword}
 Product: {product_name}
-{_company_handling_block}
+{_details_page_handling}
 ━━━ MANDATORY OPENING ━━━
 Your VERY FIRST utterance MUST be EXACTLY this line, word-for-word, no additions, no preamble, no translation:
 

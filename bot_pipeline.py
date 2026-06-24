@@ -348,7 +348,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # ── 4. Build system instruction from lead (or base rules if no lead yet) ──
     system_instruction = build_system_prompt(
-        _prefetched_lead, lang_key=_language, bot_config=_bot_config
+        _prefetched_lead, lang_key=_language, bot_config=_bot_config, pipeline_mode=True
     )
 
     # Log the exact qualification questions the backend returned for this lead, so

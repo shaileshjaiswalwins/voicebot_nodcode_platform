@@ -369,6 +369,14 @@ async def generate_call_analysis(
         "connecting your call",
         "this call may be recorded for quality",
         "this call is being recorded for training",
+        # Voicemail end-of-greeting prompts — checked position-independently because an earlier
+        # "line to reach is not a" turn (also from the same voicemail) sets seen_substantive_user_turn
+        # True and bypasses the pre-substantive voicemail guard above.
+        "finished recording hang up", "when you have finished recording",
+        "finished recording you may hang up",
+        # Hinglish/Devanagari transliterations of the above (STT renders English voicemail in script)
+        "फिनिश्ड रिकॉर्डिंग", "व्हेन यू हैव फिनिश्ड रिकॉर्डिंग",
+        "फिनिश्ड रिकॉर्डिंग यू मे हैंग अप",
     ]
 
     _all_text = " ".join(
@@ -522,6 +530,12 @@ async def generate_call_analysis(
         "हम vendor", "hum vendor", "vendor hain", "vendor hai",
         "खुद produce", "hum produce", "हम produce",
         "खुद इंक्वायरी", "khud inquiry", "khud enquiry",
+        # Trading / reseller signals
+        "ट्रेडिंग का", "trading ka", "trading business", "trading wale",
+        "hum trading", "हम ट्रेडिंग", "trading mein hain", "trading hai",
+        "hamara trading", "हमारा ट्रेडिंग", "trading karte", "trading karte hain",
+        "wholesale karte", "wholesale karta", "wholesale dealer",
+        "हम resell", "hum resell", "reseller hain", "reseller hai",
     ]
     # Bypass patterns: if user turns contain already-spoken signals, fall through to LLM so
     # it can classify as Already Spoken instead of Not Interested.
@@ -537,6 +551,9 @@ async def generate_call_analysis(
         "kaam ho gaya", "काम हो गया", "khatam ho gaya", "खत्म हो गया",
         "pura ho gaya", "पूरा हो गया", "poora ho gaya",
         "le liya", "ले लिया",
+        "khareed liya", "खरीद लिया", "khareed li", "khareeda",
+        "close ho gaya", "क्लोज हो गया", "close hua", "close kar diya",
+        "closed ho gaya", "requirement close", "band ho gaya", "बंद हो गया",
         "kisi ne baat ki", "किसी ने बात की",
         "seller ne call", "seller ka call", "seller se baat",
         "idar se baat", "इधर से बात", "idhar se baat",
@@ -891,6 +908,41 @@ async def generate_call_analysis(
             "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
             "call_summary": _summary_bare,
             "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
+
+    # Pre-LLM GP-7 enforcement: bot advanced past the opening to actual spec questions
+    # (type / quantity / grade / size / prefer etc.) but STT only captured bare tokens from
+    # the buyer's responses. The bot NEVER asks spec questions without product confirmation,
+    # so this is structurally Interested — do not Short Hangup regardless of bare turns.
+    _SPEC_Q_INDICATORS = (
+        "किस", "कितन", "कौन", "कैसा", "type", "quantity", "size", "grade",
+        "diameter", "floor", "prefer", "colour", "color", "रंग", "weight",
+        "material", "capacity", "voltage", "power",
+    )
+    _bot_asked_spec_q = _product_q_turn_idx is not None and any(
+        t.get("role") == "assistant"
+        and any(ind in (t.get("text") or "").lower() for ind in _SPEC_Q_INDICATORS)
+        for t in transcript[_product_q_turn_idx + 1:]
+    )
+    _all_user_bare_or_empty = not non_empty_user_turns or all(
+        not (
+            {_strip_punct(w) for w in (t.get("text") or "").split() if w.strip()}
+            - _BARE_CALL_SIGNAL_TOKENS
+        )
+        for t in non_empty_user_turns
+    )
+    if _bot_asked_spec_q and _all_user_bare_or_empty and non_empty_user_turns:
+        return {
+            "call_outcome": "Interested",
+            "call_outcome_description": DISPOSITION_MAP["Interested"],
+            "call_summary": (
+                "Buyer confirmed product interest — bot advanced to spec questions "
+                "but STT captured only bare acknowledgements from subsequent turns. "
+                "Classified as Interested per GP-7 (agent progression proves product confirmed)."
+            ),
+            "is_business": "", "business_city": "", "business_name": "",
+            "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
@@ -1448,6 +1500,13 @@ ALREADY SPOKEN
     "already hua" / "already le liya" / "already connected" / "already kisi ne baat ki",
     "requirement complete ho gaya" / "jo requirement tha wo complete ho chuka hai" /
     "already requirement complete" — requirement existed and has since been fulfilled.
+  PURCHASE SIGNALS (always Already Spoken, never Not Interested):
+    "ले लिया है" / "ले लिया" / "le liya" — product has already been purchased/acquired.
+    "खरीद लिया" / "khareed liya" — already bought.
+    "close ho gaya" / "क्लोज हो गया" / "close hua" / "band ho gaya" — requirement closed/done.
+    "ho gaya maadam" / "ho gaya sir" + any completion signal — requirement has been fulfilled.
+    The agent's NI closing phrase ("कोई बात नहीं") appearing after a purchase signal does NOT
+    override the purchase signal — the buyer fulfilled the requirement, that is Already Spoken.
   KEY RULE: if the buyer uses "ab" (now/anymore) to negate the requirement — "ab nahi chahiye",
     "ab nahi hai", "pehle tha ab nahi", "ab zaroorat nahi" — treat as Already Spoken, NOT Not
     Interested. The "ab" signals the requirement existed before and has since been resolved.
@@ -1459,6 +1518,10 @@ CALL RESCHEDULED
     Confirm (Tier 4), NOT this outcome.
   EXCEPTION: if valid_spec_count ≥ 1 AND product_confirmed — do NOT use this outcome.
     The enrichment data is complete and valuable. Evaluate Tier 3 (Enriched/Approved) instead.
+  PATTERN — product correction + callback: buyer opens with "नहीं" but IMMEDIATELY corrects
+    to a specific product variant ("नहीं, जस्ट X में requirement है") AND asks for a callback
+    ("आधे घंटे बाद फोन करना / baad mein call karna") → product_confirmed TRUE, Call Rescheduled.
+    The "नहीं" is a product-name correction, NOT a rejection (apply GP-1).
   → "Call Rescheduled"
 
 ALTERNATE NUMBER
@@ -1563,6 +1626,13 @@ NOT INTERESTED
   STRICT EXCLUSION: if buyer uses temporal language — "ab nahi chahiye", "ab nahi hai",
     "pehle tha ab nahi", "nahi ab nahi" — the requirement existed before and is now gone.
     This is Already Spoken (fulfilled), NOT Not Interested.
+  STRICT EXCLUSION — purchase fulfilled: if buyer says "ले लिया" / "le liya" / "khareed liya" /
+    "खरीद लिया" / "close ho gaya" / "क्लोज हो गया" / "ho gaya" referring to the requirement —
+    the product was purchased or the need was closed elsewhere. This is Already Spoken, NOT
+    Not Interested. The agent's NI closing appearing after this does NOT change the outcome.
+  STRICT EXCLUSION — trading/reseller: if buyer indicates they are in a trading/reseller
+    business ("ट्रेडिंग का", "trading business", "hum trading karte hain") — they are on the
+    supply side, NOT a consumer rejecting the product. This is Seller Intent, NOT Not Interested.
   Apply GP-1 (POSITIVE PROGRESSION) and GP-3 (NEGATIVE TONE ≠ REJECTION).
   → "Not Interested"
 
