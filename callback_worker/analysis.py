@@ -184,7 +184,28 @@ async def generate_call_analysis(
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
     if not transcript:
-        return fallback_analysis(base_status)
+        # Empty transcript = no audio captured at all.
+        # The only non-Short-Hangup case is an explicit abusive status (set by the bot
+        # before analysis runs). Everything else — disconnected, completed with no audio,
+        # etc. — is a Short Hangup: the call connected but nothing was said.
+        if base_status == "abusive":
+            return fallback_analysis(base_status)
+        if not greeting_done:
+            _no_tr_summary = "User disconnected before or during the agent greeting — no audio captured."
+        elif user_speech_ms > 0:
+            _no_tr_summary = (
+                f"Greeting completed. User spoke briefly (~{user_speech_ms}ms, below STT threshold) "
+                "then disconnected — no transcribable response captured."
+            )
+        else:
+            _no_tr_summary = "No user response recorded — call ended after agent greeting only."
+        return {
+            "call_outcome": "Short Hangup",
+            "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
+            "call_summary": _no_tr_summary,
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
 
     # --- Deterministic pre-LLM guards (saves cost + prevents model misclassification) ---
 
