@@ -1811,7 +1811,7 @@ STRICT OUTPUT RULES:
         )
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0},
         }
         async with http_session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
             data = await resp.json()
@@ -2155,7 +2155,7 @@ CONVERSATION TO ANALYZE:
         )
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0},
         }
         async with http_session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
             data = await resp.json()
