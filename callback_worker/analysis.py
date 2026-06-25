@@ -946,6 +946,38 @@ async def generate_call_analysis(
         and any(ind in (t.get("text") or "").lower() for ind in _SPEC_Q_INDICATORS)
         for t in transcript[_product_q_turn_idx + 1:]
     )
+    # Index of the first spec question turn (used by pre-LLM guard and post-proc 5h).
+    _first_spec_q_idx: int | None = None
+    if _bot_asked_spec_q and _product_q_turn_idx is not None:
+        for _si, _st in enumerate(
+            transcript[_product_q_turn_idx + 1:], _product_q_turn_idx + 1
+        ):
+            if _st.get("role") == "assistant" and any(
+                ind in (_st.get("text") or "").lower() for ind in _SPEC_Q_INDICATORS
+            ):
+                _first_spec_q_idx = _si
+                break
+    # True only when at least one user turn AFTER the first spec question contains a word
+    # that is NOT a bare confirmation/call-signal token.  If False, every user response to
+    # the spec question was "हाँ/ji/okay" — meaning no real spec value was given and any
+    # LLM-extracted QNA answer is likely fabricated.
+    _CONFIRM_NFC_PP = {unicodedata.normalize("NFC", w) for w in _CONFIRMATION_TOKENS}
+    _post_spec_user_has_nonbare: bool = (
+        _first_spec_q_idx is not None
+        and any(
+            t.get("role") == "user"
+            and bool(
+                {
+                    unicodedata.normalize("NFC", _strip_punct(w))
+                    for w in (t.get("text") or "").split()
+                    if w.strip()
+                }
+                - _CONFIRM_NFC_PP
+                - _BARE_CALL_SIGNAL_TOKENS
+            )
+            for t in transcript[_first_spec_q_idx + 1:]
+        )
+    )
     _all_user_bare_or_empty = not non_empty_user_turns or all(
         not (
             {_strip_punct(w) for w in (t.get("text") or "").split() if w.strip()}
@@ -1006,15 +1038,7 @@ async def generate_call_analysis(
     # to advance on. Return CNC so the LLM doesn't infer Interested from the spec questions.
     # Skip when the approved closing was already spoken (full flow completed).
     if _bot_asked_spec_q and not _approved_closing_present:
-        _first_spec_q_idx = None
-        if _product_q_turn_idx is not None:
-            for _si, _st in enumerate(transcript[_product_q_turn_idx + 1:],
-                                      _product_q_turn_idx + 1):
-                if _st.get("role") == "assistant" and any(
-                    _ind in (_st.get("text") or "").lower() for _ind in _SPEC_Q_INDICATORS
-                ):
-                    _first_spec_q_idx = _si
-                    break
+        # _first_spec_q_idx already computed above alongside _bot_asked_spec_q
         _user_between_pq_and_spec = (
             _product_q_turn_idx is not None
             and _first_spec_q_idx is not None
@@ -2219,6 +2243,94 @@ STRICT OUTPUT RULES:
                         result["call_outcome"] = outcome
                         result["call_outcome_description"] = DISPOSITION_MAP[outcome]
                         result["qna"] = []
+
+                # 5h. Enriched + bot asked spec questions + user NEVER gave a substantive
+                #     answer after the first spec question (every response was a bare
+                #     confirmation token like "हाँ जी / okay / ji") → Could Not Confirm.
+                #     LLM tends to fabricate a spec option (e.g. "Custom") when the user
+                #     only says "हाँ जी" to a multi-choice spec question.
+                if (
+                    outcome == "Enriched"
+                    and _bot_asked_spec_q
+                    and _first_spec_q_idx is not None
+                    and not _post_spec_user_has_nonbare
+                ):
+                    logger.info(
+                        f"[POST-PROC] Enriched → Could Not Confirm: "
+                        f"bot asked spec questions but all post-spec user turns are "
+                        f"bare confirmation tokens — LLM spec answer is likely fabricated"
+                    )
+                    outcome = "Could Not Confirm"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+                    result["qna"] = []
+
+                # 5f. Explicit rescheduling pair in transcript → Call Rescheduled.
+                #     Catches cases where LLM gives CNC/Enriched/Interested even though
+                #     the user explicitly asked to call back and the bot confirmed a time.
+                #     Only fires when outcome is NOT already Call Rescheduled.
+                if outcome not in {"Call Rescheduled", "Not Interested", "Short Hangup"}:
+                    _RESCHEDULE_USER = {
+                        unicodedata.normalize("NFC", s) for s in {
+                            "call", "callback", "कॉल", "काल", "बाद", "baad", "later",
+                            "thodi", "थोड़ी", "phir", "फिर", "वापस", "vaapas",
+                        }
+                    }
+                    _RESCHEDULE_BOT = {
+                        unicodedata.normalize("NFC", s) for s in {
+                            "बजे", "baje", "बाद", "baad", "कल", "kal", "tomorrow",
+                            "बात करते", "baat karte",
+                        }
+                    }
+                    _user_reschedule_turn_idx = None
+                    for _ri, _rt in enumerate(transcript):
+                        if _rt.get("role") == "user":
+                            _rw = {
+                                unicodedata.normalize("NFC", _strip_punct(w))
+                                for w in (_rt.get("text") or "").split() if w.strip()
+                            }
+                            if _rw & _RESCHEDULE_USER and len(_rw) >= 3:
+                                _user_reschedule_turn_idx = _ri
+                    _bot_ack_after_reschedule = (
+                        _user_reschedule_turn_idx is not None
+                        and any(
+                            (
+                                _bt.get("role") == "assistant"
+                                and {
+                                    unicodedata.normalize("NFC", _strip_punct(w))
+                                    for w in (_bt.get("text") or "").split() if w.strip()
+                                } & _RESCHEDULE_BOT
+                            )
+                            for _bt in transcript[_user_reschedule_turn_idx + 1:]
+                        )
+                    )
+                    if _bot_ack_after_reschedule:
+                        logger.info(
+                            f"[POST-PROC] {outcome} → Call Rescheduled: "
+                            f"explicit rescheduling pair detected in transcript"
+                        )
+                        outcome = "Call Rescheduled"
+                        result["call_outcome"] = outcome
+                        result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+
+                # 5g. Interested/Enriched + bot asked spec questions + LLM extracted no QNA
+                #     answers → Could Not Confirm.
+                #     When bot asked spec but user only gave confirmatory fillers ("हाँ जी"),
+                #     the LLM sometimes returns Interested or even Enriched with an empty QNA
+                #     list. Enriched with zero QNA is self-contradictory — no spec was captured,
+                #     so CNC is the correct outcome.
+                if (
+                    outcome in {"Interested", "Enriched"}
+                    and _bot_asked_spec_q
+                    and not (result.get("qna") or [])
+                ):
+                    logger.info(
+                        f"[POST-PROC] {outcome} → Could Not Confirm: "
+                        f"bot asked spec questions but LLM captured no QNA answers"
+                    )
+                    outcome = "Could Not Confirm"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
 
             # ── END POST-PROCESSING ────────────────────────────────────────
 
