@@ -1391,7 +1391,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         nonlocal _turn_counter, _live_transcript, _pending_user_text, _current_window_pcm
         nonlocal _call_ended, _early_inject_done, _abusive_detected, _close_status
         nonlocal _first_partial_time, _silero_rejected_turns, _silero_rejected_time
-        nonlocal _consecutive_silero_rejects
+        nonlocal _consecutive_silero_rejects, _pipeline_delay_buffer
         if not _call_ended:
             _reset_inactivity(from_user_speech=True)
         is_final = getattr(ev, "is_final", True)
