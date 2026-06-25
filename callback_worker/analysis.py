@@ -252,7 +252,7 @@ async def generate_call_analysis(
     _CONFIRMATION_TOKENS = {
         "हाँ", "हां", "ha", "han", "haan", "yes", "ji", "jee",
         "bilkul", "zaroor", "theek", "ठीक", "okay", "ok",
-        "good", "गुड", "sure", "right", "correct", "हा",
+        "good", "गुड", "sure", "right", "correct", "हा", "जी",
     }
 
     # No real user speech captured. Check how far the agent progressed before deciding.
@@ -289,6 +289,23 @@ async def generate_call_analysis(
         _pq_t.get("role") == "user" and (_pq_t.get("text") or "").strip()
         for _pq_t in transcript[_product_q_turn_idx + 1:]
     )
+
+    # True when the user's FIRST response directly after the product question contains a
+    # confirmation token and no explicit rejection.  With the two-step greeting design the
+    # product question is always the bot's second turn, so this is the user's genuine verdict
+    # — not a pickup reflex to the identity-only greeting.
+    _pq_direct_response_confirmed: bool = False
+    if _product_q_turn_idx is not None:
+        for _dr_t in transcript[_product_q_turn_idx + 1:]:
+            if _dr_t.get("role") == "user" and (_dr_t.get("text") or "").strip():
+                _dr_words = {
+                    unicodedata.normalize("NFC", _strip_punct(w))
+                    for w in (_dr_t.get("text") or "").split() if w.strip()
+                }
+                _dr_has_confirm = bool(_dr_words & {unicodedata.normalize("NFC", w) for w in _CONFIRMATION_TOKENS})
+                _dr_has_reject  = unicodedata.normalize("NFC", "नहीं") in _dr_words
+                _pq_direct_response_confirmed = _dr_has_confirm and not _dr_has_reject
+                break  # only the FIRST user turn after the product question matters
 
     # Also detect a truncated greeting: agent started with "हेलो…" but the TTS was cut
     # before the product question ("requirement है ना?" / "चाहिए?" / "चाहिए थे?").
@@ -2029,6 +2046,23 @@ STRICT OUTPUT RULES:
                     result["call_outcome"] = outcome
                     result["call_outcome_description"] = DISPOSITION_MAP[outcome]
 
+            # 3-pre. Two-step greeting protection: Short Hangup but user gave a clear
+            #        confirmation directly after the product question → Interested.
+            #        Must run BEFORE the _HARD_OUTCOMES gate (which blocks SH overrides)
+            #        because this is the one legitimate case where SH must be reversed.
+            if (
+                outcome == "Short Hangup"
+                and _pq_direct_response_confirmed
+                and not _after_pq_has_explicit_no
+            ):
+                logger.info(
+                    f"[POST-PROC] Short Hangup → Interested: "
+                    f"user confirmed directly after product question (two-step greeting)"
+                )
+                outcome = "Interested"
+                result["call_outcome"] = outcome
+                result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+
             # 3. Hard outcomes that must never be overridden by downstream logic.
             _HARD_OUTCOMES = {
                 "Short Hangup", "Voicemail", "Wrong Number", "Seller Intent",
@@ -2258,27 +2292,6 @@ STRICT OUTPUT RULES:
                         result["call_outcome_description"] = DISPOSITION_MAP[outcome]
                         result["qna"] = []
 
-                # 5h. Enriched + bot asked spec questions + user NEVER gave a substantive
-                #     answer after the first spec question (every response was a bare
-                #     confirmation token like "हाँ जी / okay / ji") → Could Not Confirm.
-                #     LLM tends to fabricate a spec option (e.g. "Custom") when the user
-                #     only says "हाँ जी" to a multi-choice spec question.
-                if (
-                    outcome == "Enriched"
-                    and _bot_asked_spec_q
-                    and _first_spec_q_idx is not None
-                    and not _post_spec_user_has_nonbare
-                ):
-                    logger.info(
-                        f"[POST-PROC] Enriched → Could Not Confirm: "
-                        f"bot asked spec questions but all post-spec user turns are "
-                        f"bare confirmation tokens — LLM spec answer is likely fabricated"
-                    )
-                    outcome = "Could Not Confirm"
-                    result["call_outcome"] = outcome
-                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
-                    result["qna"] = []
-
                 # 5f. Explicit rescheduling pair in transcript → Call Rescheduled.
                 #     Catches cases where LLM gives CNC/Enriched/Interested even though
                 #     the user explicitly asked to call back and the bot confirmed a time.
@@ -2326,25 +2339,6 @@ STRICT OUTPUT RULES:
                         outcome = "Call Rescheduled"
                         result["call_outcome"] = outcome
                         result["call_outcome_description"] = DISPOSITION_MAP[outcome]
-
-                # 5g. Interested/Enriched + bot asked spec questions + LLM extracted no QNA
-                #     answers → Could Not Confirm.
-                #     When bot asked spec but user only gave confirmatory fillers ("हाँ जी"),
-                #     the LLM sometimes returns Interested or even Enriched with an empty QNA
-                #     list. Enriched with zero QNA is self-contradictory — no spec was captured,
-                #     so CNC is the correct outcome.
-                if (
-                    outcome in {"Interested", "Enriched"}
-                    and _bot_asked_spec_q
-                    and not (result.get("qna") or [])
-                ):
-                    logger.info(
-                        f"[POST-PROC] {outcome} → Could Not Confirm: "
-                        f"bot asked spec questions but LLM captured no QNA answers"
-                    )
-                    outcome = "Could Not Confirm"
-                    result["call_outcome"] = outcome
-                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
 
             # ── END POST-PROCESSING ────────────────────────────────────────
 
