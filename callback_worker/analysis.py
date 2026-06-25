@@ -1000,6 +1000,42 @@ async def generate_call_analysis(
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
+    # Pre-LLM: bot advanced to spec questions with NO user response between the product
+    # question and the first spec question. This means the bot jumped without product
+    # confirmation — GP-7 structural-proof does not apply because there was no user turn
+    # to advance on. Return CNC so the LLM doesn't infer Interested from the spec questions.
+    # Skip when the approved closing was already spoken (full flow completed).
+    if _bot_asked_spec_q and not _approved_closing_present:
+        _first_spec_q_idx = None
+        if _product_q_turn_idx is not None:
+            for _si, _st in enumerate(transcript[_product_q_turn_idx + 1:],
+                                      _product_q_turn_idx + 1):
+                if _st.get("role") == "assistant" and any(
+                    _ind in (_st.get("text") or "").lower() for _ind in _SPEC_Q_INDICATORS
+                ):
+                    _first_spec_q_idx = _si
+                    break
+        _user_between_pq_and_spec = (
+            _product_q_turn_idx is not None
+            and _first_spec_q_idx is not None
+            and any(
+                t.get("role") == "user" and (t.get("text") or "").strip()
+                for t in transcript[_product_q_turn_idx + 1 : _first_spec_q_idx]
+            )
+        )
+        if _product_q_turn_idx is not None and _first_spec_q_idx is not None and not _user_between_pq_and_spec:
+            return {
+                "call_outcome": "Could Not Confirm",
+                "call_outcome_description": DISPOSITION_MAP["Could Not Confirm"],
+                "call_summary": (
+                    "Agent advanced to specification questions with no user response to the "
+                    "product question — product confirmation was never obtained."
+                ),
+                "is_business": "", "business_city": "", "business_name": "",
+                "business_intent": "", "b2b_user": "",
+                "qna": [], "product_change": {}, "rescheduled_to": "",
+            }
+
     # --- End pre-LLM guards ---
 
     questions = schema.get("question", []) if schema else []
@@ -1106,6 +1142,25 @@ async def generate_call_analysis(
     # rejection is the authoritative signal.
     _first_turn_has_explicit_no = "नहीं" in unicodedata.normalize("NFC", _first_user_text)
 
+    # Block the note when the buyer replied "नहीं" to the ACTUAL product question.
+    # The _first_turn_has_explicit_no guard only covers the very first user turn, which
+    # may have been a phone-pickup "हाँ" spoken BEFORE the product question was asked.
+    # In two-step greetings this "हाँ" is NOT a product confirmation — and if the user
+    # then rejects after the product question we must not inject PRODUCT CONFIRMED.
+    _after_pq_has_explicit_no = _product_q_asked and any(
+        "नहीं" in unicodedata.normalize("NFC", (t.get("text") or ""))
+        for t in transcript[_product_q_turn_idx + 1:]
+        if t.get("role") == "user" and (t.get("text") or "").strip()
+    )
+    # Require that a confirmation token actually appears AFTER the product question.
+    # Without this, a "हाँ" to the greeting (before the product question) could fire
+    # the PRODUCT CONFIRMED note even when the buyer later rejects.
+    _first_confirm_after_pq = _product_q_asked and any(
+        bool({_strip_punct(w) for w in (t.get("text") or "").split() if w.strip()} & _CONFIRMATION_TOKENS)
+        for t in transcript[_product_q_turn_idx + 1:]
+        if t.get("role") == "user" and (t.get("text") or "").strip()
+    )
+
     # Detect "connect me to [agent]" pattern across ALL user turns.
     # A buyer asking to be connected to the bot by name proves they don't realise they're
     # already talking to it — any earlier हाँ/जी was a phone-pickup reflex, not product
@@ -1151,12 +1206,14 @@ async def generate_call_analysis(
         f"Could Not Confirm or Short Hangup. "
         f"Classify as Interested (zero valid specs), Enriched (1+ valid specs), or Approved."
         if _first_turn_is_confirmation
+        and _first_confirm_after_pq        # confirmation must come AFTER the product question
         and not _wrong_opener
-        and not _truncated_greeting   # buyer never heard the product question
+        and not _truncated_greeting        # buyer never heard the product question
         and not _agent_reask_opening
         and not _first_turn_has_explicit_no
+        and not _after_pq_has_explicit_no  # reject AFTER the product question overrides earlier हाँ
         and not _user_asks_for_agent
-        and not _first_turn_has_identity_q   # "हां" bundled with who-are-you/where-from is a reflex
+        and not _first_turn_has_identity_q
         else ""
     )
     # Phantom signal: user asked to be connected to the agent they are already talking to.
@@ -2046,6 +2103,87 @@ STRICT OUTPUT RULES:
                         result["call_outcome"] = outcome
                         result["call_outcome_description"] = DISPOSITION_MAP[outcome]
                         result["qna"] = []
+
+                # 5c. Interested + explicit "नहीं" after the product question + bot never
+                #     progressed to spec questions → Not Interested.
+                #     Catches two-step greetings where user said "हाँ" to the greeting,
+                #     then explicitly rejected when the product question was asked, but
+                #     the LLM (without a PRODUCT CONFIRMED note) still chose Interested.
+                if (
+                    outcome == "Interested"
+                    and _after_pq_has_explicit_no
+                    and not _bot_asked_spec_q
+                ):
+                    logger.info(
+                        f"[POST-PROC] Interested → Not Interested: explicit 'नहीं' "
+                        f"after product question, bot never reached spec questions"
+                    )
+                    outcome = "Not Interested"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+                    result["qna"] = []
+
+                # 5d. Short-call Interested + bot never reached spec questions + user's
+                #     post-product-question response has no confirmation token and no buying
+                #     signal → Short Hangup.
+                #     Catches company-name or side-conversation responses (e.g. "Safe Express")
+                #     that the LLM misreads as product engagement on calls ≤35 s.
+                if (
+                    outcome == "Interested"
+                    and duration_secs is not None
+                    and duration_secs <= 35
+                    and not _bot_asked_spec_q
+                    and _user_after_product_q
+                ):
+                    _BUYING_SIGNALS_PP = {
+                        unicodedata.normalize("NFC", s) for s in {
+                            "चाहिए", "chahiye", "लेना", "lena", "order", "खरीद", "kharid",
+                            "मंगाना", "mangana", "बुक", "book", "purchase", "mangwana",
+                            "quantity", "मात्रा", "मुझे", "hamein", "हमें",
+                        }
+                    }
+                    _CONFIRM_NFC = {unicodedata.normalize("NFC", w) for w in _CONFIRMATION_TOKENS}
+                    _post_pq_words: set[str] = set()
+                    if _product_q_turn_idx is not None:
+                        for _pt in transcript[_product_q_turn_idx + 1:]:
+                            if _pt.get("role") == "user":
+                                for _pw in (_pt.get("text") or "").split():
+                                    _pc = unicodedata.normalize("NFC", _strip_punct(_pw))
+                                    if _pc:
+                                        _post_pq_words.add(_pc)
+                    if (
+                        _post_pq_words
+                        and not (_post_pq_words & _CONFIRM_NFC)
+                        and not (_post_pq_words & _BUYING_SIGNALS_PP)
+                    ):
+                        logger.info(
+                            f"[POST-PROC] Interested → Short Hangup: dur={duration_secs:.0f}s ≤35s, "
+                            f"no spec questions, no buying/confirmation signal in post-PQ response: "
+                            f"{_post_pq_words}"
+                        )
+                        outcome = "Short Hangup"
+                        result["call_outcome"] = outcome
+                        result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+                        result["qna"] = []
+
+                # 5e. Could Not Confirm + explicit "नहीं" after product question + bot
+                #     never reached spec questions → Not Interested.
+                #     Symmetric to 5c (covers cases where LLM already gave CNC instead of
+                #     Interested, but the underlying reason is an explicit rejection).
+                if (
+                    outcome == "Could Not Confirm"
+                    and _after_pq_has_explicit_no
+                    and not _bot_asked_spec_q
+                    and not _has_handoff_turn   # handoff is a valid CNC reason, not rejection
+                ):
+                    logger.info(
+                        f"[POST-PROC] Could Not Confirm → Not Interested: explicit 'नहीं' "
+                        f"after product question, bot never reached spec questions"
+                    )
+                    outcome = "Not Interested"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+                    result["qna"] = []
 
                 # 6. Short-call Could Not Confirm → Short Hangup when user speech is
                 #    off-topic / garbled / contains no product signal.

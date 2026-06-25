@@ -1438,6 +1438,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         f"[STT] FINAL during muted-speaking (pre-barge-in) — "
                         f"pipeline-delay noise discarded: {transcript_text!r}"
                     )
+                    # Log so analysis knows the user said something even though it
+                    # couldn't be routed to the LLM (too short or buffer already full).
+                    _muted_transcript_log.append(f"[pipeline-delay] {transcript_text}")
                 _silero_rejected_turns.add(transcript_text)
                 return
             _turn_counter += 1
@@ -1545,6 +1548,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     _live_transcript.pop()
                 _silero_rejected_turns.add(transcript_text)
                 _silero_rejected_time = asyncio.get_event_loop().time()
+                _muted_transcript_log.append(f"[bystander-filtered] {transcript_text}")
                 return
             # Space-repetition babble filter (e.g. "पास पास पास पास पास पास" from STT)
             if _is_repetitive_babble(transcript_text):
