@@ -1039,6 +1039,11 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     product_name = keyword or product.get("product_name", "")
     questions = schema.get("question", [])
     is_business = buyer.get("is_business", "")
+    is_business_flag = buyer.get("is_business_flag")
+    try:
+        is_business_flag = int(is_business_flag) if is_business_flag is not None else None
+    except (ValueError, TypeError):
+        is_business_flag = None
     company_name = record.get("company_name", "").strip()
     # "bd": 2 → lead derived from a seller's Details Page; company_name is the
     # seller the buyer was browsing (NOT the buyer's own business).
@@ -1081,37 +1086,66 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     )
 
     business_prompt_section = ""
-    if is_business == "":
+    if is_business_flag in (1, 2, 3, 4, 5):
+        _pitch_q = (
+            "क्या आप अपने business के लिए leads लेना चाहेंगे?"
+            if is_business_flag == 3
+            else "क्या आप अपने business के लिए verified leads लेना चाहेंगे?"
+        )
+        _b2b_followup = (
+            "\n  - Then ask: \"क्या आपका business B2B है?\" and note their yes/no response."
+            if is_business_flag == 5
+            else ""
+        )
+        _hotlead_close = "Aapki requirement ke liye verified sellers aapse connect kar lenge aur hamari taraf se bhi jald hi sampark kiya jayega. Dhanyavaad."
         business_prompt_section = f"""
-━━━ BUSINESS USE — CONVERSATIONAL HANDLING ━━━
+━━━ BUSINESS LEADS PITCH — MANDATORY OVERRIDE ━━━
 
-The BUSINESS GATE — its triggers (quantity ≥ 100 of a bulk/count unit, business keywords, commercial radio options) and its exact mid-call sequence (acknowledge plainly without echoing the number → "आपके business का नाम क्या है?" → city → resume remaining questions) — is defined in the "HIGH-QUANTITY → BUSINESS GATE" section above. Apply those rules exactly as written. Business name/city are asked RIGHT WHEN THE GATE TRIGGERS, never at the end, and you NEVER ask "business या personal?" once the gate has triggered.
+⚠ CRITICAL: This pitch MUST be asked before ANY call closing — no exceptions except the
+hard exclusions listed below. This rule OVERRIDES the NOT-INTERESTED close and all other
+closing paths defined above.
 
-─────────────────────────────────────────────────
-If the gate is NOT triggered during qualification (quantity < 100, no business keywords):
+─── HARD EXCLUSIONS (close directly, skip pitch) ───
+  1. Caller is a confirmed seller/manufacturer of the product
+  2. Caller is seeking employment (job seeker)
+  3. Caller is abusive or using profane language
+  4. Caller has a grievance/complaint about a past purchase
 
-After ALL qualification questions are answered, ask naturally:
-  "एक बात और — क्या यह {product_name} business के लिए चाहिए आपको?"
+─── ALL OTHER CASES — pitch is mandatory before closing ───
 
-IF the buyer says YES (हाँ / हां / ji / bilkul / yes / business ke liye):
-  - Warmly acknowledge: "अच्छा, business के लिए — ज़रूर!"
-  - Ask business name: "आपके business का नाम क्या है?"
-  - After they answer, for the city:
-    • If the buyer mentioned a city name at ANY point earlier in this call — reconfirm: "क्या आपका business [city] में है?"
-      → If yes: accept and close the call.
-      → If no: ask "तो किस city में है?" then close.
-    • If no city was mentioned yet — ask fresh: "और आपका business किस city में है?" then close.
+This includes:
+  • Qualification complete normally → pitch → close
+  • User says they don't need the product mid-call ("zaroorat nahi", "nahi chahiye", "band karo") →
+    acknowledge briefly ("अच्छा जी, कोई बात नहीं.") → THEN ask pitch → close
+  • Step 1: user says NO, no other product either → ask pitch → close
+  • User is unresponsive or keeps avoiding questions → ask pitch → close
+  • Call is about to end for any other reason → ask pitch first
 
-IF the buyer says NO (नहीं / personal / ghar ke liye / khud ke liye):
-  - Accept naturally and move straight to closing. Do NOT ask business name or city.
+TRANSITION when user is disinterested mid-call:
+  Acknowledge: "अच्छा जी, कोई बात नहीं." then naturally pivot:
+  "एक minute — {_pitch_q}"
+  Do NOT say the NOT-INTERESTED close before asking the pitch.
 
-IF the buyer is unclear or doesn't respond properly:
-  - Re-ask once: "जी, मतलब क्या यह किसी business या shop के लिए है?"
-  - If still unclear: proceed directly to closing WITHOUT saying "personal use" or "business use" — do NOT label it either way. Just say the closing line.
+─── PITCH QUESTION ───
+  "{_pitch_q}"
 
-TONE RULES for this section:
-  - Keep it light and quick — these are 2 extra questions, not an interrogation.
-  - Do NOT announce "ab main business ke baare mein poochhungi" — just ask naturally after the last qualification question.
+─── RESPONSES ───
+
+IF caller says YES:{_b2b_followup}
+  - Use this closing line ONLY (replace standard closing entirely):
+    "{_hotlead_close}"
+
+IF caller says they do NOT want leads (नहीं / no / nahi chahiye):
+  - Accept: "अच्छा जी, कोई बात नहीं." → standard closing line.
+
+IF caller says they are NOT a business owner:
+  - Accept: "अच्छा जी, कोई बात नहीं." → standard closing line.
+
+IF no clear yes/no:
+  - Re-ask once: "जी, {_pitch_q}"
+  - Still unclear → standard closing line.
+
+Keep it natural — one question, not an interrogation.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """

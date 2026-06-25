@@ -174,6 +174,7 @@ async def generate_call_analysis(
     greeting_done: bool = True,
     user_speech_ms: int = 0,
     wrong_opener_detected: bool = False,
+    is_business_flag: int | None = None,
 ) -> dict:
     if gemini_connect_failed:
         return {
@@ -1376,7 +1377,20 @@ QnA EXTRACTION when buyer turns are absent:
         else:
             _duration_note = f"\n📞 CALL DURATION: {_dur_label}."
 
-    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_wrong_opener_note}{_truncated_greeting_note}{_phantom_connect_note}{_identity_q_note}{_reask_opening_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}
+    if is_business_flag in (1, 2, 3, 4, 5):
+        _biz_flag_note = (
+            f"\n📋 BUSINESS PITCH FLAG: is_business_flag={is_business_flag}. "
+            f"The agent was instructed to pitch business leads after qualification. "
+            f"business_intent MUST be set to a non-empty value for this call — "
+            f"use 'not_pitched' if the caller disconnected before the pitch was made."
+        )
+    else:
+        _biz_flag_note = (
+            "\n📋 BUSINESS PITCH FLAG: not set (flag 6-9 or absent). "
+            "No business pitch was made. Set business_intent to '' always for this call."
+        )
+
+    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_wrong_opener_note}{_truncated_greeting_note}{_phantom_connect_note}{_identity_q_note}{_reask_opening_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}{_biz_flag_note}
 
 Current date/time (IST, GMT+5:30): {current_dt_str}
 
@@ -1839,20 +1853,20 @@ STEP 2C — EXTRACT HOT LEAD FIELDS
 Extract these two fields from the full transcript. Do NOT infer or guess — only extract
 values explicitly stated or clearly implied by the buyer's direct response to the agent.
 
-  business_intent | Outcome of the business/seller pitch — set ONLY when the agent explicitly
-                  | offered the caller an opportunity to list their business on JustDial or
-                  | become a JD seller. Values:
-                  |   "hot_lead"          — caller confirmed they want to list / join JD
-                  |   "not_interested"    — caller was pitched but clearly declined
-                  |   "not_into_business" — caller explicitly said they are not a business
-                  |                         (personal use only), when asked about the pitch
-                  |   "no_response"       — pitch was made but caller gave no clear yes/no
-                  |   "not_pitched"       — call ended before the business pitch was made
-                  |                         (caller disconnected or call too short to reach it)
-                  |   ""                  — no business pitch was made in this call at all
-                  | RULE: only set a non-empty value if the agent explicitly asked the caller
-                  | about listing on JD / becoming a JD seller. Asking about the product
-                  | requirement alone does NOT count as a business pitch.
+  business_intent | Outcome of the business leads pitch — reflects the BUSINESS PITCH FLAG note above.
+                  | Values:
+                  |   "hot_lead"                — caller confirmed they want to receive leads
+                  |   "business_not_interested" — caller was pitched but clearly declined
+                  |                               (they have a business but don't want leads)
+                  |   "not_into_business"        — caller said they are not a business owner
+                  |                               (flag was set but caller turned out to be personal)
+                  |   "no_response"              — pitch was made but caller gave no clear yes/no
+                  |   "not_pitched"              — flag 1-5 was set but caller disconnected before
+                  |                               the pitch was reached
+                  |   ""                         — flag was not 1-5; no pitch was expected or made
+                  | RULE: if the BUSINESS PITCH FLAG note says flag is not set → always use "".
+                  | RULE: if flag is 1-5, only use "" if the call is so short the pitch was
+                  | structurally impossible — prefer "not_pitched" over "" for flag 1-5 calls.
 
   b2b_user        | Caller's direct answer to the agent's question "is your business B2B?" /
                   | "Kya apka business B2B hai?":
@@ -1872,7 +1886,7 @@ Return a SINGLE JSON object with EXACTLY these keys — no extra keys, no markdo
   "is_business": "<'True' | 'False' | '' — per Step 2B>",
   "business_name": "<business name in English (transliterated if needed), or ''>",
   "business_city": "<business city in English, or ''>",
-  "business_intent": "<'hot_lead'|'not_interested'|'not_into_business'|'no_response'|'not_pitched'|'' — per Step 2C>",
+  "business_intent": "<'hot_lead'|'business_not_interested'|'not_into_business'|'no_response'|'not_pitched'|'' — per Step 2C>",
   "b2b_user": "<'yes'|'no'|'' — per Step 2C>",
   "qna": [ ...entries per Step 2... ],
   "product_change": {{"product_name": "<new product name>"}},  // or {{}} if no product switch
@@ -1912,7 +1926,7 @@ STRICT OUTPUT RULES:
             result.setdefault("b2b_user", "")
 
             # Validate business_intent against allowed values
-            _valid_bi = {"hot_lead", "not_interested", "not_into_business", "no_response", "not_pitched", ""}
+            _valid_bi = {"hot_lead", "business_not_interested", "not_into_business", "no_response", "not_pitched", ""}
             if result.get("business_intent") not in _valid_bi:
                 result["business_intent"] = ""
             # Validate b2b_user against allowed values

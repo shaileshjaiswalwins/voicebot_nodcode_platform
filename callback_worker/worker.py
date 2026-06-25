@@ -56,6 +56,12 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
     schema = (doc.get("lead_record") or {}).get("qualification_schema", {}) or {}
     status = doc.get("status", "completed")
 
+    _buyer = ((doc.get("lead_record") or {}).get("buyer_details") or {})
+    try:
+        is_business_flag = int(_buyer.get("is_business_flag")) if _buyer.get("is_business_flag") is not None else None
+    except (ValueError, TypeError):
+        is_business_flag = None
+
     transcript = doc.get("transcript") or []
     muted_transcript = doc.get("muted_transcript") or []
     gemini_connect_failed = bool(doc.get("gemini_connect_failed"))
@@ -65,7 +71,7 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
     wrong_opener_detected = bool(doc.get("wrong_opener_detected", False))
     try:
         analysis, b2b_score = await asyncio.gather(
-            generate_call_analysis(transcript, status, schema, http_session, muted_transcript=muted_transcript, gemini_connect_failed=gemini_connect_failed, duration_secs=duration_secs, greeting_done=greeting_done, user_speech_ms=user_speech_ms, wrong_opener_detected=wrong_opener_detected),
+            generate_call_analysis(transcript, status, schema, http_session, muted_transcript=muted_transcript, gemini_connect_failed=gemini_connect_failed, duration_secs=duration_secs, greeting_done=greeting_done, user_speech_ms=user_speech_ms, wrong_opener_detected=wrong_opener_detected, is_business_flag=is_business_flag),
             generate_b2b_score(transcript, http_session),
         )
     except Exception as e:
