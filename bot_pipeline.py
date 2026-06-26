@@ -30,6 +30,7 @@ Run:  python bot_pipeline.py start
 import asyncio
 import io
 import json
+import logging as _logging
 import os
 import re
 import sys
@@ -214,6 +215,27 @@ logger.add(
     format=_log_format,
     colorize=False,
 )
+
+# Bridge stdlib WARNING+ logs from livekit.* into loguru so they land in our
+# rotating log files.  Without this, LiveKit's retry warnings (e.g. "failed to
+# synthesize speech … retrying in 2s") only write to raw stderr and are lost.
+class _InterceptHandler(_logging.Handler):
+    def emit(self, record: _logging.LogRecord) -> None:
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+        frame, depth = _logging.currentframe(), 2
+        while frame and frame.f_code.co_filename == _logging.__file__:
+            frame = frame.f_back
+            depth += 1
+        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+
+for _lk_ns in ("livekit.agents", "livekit.plugins.sarvam"):
+    _lk_log = _logging.getLogger(_lk_ns)
+    _lk_log.handlers = [_InterceptHandler()]
+    _lk_log.propagate = False
+    _lk_log.setLevel(_logging.WARNING)
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +501,23 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _end_time = time.time()
         _duration = round(_end_time - _start, 1) if _start else 0.0
 
+        _avg_latency_ms = (
+            round(sum(_response_latencies) / len(_response_latencies))
+            if _response_latencies else 0
+        )
+        # Log CALL END BEFORE any await.  This task can be cancelled mid-flight by the
+        # job runner (room-disconnect → _shutdown_fut → 15s cancel) while MongoDB /
+        # backend HTTP calls are in progress.  Loguru's enqueue=True write is
+        # non-blocking, so this line is guaranteed to land in the file even if the
+        # task is cancelled on the very next await.
+        _log.info(_SEP)
+        _log.info(
+            f"[CALL END] room={room_name} | status={status!r} | "
+            f"duration={_duration}s | lead_id={lead_id!r} | "
+            f"avg_latency={_avg_latency_ms}ms over {len(_response_latencies)} turn(s)"
+        )
+        _log.info(_SEP)
+
         _mongo_doc = {
             "lead_id": lead_id,
             "call_id": call_state.get("call_id"),
@@ -501,10 +540,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "user_speech_ms": round(_muted_capture.get("speech_ms", 0.0)),
             "wrong_opener_detected": False,  # deterministic TTS greeting, never wrong
             "turn_count": _turn_counter,
-            "avg_response_latency_ms": (
-                round(sum(_response_latencies) / len(_response_latencies))
-                if _response_latencies else 0
-            ),
+            "avg_response_latency_ms": _avg_latency_ms,
             "response_latencies_ms": _response_latencies,
             "tagged": False,
             "tagged_at": None,
@@ -578,11 +614,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         }
         await save_call_log_to_backend(call_log_payload)
 
-        _avg_latency_ms = (
-            round(sum(_response_latencies) / len(_response_latencies))
-            if _response_latencies else 0
-        )
-
         # Finalise Langfuse trace
         if _lf_trace:
             try:
@@ -605,14 +636,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _langfuse_client.flush()
             except Exception as _lf_ex:
                 _log.warning(f"[LANGFUSE] flush failed: {_lf_ex}")
-
-        _log.info(_SEP)
-        _log.info(
-            f"[CALL END] room={room_name} | status={status!r} | "
-            f"duration={_duration}s | lead_id={lead_id!r} | "
-            f"avg_latency={_avg_latency_ms}ms over {len(_response_latencies)} turn(s)"
-        )
-        _log.info(_SEP)
 
     _save_done_event = asyncio.Event()
 
@@ -1302,6 +1325,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     )
 
     # ── 9. Event handlers ──
+
+    @session.on("error")
+    def _on_session_error(event) -> None:
+        err = event.error
+        tag = {
+            "tts_error": "[TTS-ERROR]",
+            "stt_error": "[STT-ERROR]",
+            "llm_error": "[LLM-ERROR]",
+        }.get(getattr(err, "type", ""), "[PIPELINE-ERROR]")
+        status = "retry" if getattr(err, "recoverable", False) else "EXHAUSTED (all retries failed)"
+        _log.error(f"{tag} {status}: {getattr(err, 'error', err)}")
 
     @session.on("conversation_item_added")
     def _on_item_added(ev) -> None:
@@ -2313,9 +2347,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # The agent_state "speaking" handler schedules the 4s early-unmute automatically.
     _set_mic(False, reason="greeting-start")
     _log.info("[GREETING] Starting greeting via session.say()")
+    _greeting_cancelled = False
     try:
         await session.say(_greeting_text, allow_interruptions=True)
         _log.info("[GREETING] session.say() completed (TTS playout done)")
+    except asyncio.CancelledError:
+        _greeting_cancelled = True
+        _log.warning("[GREETING] session.say() cancelled — job runner cancelled entrypoint (room disconnected during TTS stall?)")
+        raise
     except Exception as _greet_exc:
         _log.warning(f"[GREETING] session.say() error: {_greet_exc}")
     finally:
@@ -2324,7 +2363,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if not _greeting_done:
             _greeting_done = True
             _bot_has_spoken = True
-            _log.info("[GREETING] Marking greeting_done=True in finally block")
+            _log.info(f"[GREETING] Marking greeting_done=True in finally block{' (cancelled)' if _greeting_cancelled else ''}")
         if not _call_ended and not _mic_enabled:
             _set_mic(True, reason="greeting-finally-unmute")
 

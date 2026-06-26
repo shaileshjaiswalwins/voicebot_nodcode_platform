@@ -478,6 +478,23 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _start = call_state.get("call_start_time")
         _end_time = time.time()
         _duration = round(_end_time - _start, 1) if _start else 0.0
+        _avg_latency_ms = (
+            round(sum(_response_latencies) / len(_response_latencies))
+            if _response_latencies else 0
+        )
+
+        # Log CALL END BEFORE any await.  This task can be cancelled mid-flight by the
+        # job runner (room-disconnect → _shutdown_fut → 15s cancel) while MongoDB /
+        # backend HTTP calls are in progress.  Loguru's enqueue=True write is
+        # non-blocking, so this line is guaranteed to land in the file even if the
+        # task is cancelled on the very next await.
+        _log.info(_SEP)
+        _log.info(
+            f"[CALL END] room={room_name} | status={status!r} | "
+            f"duration={_duration}s | lead_id={lead_id!r} | "
+            f"avg_latency={_avg_latency_ms}ms over {len(_response_latencies)} turn(s)"
+        )
+        _log.info(_SEP)
 
         _mongo_doc = {
             "lead_id": lead_id,
@@ -578,11 +595,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         }
         await save_call_log_to_backend(call_log_payload)
 
-        _avg_latency_ms = (
-            round(sum(_response_latencies) / len(_response_latencies))
-            if _response_latencies else 0
-        )
-
         # Finalise Langfuse trace
         if _lf_trace:
             try:
@@ -605,14 +617,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _langfuse_client.flush()
             except Exception as _lf_ex:
                 _log.warning(f"[LANGFUSE] flush failed: {_lf_ex}")
-
-        _log.info(_SEP)
-        _log.info(
-            f"[CALL END] room={room_name} | status={status!r} | "
-            f"duration={_duration}s | lead_id={lead_id!r} | "
-            f"avg_latency={_avg_latency_ms}ms over {len(_response_latencies)} turn(s)"
-        )
-        _log.info(_SEP)
 
     _save_done_event = asyncio.Event()
 
@@ -1302,6 +1306,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     )
 
     # ── 9. Event handlers ──
+
+    @session.on("error")
+    def _on_session_error(event) -> None:
+        err = event.error
+        tag = {
+            "tts_error": "[TTS-ERROR]",
+            "stt_error": "[STT-ERROR]",
+            "llm_error": "[LLM-ERROR]",
+        }.get(getattr(err, "type", ""), "[PIPELINE-ERROR]")
+        status = "retry" if getattr(err, "recoverable", False) else "EXHAUSTED (all retries failed)"
+        _log.error(f"{tag} {status}: {getattr(err, 'error', err)}")
 
     @session.on("conversation_item_added")
     def _on_item_added(ev) -> None:
@@ -2309,9 +2324,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # The agent_state "speaking" handler schedules the 4s early-unmute automatically.
     _set_mic(False, reason="greeting-start")
     _log.info("[GREETING] Starting greeting via session.say()")
+    _greeting_cancelled = False
     try:
         await session.say(_greeting_text, allow_interruptions=True)
         _log.info("[GREETING] session.say() completed (TTS playout done)")
+    except asyncio.CancelledError:
+        # Job runner cancelled the entrypoint (room disconnect fired _shutdown_fut while
+        # TTS was still retrying).  Log it so the cascade is visible, then re-raise so
+        # the framework sees a clean cancellation.
+        _greeting_cancelled = True
+        _log.warning("[GREETING] session.say() cancelled — job runner cancelled entrypoint (room disconnected during TTS stall?)")
+        raise
     except Exception as _greet_exc:
         _log.warning(f"[GREETING] session.say() error: {_greet_exc}")
     finally:
@@ -2320,7 +2343,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if not _greeting_done:
             _greeting_done = True
             _bot_has_spoken = True
-            _log.info("[GREETING] Marking greeting_done=True in finally block")
+            _log.info(f"[GREETING] Marking greeting_done=True in finally block{' (cancelled)' if _greeting_cancelled else ''}")
         if not _call_ended and not _mic_enabled:
             _set_mic(True, reason="greeting-finally-unmute")
 
