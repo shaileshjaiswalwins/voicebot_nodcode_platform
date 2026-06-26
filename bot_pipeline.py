@@ -79,7 +79,7 @@ from bot import (
     _build_sample_from_search,
     _execute_function_call,
     call_configured_function,
-    save_call_log_to_backend,
+
     build_system_prompt,
     build_transcript_from_session,
     _dedup_words,
@@ -554,65 +554,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             )
         except Exception as e:
             _log.error(f"[MONGO] insert failed: {e}")
-
-        _lead = call_state.get("lead_record") or {}
-        _search_ctx = _lead.get("search_context") or {}
-        _product = (
-            (_search_ctx.get("searched_product") or {}).get("product_name", "")
-            or _search_ctx.get("searched_keyword", "")
-            or _lead.get("catname", "")
-        )
-        _end_ts = datetime.now(timezone.utc).isoformat()
-        _start_ts = datetime.fromtimestamp(_start, tz=timezone.utc).isoformat() if _start else None
-        _transcripts = [
-            {
-                "id": idx + 1, "call_id": 0,
-                "timestamp": _start_ts or _end_ts,
-                "speaker": "user" if t["role"] in ("buyer", "user") else "assistant",
-                "text": t.get("text", ""),
-                "sentiment": "neutral", "confidence": 1.0,
-                "created_at": _start_ts or _end_ts,
-            }
-            for idx, t in enumerate(transcript)
-        ]
-        call_log_payload = {
-            "call_sid": call_state.get("call_id") or room_name,
-            "stream_id": f"session-{int(time.time())}",
-            "from_number": sip_info.get("caller_number", ""),
-            "to_number": sip_info.get("dialed_number", ""),
-            "start_time": _start_ts,
-            "end_time": _end_ts,
-            "duration_seconds": _duration,
-            "recording_link": None,
-            "organization_id": _bot_config.get("organization_id", ""),
-            "assistant_id": _assistant_id,
-            "status": "completed" if status == "completed" else "disconnected",
-            "summary": "",
-            "call_type": "inbound",
-            "outcome": status,
-            "transcripts": _transcripts,
-            "meta_data": {
-                "lead_id": call_state.get("record_id", ""),
-                "lead_call_id": call_state.get("call_id", ""),
-                "product": _product,
-                "qna": [],
-                "is_business": "",
-                "rescheduled_to": "",
-                "product_change": call_state.get("product_change") or {},
-                "buyer_name": (_lead.get("buyer_details") or {}).get("buyer_name", ""),
-                "buyer_city": (_lead.get("buyer_details") or {}).get("buyer_city", ""),
-                "call_outcome_desc": "",
-                "turn_count": _turn_counter,
-                "no_user_response": (_turn_counter == 0 and status == "disconnected"),
-            },
-            "tags": (
-                [status, "no_response"]
-                if _turn_counter == 0 and status == "disconnected"
-                else [status]
-            ),
-            "sentiment": "neutral",
-        }
-        await save_call_log_to_backend(call_log_payload)
 
         # Finalise Langfuse trace
         if _lf_trace:
