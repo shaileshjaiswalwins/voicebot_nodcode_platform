@@ -587,17 +587,19 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         if status == "disconnected":
             await asyncio.sleep(1.0)
         await save_call_data(status)
-        asyncio.create_task(_delete_room_safe())
-        try:
-            await _bg_audio.aclose()
-        except Exception:
-            pass
-        try:
-            await session.aclose()
-        except Exception:
-            pass
+        # Signal entrypoint immediately after data is saved — don't wait for
+        # FFmpeg/WebRTC teardown which can hang indefinitely.
         if not _was_done:
             _save_done_event.set()
+        asyncio.create_task(_delete_room_safe())
+        try:
+            await asyncio.wait_for(_bg_audio.aclose(), timeout=5.0)
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(session.aclose(), timeout=5.0)
+        except Exception:
+            pass
 
     # ── Inactivity tracking ──
     _nudge_count = 0

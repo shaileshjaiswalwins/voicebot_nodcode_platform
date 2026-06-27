@@ -3,7 +3,7 @@
 import asyncio
 import os
 import signal
-from datetime import datetime
+from datetime import datetime, timezone
 
 import aiohttp
 from loguru import logger
@@ -41,7 +41,7 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
         logger.warning(f"[WORKER] Skipping doc {doc_id} — no lead_id")
         await loop.run_in_executor(None, lambda: collection.update_one(
             {"_id": doc_id},
-            {"$set": {"tagged": True, "tagged_at": datetime.utcnow(), "skipped_reason": "no_lead_id"}},
+            {"$set": {"tagged": True, "tagged_at": datetime.now(timezone.utc), "skipped_reason": "no_lead_id"}},
         ))
         return
 
@@ -49,7 +49,7 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
         logger.warning(f"[WORKER] Skipping doc {doc_id} — fallback lead_id={lead_id!r}")
         await loop.run_in_executor(None, lambda: collection.update_one(
             {"_id": doc_id},
-            {"$set": {"tagged": True, "tagged_at": datetime.utcnow(), "skipped_reason": "fallback_lead_id"}},
+            {"$set": {"tagged": True, "tagged_at": datetime.now(timezone.utc), "skipped_reason": "fallback_lead_id"}},
         ))
         return
 
@@ -107,7 +107,7 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
     if ok:
         await loop.run_in_executor(None, lambda: collection.update_one(
             {"_id": doc_id},
-            {"$set": {"tagged": True, "tagged_at": datetime.utcnow()}},
+            {"$set": {"tagged": True, "tagged_at": datetime.now(timezone.utc)}},
         ))
         logger.info(f"[WORKER] Tagged doc {doc_id} | lead_id={lead_id!r}")
     else:
