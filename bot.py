@@ -1045,14 +1045,14 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     except (ValueError, TypeError):
         is_business_flag = None
     company_name = record.get("company_name", "").strip()
-    # "bd": 2 → lead derived from a seller's Details Page; company_name is the
-    # seller the buyer was browsing (NOT the buyer's own business).
-    from_details_page = str(record.get("bd", "")) == "2" and bool(company_name)
+    # company_name present → lead is linked to a seller the buyer was browsing.
+    # bd=2 (Details Page) is one source; company_name alone is sufficient.
+    from_details_page = bool(company_name)
 
     if pipeline_mode:
         # TTS already spoke the intro ("हेलो, मैं Simran बोल रही हूँ Justdial से।").
         # LLM's first response asks the product question — with seller context when
-        # the lead came from a Details Page.
+        # the lead is linked to a company the buyer was browsing.
         if from_details_page:
             mandatory_opening = (
                 f"जी, आप {company_name} के product देख रहे थे — "
@@ -1061,10 +1061,17 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
         else:
             mandatory_opening = f"आपको {product_name} की requirement है ना?"
     else:
-        mandatory_opening = (
-            f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
-            f"आपको {product_name} की requirement है ना?"
-        )
+        if from_details_page:
+            mandatory_opening = (
+                f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
+                f"आप {company_name} के product देख रहे थे — "
+                f"आपको {product_name} की requirement है ना?"
+            )
+        else:
+            mandatory_opening = (
+                f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
+                f"आपको {product_name} की requirement है ना?"
+            )
 
     # Single source for the question list: _build_question_phrase_rules carries
     # the numbered "meaning → ask in Hindi" framing AND per-type answer

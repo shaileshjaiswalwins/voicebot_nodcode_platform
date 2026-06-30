@@ -2398,7 +2398,7 @@ HARD RULES
 
 OUTPUT — strict JSON, no additional keys or commentary:
 {{
-  "deal_value": "<estimated deal value as a single number string, e.g. '₹75,000', or '' if cannot be determined>",
+  "deal_value": "<estimated deal value as a plain number string with no currency symbol, e.g. '75000', or '' if cannot be determined>",
   "lead_intent_score": "<final_score as a string, e.g. '7.5'>",
   "urgency_flag": "<'yes' if urgency detected, 'no' otherwise>"
 }}
@@ -2424,6 +2424,8 @@ CONVERSATION TO ANALYZE:
             result.setdefault("deal_value", "")
             result.setdefault("lead_intent_score", "")
             result.setdefault("urgency_flag", "no")
+            if result.get("deal_value"):
+                result["deal_value"] = result["deal_value"].replace("₹", "").replace(",", "").strip()
             return result
     except Exception as e:
         logger.error(f"[B2B SCORE] LLM scoring failed: {type(e).__name__}: {e}")
