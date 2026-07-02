@@ -606,9 +606,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _nudge_in_progress = False
     _inactivity_task: asyncio.Task | None = None
     _call_ended = False
+    # Guards against an unbounded silent loop: the muted-capture branches below reset
+    # _nudge_count back to 0 and reschedule instead of nudging, whenever a muted-window
+    # transcription is buffered/in-flight but never resolves into a real user turn.
+    # Without a cap, a call with a confused/noisy caller can sit silently resetting
+    # itself indefinitely — the bot never says "क्या आप अभी line पर हैं?" and never ends
+    # the call, until the hard 300s call-duration timeout eventually kicks the caller.
+    # _STALL_RESET_CAP bounds that to ~60s of unresolved buffering.
+    _STALL_RESET_CAP = 6
+    _stall_resets = 0
 
     async def _inactivity_timeout() -> None:
-        nonlocal _nudge_count, _inactivity_task, _nudge_in_progress
+        nonlocal _nudge_count, _inactivity_task, _nudge_in_progress, _stall_resets
         sleep_secs = _inactivity_close_secs if _nudge_count >= 2 else _inactivity_nudge_secs
 
         if _nudge_count == 0 and _greeting_done and _turn_counter == 0:
@@ -620,9 +629,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
                 return
             # Check if a muted-window transcription landed (from post-greeting STT)
-            if _muted_inject.get("text"):
+            if _muted_inject.get("text") and _stall_resets < _STALL_RESET_CAP:
+                _stall_resets += 1
                 _log.info(
-                    f"[INACTIVITY] early check — muted-capture text buffered, letting inject flow"
+                    "[INACTIVITY] early check — muted-capture text buffered, letting inject flow "
+                    f"[stall {_stall_resets}/{_STALL_RESET_CAP}]"
                 )
                 _nudge_count = 0
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
@@ -674,10 +685,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
                 return
             _now2 = asyncio.get_event_loop().time()
-            if _muted_inject.get("text") or (
-                _muted_inject_sent_time > 0 and (_now2 - _muted_inject_sent_time) < 8.0
-            ):
-                _log.info("[INACTIVITY] nudge suppressed — muted-capture inject in flight/recent")
+            if (
+                _muted_inject.get("text")
+                or (_muted_inject_sent_time > 0 and (_now2 - _muted_inject_sent_time) < 8.0)
+            ) and _stall_resets < _STALL_RESET_CAP:
+                _stall_resets += 1
+                _log.info(
+                    "[INACTIVITY] nudge suppressed — muted-capture inject in flight/recent "
+                    f"[stall {_stall_resets}/{_STALL_RESET_CAP}]"
+                )
                 _nudge_count = 0
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
                 return
@@ -691,12 +707,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _log.warning(f"[INACTIVITY] nudge say() failed: {e}")
 
     def _reset_inactivity(from_user_speech: bool = False) -> None:
-        nonlocal _nudge_count, _inactivity_task, _nudge_in_progress
+        nonlocal _nudge_count, _inactivity_task, _nudge_in_progress, _stall_resets
         if _call_ended:
             return
         if from_user_speech:
             _nudge_count = 0
             _nudge_in_progress = False
+            _stall_resets = 0
         elif not _nudge_in_progress:
             _nudge_count = 0
         had_task = _inactivity_task and not _inactivity_task.done()
@@ -1955,39 +1972,56 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                         f"[MUTED-CAPTURE] greeting window: {_greeting_captured_ms:.0f}ms "
                         "— spawning Sarvam transcription"
                     )
-                    asyncio.create_task(
+                    _transcribe_task = asyncio.create_task(
                         _transcribe_muted_period(_greeting_captured_frames, _greeting_captured_ms)
                     )
 
                     async def _post_greeting_inject() -> None:
-                        await asyncio.sleep(0.8)
+                        # Wait on the REAL transcription instead of a blind fixed sleep — a
+                        # blind sleep(0.8) races Sarvam's HTTP round-trip (often >800ms) and
+                        # silently drops the reply when it loses, leaving the caller in dead
+                        # air right after their pickup "haan ji?" — a major driver of <10s
+                        # hangups. asyncio.shield keeps the transcription running (still
+                        # lands in _muted_transcript_log for analysis) even if we time out.
+                        try:
+                            await asyncio.wait_for(asyncio.shield(_transcribe_task), timeout=1.5)
+                        except asyncio.TimeoutError:
+                            _log.info("[MUTED-CAPTURE] transcription still pending after 1.5s — proceeding without it")
+                        except Exception as e:
+                            _log.warning(f"[MUTED-CAPTURE] transcription task error: {e}")
                         if _call_ended or _closing_triggered or _turn_counter > 0:
                             return
                         text = _muted_inject.get("text", "")
-                        if not text:
-                            return
-                        if _greeting_captured_ms < 800:
-                            _log.info(
-                                f"[MUTED-CAPTURE] post-greeting inject skipped — too short "
-                                f"({_greeting_captured_ms:.0f}ms): {text!r}"
-                            )
-                            if _muted_transcript_log and _muted_transcript_log[-1] == text:
-                                _muted_transcript_log.pop()
-                            _muted_inject["text"] = ""
-                            return
-                        # Two-step greeting: Step 1 is identity-only, so the user's
-                        # muted-window response (bare "हाँ" or substantive) is their
-                        # pickup reply. Inject it ALL to the LLM — the LLM will ask
-                        # the product question as its first response, turning bare acks
-                        # into a natural two-exchange confirmation flow.
                         _muted_inject["text"] = ""
-                        _log.info(f"[MUTED-CAPTURE] post-greeting inject → LLM: {text!r}")
+                        _tokens = _normalize_stt_tokens(text) if text else []
+                        _bare_open_tokens = _THINKING_FILLER_TOKENS | _SHORT_TERMINAL_TOKENS
+                        _is_substantive = (
+                            bool(_tokens)
+                            and not all(t in _bare_open_tokens for t in _tokens)
+                            and _greeting_captured_ms >= 800
+                        )
+                        # Two-step greeting: Step 1 is identity-only, so a SUBSTANTIVE
+                        # muted-window reply is genuine content — feed it to the LLM as
+                        # user_input. A bare pickup reflex ("haan ji", "hello", "ji") or no
+                        # usable transcription must NEVER be injected as user_input — doing
+                        # so risks the post-call analysis reading it as a product
+                        # confirmation. Either way the bot must speak now: never leave the
+                        # call in dead air waiting on the caller. generate_reply() with no
+                        # user_input makes the LLM speak its MANDATORY OPENING (the product
+                        # question) per the system prompt — exactly the desired fallback.
+                        _injected_text = text if _is_substantive else None
+                        if _is_substantive:
+                            _log.info(f"[GREETING-OPEN] substantive muted reply → inject as user_input: {text!r}")
+                        else:
+                            _log.info(f"[GREETING-OPEN] bare/none ({text!r}) — asking product question, no dead air")
                         try:
-                            session.generate_reply(user_input=text)
+                            if _injected_text:
+                                session.generate_reply(user_input=_injected_text)
+                            else:
+                                session.generate_reply()
                             nonlocal _muted_inject_sent_time
                             _muted_inject_sent_time = asyncio.get_event_loop().time()
                             # Watchdog: if LLM doesn't start speaking within 3s, re-inject
-                            _injected_text = text
                             _speaking_count_at_inject = _speaking_turns_completed
 
                             async def _post_greeting_watchdog() -> None:
@@ -2007,7 +2041,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                                     f"— re-injecting {_injected_text!r}"
                                 )
                                 try:
-                                    session.generate_reply(user_input=_injected_text)
+                                    if _injected_text:
+                                        session.generate_reply(user_input=_injected_text)
+                                    else:
+                                        session.generate_reply()
                                 except Exception as _ex:
                                     _log.warning(f"[LLM-WATCHDOG] post-greeting re-inject failed: {_ex}")
 

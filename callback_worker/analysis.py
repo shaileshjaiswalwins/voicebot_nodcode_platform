@@ -635,11 +635,25 @@ async def generate_call_analysis(
         "खरीदना है", "kharidna hai",
         "order करना है", "order karna hai",
     ]
+    # The exact-phrase list above is word-order-sensitive ("मुझे चाहिए" matches but the
+    # equally common "चाहिए मुझे"/"हाँ चाहिए मुझे" does not) — spoken Hindi word order varies
+    # a lot, so also fall back to a bare "चाहिए"/"chahiye" anywhere in a user turn. That
+    # single word is a strong "I want/need this" signal on its own — EXCEPT when the same
+    # turn also contains "नहीं" (e.g. "नहीं चाहिए" = "don't need it"), which is a rejection,
+    # not a want, even though the substring "चाहिए" is present.
+    def _turn_has_bare_want_signal(_text: str) -> bool:
+        _t_nfc = unicodedata.normalize("NFC", _text)
+        _t_lower = unicodedata.normalize("NFC", _text.lower())
+        if "नहीं" in _t_nfc or "nahi" in _t_lower or "nahin" in _t_lower:
+            return False
+        return "चाहिए" in _t_nfc or "chahiye" in _t_lower
+
     _ni_user_wants_product_bypass = any(
         any(
             unicodedata.normalize("NFC", p.lower()) in unicodedata.normalize("NFC", (t.get("text") or "").lower())
             for p in _NI_POSITIVE_WANT_PATTERNS
         )
+        or _turn_has_bare_want_signal(t.get("text") or "")
         for t in non_empty_user_turns
     )
     if (
@@ -1184,14 +1198,58 @@ async def generate_call_analysis(
     # rejection is the authoritative signal.
     _first_turn_has_explicit_no = "नहीं" in unicodedata.normalize("NFC", _first_user_text)
 
+    # Find the B2B/verified-leads upsell question turn, if the agent reached it. This is
+    # a separate cross-sell pitch asked AFTER product qualification is done — a buyer's
+    # "नहीं" here answers "is your business B2B?" / "do you want verified leads?", not
+    # "do you still need the product?". It must never be scanned as a product rejection.
+    _UPSELL_Q_PATTERNS = ["verified leads", "business B2B", "business के लिए", "B2B है"]
+    _upsell_q_turn_idx = None
+    if _product_q_turn_idx is not None:
+        for _up_i in range(_product_q_turn_idx + 1, len(transcript)):
+            _up_t = transcript[_up_i]
+            if _up_t.get("role") == "assistant" and any(
+                p in (_up_t.get("text") or "") for p in _UPSELL_Q_PATTERNS
+            ):
+                _upsell_q_turn_idx = _up_i
+                break
+    _after_pq_scope_end = _upsell_q_turn_idx if _upsell_q_turn_idx is not None else len(transcript)
+
     # Block the note when the buyer replied "नहीं" to the ACTUAL product question.
     # The _first_turn_has_explicit_no guard only covers the very first user turn, which
     # may have been a phone-pickup "हाँ" spoken BEFORE the product question was asked.
     # In two-step greetings this "हाँ" is NOT a product confirmation — and if the user
     # then rejects after the product question we must not inject PRODUCT CONFIRMED.
+    # Scoped to end BEFORE the B2B/upsell pitch (see _upsell_q_turn_idx above) so a
+    # "नहीं" answering that later, unrelated question isn't misread as a product rejection.
     _after_pq_has_explicit_no = _product_q_asked and any(
         "नहीं" in unicodedata.normalize("NFC", (t.get("text") or ""))
-        for t in transcript[_product_q_turn_idx + 1:]
+        for t in transcript[_product_q_turn_idx + 1 : _after_pq_scope_end]
+        if t.get("role") == "user" and (t.get("text") or "").strip()
+    )
+    # A buyer can say "नहीं" and then reverse themselves later in the same call (confusion,
+    # mishearing, or genuinely changing their mind mid-conversation — e.g. "नहीं... अरे हाँ
+    # चाहिए मुझे"). The plain substring scan above only detects THAT a "नहीं" occurred
+    # somewhere; it has no notion of conversation order after that point. Find the LAST
+    # "नहीं" turn and check whether any user turn AFTER it (still before the B2B pitch)
+    # contains a confirmation/buying signal — if so, this is a reversal, not a rejection,
+    # and the deterministic post-proc rules below must not force Not Interested over it.
+    _last_no_turn_idx = None
+    if _after_pq_has_explicit_no:
+        for _no_i in range(_after_pq_scope_end - 1, _product_q_turn_idx, -1):
+            _no_t = transcript[_no_i]
+            if _no_t.get("role") == "user" and "नहीं" in unicodedata.normalize(
+                "NFC", (_no_t.get("text") or "")
+            ):
+                _last_no_turn_idx = _no_i
+                break
+    _REVERSAL_SIGNALS = _CONFIRMATION_TOKENS | {
+        unicodedata.normalize("NFC", s) for s in {
+            "चाहिए", "chahiye", "लेना", "lena", "मंगाना", "mangana", "मुझे", "hamein", "हमें",
+        }
+    }
+    _no_has_later_reversal = _last_no_turn_idx is not None and any(
+        bool({_strip_punct(w) for w in (t.get("text") or "").split() if w.strip()} & _REVERSAL_SIGNALS)
+        for t in transcript[_last_no_turn_idx + 1 : _after_pq_scope_end]
         if t.get("role") == "user" and (t.get("text") or "").strip()
     )
     # Require that a confirmation token actually appears AFTER the product question.
@@ -1384,7 +1442,14 @@ QnA EXTRACTION when buyer turns are absent:
                 f"confirmation beyond a single-word acknowledgement. "
                 f"Only classify as Could Not Confirm if there is a clear reason the "
                 f"confirmation couldn't happen (hold, handoff, IVR). Garbled or off-topic "
-                f"audio alone is Short Hangup, not Could Not Confirm."
+                f"audio alone is Short Hangup, not Could Not Confirm. "
+                f"EXCEPTION — this short-call preference does NOT override the Short Hangup "
+                f"exclusion rule: if the buyer's बare हाँ/जी/नहीं was said DIRECTLY in answer "
+                f"to the agent's opening product-requirement question itself (e.g. जी answering "
+                f"'आपको X की requirement है ना?'), that IS product engagement regardless of call "
+                f"length — classify as Interested (हाँ/जी) or Not Interested (नहीं), never Short "
+                f"Hangup. This exception applies ONLY to a direct answer to the opening product "
+                f"question, not to acknowledgements during the greeting or before that question."
             )
         elif duration_secs < 25:
             _duration_note = (
@@ -2053,7 +2118,7 @@ STRICT OUTPUT RULES:
             if (
                 outcome == "Short Hangup"
                 and _pq_direct_response_confirmed
-                and not _after_pq_has_explicit_no
+                and (not _after_pq_has_explicit_no or _no_has_later_reversal)
             ):
                 logger.info(
                     f"[POST-PROC] Short Hangup → Interested: "
@@ -2181,9 +2246,14 @@ STRICT OUTPUT RULES:
                 #     Catches two-step greetings where user said "हाँ" to the greeting,
                 #     then explicitly rejected when the product question was asked, but
                 #     the LLM (without a PRODUCT CONFIRMED note) still chose Interested.
+                #     Skipped if the buyer reversed themselves after the "नहीं" (a later
+                #     confirmation/buying-signal turn) — that's a change-of-mind, not a
+                #     rejection, and this deterministic rule must not override the LLM's
+                #     own full-conversation read in that case.
                 if (
                     outcome == "Interested"
                     and _after_pq_has_explicit_no
+                    and not _no_has_later_reversal
                     and not _bot_asked_spec_q
                 ):
                     logger.info(
@@ -2242,9 +2312,12 @@ STRICT OUTPUT RULES:
                 #     never reached spec questions → Not Interested.
                 #     Symmetric to 5c (covers cases where LLM already gave CNC instead of
                 #     Interested, but the underlying reason is an explicit rejection).
+                #     Same reversal exemption as 5c — a later confirmation after the "नहीं"
+                #     means the buyer changed their mind, so don't force Not Interested.
                 if (
                     outcome == "Could Not Confirm"
                     and _after_pq_has_explicit_no
+                    and not _no_has_later_reversal
                     and not _bot_asked_spec_q
                     and not _has_handoff_turn   # handoff is a valid CNC reason, not rejection
                 ):

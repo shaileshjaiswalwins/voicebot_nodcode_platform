@@ -1714,11 +1714,20 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # Inactivity tracking
     _nudge_count = 0
     _nudge_in_progress = False   # True while bot is speaking an inactivity nudge
+    # Guards against an unbounded silent loop: several rescue/suppression paths below
+    # reset _nudge_count back to 0 and reschedule instead of nudging, whenever background
+    # noise or an unresolved muted-capture buffer is present but no real user turn lands.
+    # Without a cap, a call with persistent line noise (or a caller who never speaks
+    # intelligibly) can sit silently resetting itself indefinitely — the bot never says
+    # "क्या आप अभी line पर हैं?" and never ends the call, until the hard 300s call-duration
+    # timeout eventually kicks the caller. _STALL_RESET_CAP bounds that to ~60s.
+    _STALL_RESET_CAP = 6
+    _stall_resets = 0
     _inactivity_task: asyncio.Task | None = None
     _call_ended = False
 
     async def _inactivity_timeout() -> None:
-        nonlocal _nudge_count, _inactivity_task, _nudge_in_progress
+        nonlocal _nudge_count, _inactivity_task, _nudge_in_progress, _stall_resets
         # Nudge 1 at (first_rescue + first_nudge_gap) s (default 8 s),
         # nudge 2 at nudge_secs after (default 10 s), close at close_secs after nudge 2 (default 5 s).
         sleep_secs = _inactivity_close_secs if _nudge_count >= 2 else _inactivity_nudge_secs
@@ -1736,10 +1745,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _nudge_count = 0
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
                 return
-            if _user_audio["speech_ms"] > 200:
+            if _user_audio["speech_ms"] > 200 and _stall_resets < _STALL_RESET_CAP:
+                _stall_resets += 1
                 _log.info(
                     f"[INACTIVITY] speech_ms={_user_audio['speech_ms']:.0f} at 4s — "
-                    "early Sarvam rescue (Gemini missed initial response)"
+                    f"early Sarvam rescue (Gemini missed initial response) [stall {_stall_resets}/{_STALL_RESET_CAP}]"
                 )
                 _nudge_count = 0
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
@@ -1859,10 +1869,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 return
             # Skip nudge if audio RMS shows active input but Gemini gave no transcript —
             # try Sarvam to rescue the missed utterance.
-            if _user_audio["speech_ms"] > 200:
+            if _user_audio["speech_ms"] > 200 and _stall_resets < _STALL_RESET_CAP:
+                _stall_resets += 1
                 _log.info(
                     f"[INACTIVITY] speech_ms={_user_audio['speech_ms']:.0f} — "
-                    "Gemini silent on live audio — attempting Sarvam rescue"
+                    f"Gemini silent on live audio — attempting Sarvam rescue [stall {_stall_resets}/{_STALL_RESET_CAP}]"
                 )
                 _nudge_count = 0
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
@@ -1923,10 +1934,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # when the caller spoke during the greeting window and the post-greeting watchdog
             # is still running.  This race window grew when we shortened the first-nudge gap.
             _now2 = asyncio.get_event_loop().time()
-            if _muted_inject.get("text") or (
-                _muted_inject_sent_time > 0 and (_now2 - _muted_inject_sent_time) < 8.0
-            ):
-                _log.info("[INACTIVITY] nudge suppressed — muted-capture inject in flight/recent")
+            if (
+                _muted_inject.get("text")
+                or (_muted_inject_sent_time > 0 and (_now2 - _muted_inject_sent_time) < 8.0)
+            ) and _stall_resets < _STALL_RESET_CAP:
+                _stall_resets += 1
+                _log.info(
+                    "[INACTIVITY] nudge suppressed — muted-capture inject in flight/recent "
+                    f"[stall {_stall_resets}/{_STALL_RESET_CAP}]"
+                )
                 _nudge_count = 0
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
                 return
@@ -1938,13 +1954,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # _nudge_in_progress=True prevents that call from zeroing _nudge_count.
 
     def _reset_inactivity(from_user_speech: bool = False) -> None:
-        nonlocal _nudge_count, _inactivity_task, _nudge_in_progress
+        nonlocal _nudge_count, _inactivity_task, _nudge_in_progress, _stall_resets
         if _call_ended:
             return
         if from_user_speech:
-            # User genuinely spoke — clear everything.
+            # User genuinely spoke — clear everything, including the stall-reset guard.
             _nudge_count = 0
             _nudge_in_progress = False
+            _stall_resets = 0
         elif not _nudge_in_progress:
             # Normal bot-speech-end event while no nudge is pending — reset counter.
             _nudge_count = 0
