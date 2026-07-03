@@ -137,8 +137,6 @@ def build_callback_payload(doc: dict, analysis: dict, b2b_score: dict | None = N
         "call_id": str(doc.get("_id", "")),
         "lead_id": doc.get("lead_id"),
         "is_business": analysis.get("is_business", ""),
-        "business_intent": analysis.get("business_intent", ""),
-        "b2b_user": analysis.get("b2b_user", ""),
         "business_name": analysis.get("business_name", ""),
         "business_city": analysis.get("business_city", ""),
         "deal_value": _b2b.get("deal_value", ""),
