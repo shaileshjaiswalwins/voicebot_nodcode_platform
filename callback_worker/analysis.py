@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import aiohttp
 from loguru import logger
 
-from .config import GEMINI_API_KEY
+from .config import GEMINI_API_KEY, HOT_LEAD_FLOW_ENABLED
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -158,6 +158,7 @@ def fallback_analysis(status: str) -> dict:
         "call_outcome_description": DISPOSITION_MAP.get(outcome, ""),
         "call_summary": "", "is_business": "", "qna": [],
         "product_change": {}, "rescheduled_to": "",
+        "business_intent": "", "b2b_user": "",
     }
 
 
@@ -173,13 +174,14 @@ async def generate_call_analysis(
     greeting_done: bool = True,
     user_speech_ms: int = 0,
     wrong_opener_detected: bool = False,
+    is_business_flag: int | None = None,
 ) -> dict:
     if gemini_connect_failed:
         return {
             "call_outcome": "Technical Issue - Call Connected",
             "call_outcome_description": DISPOSITION_MAP["Technical Issue - Call Connected"],
             "call_summary": "Gemini realtime WebSocket failed to connect — bot was silent, no greeting was spoken.",
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
     if not transcript:
@@ -202,7 +204,7 @@ async def generate_call_analysis(
             "call_outcome": "Short Hangup",
             "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
             "call_summary": _no_tr_summary,
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
@@ -214,7 +216,7 @@ async def generate_call_analysis(
             "call_outcome": "Voicemail",
             "call_outcome_description": DISPOSITION_MAP["Voicemail"],
             "call_summary": "Call was answered by an automated IVR system, not a live person.",
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
@@ -238,7 +240,7 @@ async def generate_call_analysis(
                 "call_outcome": "Abusive Lead",
                 "call_outcome_description": DISPOSITION_MAP["Abusive Lead"],
                 "call_summary": "Caller used explicit profanity or abusive language during the call.",
-                "is_business": "", "business_city": "", "business_name": "",
+                "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
 
@@ -348,7 +350,7 @@ async def generate_call_analysis(
                 "call_outcome": "Short Hangup",
                 "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
                 "call_summary": _summary,
-                "is_business": "", "business_city": "", "business_name": "",
+                "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
         # Muted transcript has content — check if it's only greetings/acknowledgements.
@@ -379,7 +381,7 @@ async def generate_call_analysis(
                 "call_outcome": "Short Hangup",
                 "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
                 "call_summary": _summary,
-                "is_business": "", "business_city": "", "business_name": "",
+                "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
         # Muted transcript has substantive content but no live user turns — STT failed on live mic
@@ -426,7 +428,7 @@ async def generate_call_analysis(
             "call_outcome": "Voicemail",
             "call_outcome_description": DISPOSITION_MAP["Voicemail"],
             "call_summary": "Call was answered by an automated IVR system, not a live person.",
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
@@ -469,7 +471,7 @@ async def generate_call_analysis(
                 "call_outcome": "Voicemail",
                 "call_outcome_description": DISPOSITION_MAP["Voicemail"],
                 "call_summary": "Call was answered by voicemail or automated IVR system.",
-                "is_business": "", "business_city": "", "business_name": "",
+                "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
         if any(sig in text_lower for sig in _HOLD_MUSIC_SIGNALS_PRE):
@@ -477,7 +479,7 @@ async def generate_call_analysis(
                 "call_outcome": "Could Not Confirm",
                 "call_outcome_description": DISPOSITION_MAP["Could Not Confirm"],
                 "call_summary": "Caller placed the bot on hold; no product confirmation was obtained.",
-                "is_business": "", "business_city": "", "business_name": "",
+                "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
 
@@ -502,7 +504,7 @@ async def generate_call_analysis(
             "call_outcome": "Wrong Number",
             "call_outcome_description": DISPOSITION_MAP["Wrong Number"],
             "call_summary": "Caller confirmed the number does not belong to the intended contact — someone submitted the wrong number.",
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
@@ -525,7 +527,7 @@ async def generate_call_analysis(
             "call_outcome": "DNC Client : Don't Call Further",
             "call_outcome_description": DISPOSITION_MAP["DNC Client : Don't Call Further"],
             "call_summary": "Buyer explicitly requested not to be called again.",
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
@@ -666,7 +668,7 @@ async def generate_call_analysis(
             "call_outcome": "Not Interested",
             "call_outcome_description": DISPOSITION_MAP["Not Interested"],
             "call_summary": "Agent responded with not-interested closing — buyer did not confirm the product requirement.",
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
@@ -814,7 +816,7 @@ async def generate_call_analysis(
             "call_outcome": "Not Interested",
             "call_outcome_description": DISPOSITION_MAP["Not Interested"],
             "call_summary": "Caller is seeking employment/job opportunities — this is not a product inquiry.",
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
@@ -843,7 +845,7 @@ async def generate_call_analysis(
                 "Buyer explicitly identified and dismissed this as an automated/computer call "
                 "— no product engagement obtained."
             ),
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
@@ -883,7 +885,7 @@ async def generate_call_analysis(
                 "Caller's intent was to contact the company/seller directly — "
                 "this was not a product purchase inquiry through Justdial."
             ),
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
@@ -913,7 +915,7 @@ async def generate_call_analysis(
             "call_outcome": "Could Not Confirm",
             "call_outcome_description": DISPOSITION_MAP["Could Not Confirm"],
             "call_summary": "Call answered by a gatekeeper who offered to transfer — decision maker not reached.",
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
@@ -958,7 +960,7 @@ async def generate_call_analysis(
             "call_outcome": "Short Hangup",
             "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
             "call_summary": _summary_bare,
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
@@ -1024,7 +1026,7 @@ async def generate_call_analysis(
                 "but STT captured only bare acknowledgements from subsequent turns. "
                 "Classified as Interested per GP-7 (agent progression proves product confirmed)."
             ),
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
@@ -1057,7 +1059,7 @@ async def generate_call_analysis(
                 "substantive response — buyer gave only a bare call-presence signal or "
                 f"nothing at all.{_muted_note}"
             ),
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
@@ -1084,7 +1086,7 @@ async def generate_call_analysis(
                     "Agent advanced to specification questions with no user response to the "
                     "product question — product confirmation was never obtained."
                 ),
-                "is_business": "", "business_city": "", "business_name": "",
+                "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
             }
 
@@ -1455,7 +1457,58 @@ QnA EXTRACTION when buyer turns are absent:
         else:
             _duration_note = f"\n📞 CALL DURATION: {_dur_label}."
 
-    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_wrong_opener_note}{_truncated_greeting_note}{_phantom_connect_note}{_identity_q_note}{_reask_opening_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}
+    _biz_flag_note = ""
+    if HOT_LEAD_FLOW_ENABLED:
+        if is_business_flag in (1, 2, 3, 4, 5):
+            _biz_flag_note = (
+                f"\n📋 BUSINESS PITCH FLAG: is_business_flag={is_business_flag}. "
+                f"The agent was instructed to pitch business leads after qualification. "
+                f"business_intent MUST be set to a non-empty value for this call — "
+                f"use 'not_pitched' if the caller disconnected before the pitch was made."
+            )
+        else:
+            _biz_flag_note = (
+                "\n📋 BUSINESS PITCH FLAG: not set (flag 6-9 or absent). "
+                "No business pitch was made. Set business_intent to '' always for this call."
+            )
+
+    _hot_lead_step2c = ""
+    _hot_lead_step3_keys = ""
+    if HOT_LEAD_FLOW_ENABLED:
+        _hot_lead_step2c = """
+━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2C — EXTRACT HOT LEAD FIELDS
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+Extract these two fields from the full transcript. Do NOT infer or guess — only extract
+values explicitly stated or clearly implied by the buyer's direct response to the agent.
+
+  business_intent | Outcome of the business leads pitch — reflects the BUSINESS PITCH FLAG note above.
+                  | Values:
+                  |   "hot_lead"                — caller confirmed they want to receive leads
+                  |   "business_not_interested" — caller was pitched but clearly declined
+                  |                               (they have a business but don't want leads)
+                  |   "not_into_business"        — caller said they are not a business owner
+                  |                               (flag was set but caller turned out to be personal)
+                  |   "no_response"              — pitch was made but caller gave no clear yes/no
+                  |   "not_pitched"              — flag 1-5 was set but caller disconnected before
+                  |                               the pitch was reached
+                  |   ""                         — flag was not 1-5; no pitch was expected or made
+                  | RULE: if the BUSINESS PITCH FLAG note says flag is not set → always use "".
+                  | RULE: if flag is 1-5, only use "" if the call is so short the pitch was
+                  | structurally impossible — prefer "not_pitched" over "" for flag 1-5 calls.
+
+  b2b_user        | Caller's direct answer to the agent's question "is your business B2B?" /
+                  | "Kya apka business B2B hai?":
+                  |   "yes" — caller confirmed their business is B2B
+                  |   "no"  — caller confirmed their business is NOT B2B
+                  |   ""    — question was not asked, or caller did not give a clear answer
+"""
+        _hot_lead_step3_keys = """
+  "business_intent": "<'hot_lead'|'business_not_interested'|'not_into_business'|'no_response'|'not_pitched'|'' — per Step 2C>",
+  "b2b_user": "<'yes'|'no'|'' — per Step 2C>","""
+
+    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_wrong_opener_note}{_truncated_greeting_note}{_phantom_connect_note}{_identity_q_note}{_reask_opening_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}{_biz_flag_note}
 
 Current date/time (IST, GMT+5:30): {current_dt_str}
 
@@ -1910,7 +1963,7 @@ values explicitly stated by the buyer.
                  | stated in the context of their business during the call.
 
 If is_business is "False" or "" → set both business_name and business_city to "".
-
+{_hot_lead_step2c}
 ━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 3 — RETURN JSON
 ━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1922,7 +1975,7 @@ Return a SINGLE JSON object with EXACTLY these keys — no extra keys, no markdo
   "call_summary": "<1-2 sentence English summary of what happened on the call>",
   "is_business": "<'True' | 'False' | '' — per Step 2B>",
   "business_name": "<business name in English (transliterated if needed), or ''>",
-  "business_city": "<business city in English, or ''>",
+  "business_city": "<business city in English, or ''>",{_hot_lead_step3_keys}
   "qna": [ ...entries per Step 2... ],
   "product_change": {{"product_name": "<new product name>"}},  // or {{}} if no product switch
   "rescheduled_to": "<ISO datetime YYYY-MM-DDTHH:MM:SS in IST if rescheduled, else ''>"
@@ -1957,6 +2010,19 @@ STRICT OUTPUT RULES:
             result.setdefault("qna", [])
             result.setdefault("product_change", {})
             result.setdefault("rescheduled_to", "")
+            result.setdefault("business_intent", "")
+            result.setdefault("b2b_user", "")
+            if not HOT_LEAD_FLOW_ENABLED:
+                result["business_intent"] = ""
+                result["b2b_user"] = ""
+            else:
+                # Validate business_intent against allowed values
+                _valid_bi = {"hot_lead", "business_not_interested", "not_into_business", "no_response", "not_pitched", ""}
+                if result.get("business_intent") not in _valid_bi:
+                    result["business_intent"] = ""
+                # Validate b2b_user against allowed values
+                if result.get("b2b_user") not in {"yes", "no", ""}:
+                    result["b2b_user"] = ""
             pc = result.get("product_change") or {}
             if isinstance(pc, dict) and "new_product" in pc and "product_name" not in pc:
                 result["product_change"] = {"product_name": pc.get("new_product", "")}

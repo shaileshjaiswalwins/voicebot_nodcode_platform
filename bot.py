@@ -219,6 +219,11 @@ def _next_gemini_key() -> str:
 # Module-level constants
 # ---------------------------------------------------------------------------
 
+# JIRA-AIP-799: hot lead flow (business leads pitch + b2b follow-up) is
+# temporarily disabled. Flip to True to re-enable it — the gated code paths
+# below and in callback_worker/analysis.py already contain the full flow.
+HOT_LEAD_FLOW_ENABLED = False
+
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 MIS_API_BASE = "http://192.168.8.67:8000"
 CATEGORY_CHANGE_API = f"{MIS_API_BASE}/leads/ai-lead-qualify/search"
@@ -779,7 +784,8 @@ async def _execute_function_call(fn_name: str, fn_args: dict, functions: list[di
 
         if fn_name == "FetchCategorySchema":
             schema = result.get("results", {}).get("search_result", {}) if isinstance(result, dict) else {}
-            questions = schema.get("question", [])
+            questions = _reorder_questions_for_confidence(schema.get("question", []))
+            schema["question"] = questions
             catname = schema.get("catname", "the new product")
             lead_record = call_state.get("lead_record") or {}
             old_product = lead_record.get("catname", "")
@@ -876,6 +882,32 @@ _GENERIC_OPTIONS = {
     "yes", "no", "not sure", "maybe", "both", "none", "other", "others",
     "don't know", "dont know", "not decided", "undecided", "any", "either",
 }
+
+
+def _question_confidence_priority(q: dict) -> int:
+    """Lower = buyer is more likely to give a fast, confident answer.
+
+    quantity (a bare number) beats a finite-option radio pick, which beats an
+    open-ended/subjective question (brand preference, free text). Asking the
+    high-confidence questions first means more questions get a real answer
+    before the buyer disengages — Enriched instead of just Interested.
+    """
+    q_type = q.get("type", "")
+    if q_type == "quantity":
+        return 0
+    text = (q.get("text") or "").lower()
+    opts = q.get("option") or []
+    if opts and "brand" not in text:
+        return 1
+    return 2
+
+
+def _reorder_questions_for_confidence(questions: list[dict]) -> list[dict]:
+    """Stable-sort qualification questions by _question_confidence_priority.
+
+    Ties (e.g. all radio questions) keep the backend-provided relative order.
+    """
+    return sorted(questions, key=_question_confidence_priority)
 
 
 def _build_question_phrase_rules(questions: list[dict]) -> str:
@@ -1032,6 +1064,8 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     buyer = record.get("buyer_details", {})
     search = record.get("search_context", {})
     schema = record.get("qualification_schema", {})
+    if isinstance(schema, dict) and schema.get("question"):
+        schema["question"] = _reorder_questions_for_confidence(schema["question"])
     product = search.get("searched_product", {})
 
     name = buyer.get("buyer_name", "customer")
@@ -1039,6 +1073,11 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     product_name = keyword or product.get("product_name", "")
     questions = schema.get("question", [])
     is_business = buyer.get("is_business", "")
+    is_business_flag = buyer.get("is_business_flag")
+    try:
+        is_business_flag = int(is_business_flag) if is_business_flag is not None else None
+    except (ValueError, TypeError):
+        is_business_flag = None
     company_name = record.get("company_name", "").strip()
     # company_name present → lead is linked to a seller the buyer was browsing.
     # bd=2 (Details Page) is one source; company_name alone is sufficient.
@@ -1088,7 +1127,70 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     )
 
     business_prompt_section = ""
-    if is_business == "":
+    if HOT_LEAD_FLOW_ENABLED and is_business_flag in (1, 2, 3, 4, 5):
+        _pitch_q = (
+            "क्या आप अपने business के लिए leads लेना चाहेंगे?"
+            if is_business_flag == 3
+            else "क्या आप अपने business के लिए verified leads लेना चाहेंगे?"
+        )
+        _b2b_followup = (
+            "\n  - Then ask: \"क्या आपका business B2B है?\" and note their yes/no response."
+            if is_business_flag == 5
+            else ""
+        )
+        _hotlead_close = "Aapki requirement ke liye verified sellers aapse connect kar lenge aur hamari taraf se bhi jald hi sampark kiya jayega. Dhanyavaad."
+        business_prompt_section = f"""
+━━━ BUSINESS LEADS PITCH — MANDATORY OVERRIDE ━━━
+
+⚠ CRITICAL: This pitch MUST be asked before ANY call closing — no exceptions except the
+hard exclusions listed below. This rule OVERRIDES the NOT-INTERESTED close and all other
+closing paths defined above.
+
+─── HARD EXCLUSIONS (close directly, skip pitch) ───
+  1. Caller is a confirmed seller/manufacturer of the product
+  2. Caller is seeking employment (job seeker)
+  3. Caller is abusive or using profane language
+  4. Caller has a grievance/complaint about a past purchase
+
+─── ALL OTHER CASES — pitch is mandatory before closing ───
+
+This includes:
+  • Qualification complete normally → pitch → close
+  • User says they don't need the product mid-call ("zaroorat nahi", "nahi chahiye", "band karo") →
+    acknowledge briefly ("अच्छा जी, कोई बात नहीं.") → THEN ask pitch → close
+  • Step 1: user says NO, no other product either → ask pitch → close
+  • User is unresponsive or keeps avoiding questions → ask pitch → close
+  • Call is about to end for any other reason → ask pitch first
+
+TRANSITION when user is disinterested mid-call:
+  Acknowledge: "अच्छा जी, कोई बात नहीं." then naturally pivot:
+  "एक minute — {_pitch_q}"
+  Do NOT say the NOT-INTERESTED close before asking the pitch.
+
+─── PITCH QUESTION ───
+  "{_pitch_q}"
+
+─── RESPONSES ───
+
+IF caller says YES:{_b2b_followup}
+  - Use this closing line ONLY (replace standard closing entirely):
+    "{_hotlead_close}"
+
+IF caller says they do NOT want leads (नहीं / no / nahi chahiye):
+  - Accept: "अच्छा जी, कोई बात नहीं." → standard closing line.
+
+IF caller says they are NOT a business owner:
+  - Accept: "अच्छा जी, कोई बात नहीं." → standard closing line.
+
+IF no clear yes/no:
+  - Re-ask once: "जी, {_pitch_q}"
+  - Still unclear → standard closing line.
+
+Keep it natural — one question, not an interrogation.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+    elif is_business == "":
         business_prompt_section = f"""
 ━━━ BUSINESS USE — CONVERSATIONAL HANDLING ━━━
 
