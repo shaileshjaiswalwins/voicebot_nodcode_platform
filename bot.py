@@ -1037,6 +1037,12 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
         base += (
             "\n\n━━━ PRODUCT CHANGE — TOOL RULE (MANDATORY) ━━━\n\n"
             "You have access to the FetchCategorySchema function.\n"
+            "AMBIGUOUS PRODUCT REFERENCE: If the buyer vaguely questions the recorded product or mentions a possibly-different\n"
+            "product WITHOUT clearly stating they want it instead (e.g. asking when an inquiry for something else was made,\n"
+            "or naming a product fragment without rejecting the current one), do NOT reassert or insist the current product\n"
+            "is correct. Do NOT say things like 'X की ही इंक्वायरी है'. Instead ask a neutral clarifying question naming both:\n"
+            "\"जी, आपको [original product] चाहिए या [mentioned product]?\" — let the buyer decide, never tell them what they\n"
+            "already inquired for.\n\n"
             "When the user confirms they want a DIFFERENT product:\n"
             "  1. Ask EXACTLY this — no paraphrasing, no restructuring:\n"
             "     \"जी, आपको [original product] चाहिए या [new product]?\"\n"
