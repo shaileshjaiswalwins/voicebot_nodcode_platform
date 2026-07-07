@@ -32,6 +32,7 @@ import io
 import json
 import logging as _logging
 import os
+import random
 import re
 import sys
 import time
@@ -97,7 +98,6 @@ from bot import (
     MONGO_DB,
     MONGO_COLLECTION,
     IST,
-    HINDI_LANG_CONFIG,
     INACTIVITY_PHRASE,
     INACTIVITY_END_PHRASE,
     _get_mongo_collection,
@@ -321,7 +321,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _inactivity_close_secs = float(_bot_config.get("inactivity_close_secs") or 5.0)
     _functions: list[dict] = _bot_config.get("functions") or []
     _function_calling = bool(_bot_config.get("function_calling", False)) and bool(_functions)
-    _lang_cfg = HINDI_LANG_CONFIG
 
     # ── 3. Per-call state ──
     call_state = {
@@ -905,6 +904,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _barge_in_fired: bool = False
     _bot_resp_watchdog_task: asyncio.Task | None = None
     _kb_auto_stop_task: asyncio.Task | None = None
+    # Keyboard-typing sound feels like it's on every turn if played every time —
+    # only ring it for a fraction of real LLM-thinking turns, never for canned
+    # session.say() utterances (greeting/closing) that never enter "thinking".
+    _KB_SOUND_PROBABILITY = 0.35
+    _kb_should_ring: bool = False
     _last_user_final_text: str = ""
     _last_user_final_turn: int = 0
     _speaking_start_time: float = 0.0
@@ -1714,7 +1718,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         nonlocal _speaking_turns_completed, _muted_capture_empty_time, _muted_filler_dropped_time
         nonlocal _last_user_final_text, _final_arrived_while_speaking, _silero_rejected_time
         nonlocal _consecutive_silero_rejects
-        nonlocal _kb_handle, _kb_auto_stop_task
+        nonlocal _kb_handle, _kb_auto_stop_task, _kb_should_ring
         nonlocal _pipeline_delay_buffer
         new_state = getattr(ev, "new_state", None)
         old_state = getattr(ev, "old_state", None)
@@ -1737,17 +1741,22 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # TTS audio starts so there is NO silence gap between thinking sound and voice.
             # KEYBOARD_TYPING2 is a short clip that fades naturally while the first TTS
             # sentence plays — giving a smooth keyboard→voice crossfade.
-            try:
-                if _kb_auto_stop_task and not _kb_auto_stop_task.done():
-                    _kb_auto_stop_task.cancel()
-                    _kb_auto_stop_task = None
-                if _kb_handle and not _kb_handle.done():
-                    _kb_handle.stop()
-                _kb_handle = _bg_audio.play(
-                    AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.40)
-                )
-            except Exception:
-                pass
+            # Only do this when a real LLM-thinking phase just rang the keyboard
+            # (old_str == "thinking" and the probability roll there said yes) — never
+            # for canned session.say() (greeting/closing) which skips "thinking" entirely.
+            if old_str == "thinking" and _kb_should_ring:
+                try:
+                    if _kb_auto_stop_task and not _kb_auto_stop_task.done():
+                        _kb_auto_stop_task.cancel()
+                        _kb_auto_stop_task = None
+                    if _kb_handle and not _kb_handle.done():
+                        _kb_handle.stop()
+                    _kb_handle = _bg_audio.play(
+                        AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.40)
+                    )
+                except Exception:
+                    pass
+            _kb_should_ring = False
             # Latency: time from user FINAL to first bot audio
             nonlocal _last_user_final_time, _response_latencies
             if _last_user_final_time > 0 and _greeting_done:
@@ -2118,26 +2127,31 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             # Keyboard only when the user just spoke (listening → thinking).
             # Skip for speaking → thinking (watchdog re-inject, tool-call second pass)
             # so the user doesn't hear keyboard noise with no new user turn.
+            # Also only ring it on a fraction of turns (_KB_SOUND_PROBABILITY) —
+            # ringing it on every single turn made it feel like keyboard clicks
+            # were layered under everything the bot said.
             if old_str == "listening":
-                try:
-                    if _kb_auto_stop_task and not _kb_auto_stop_task.done():
-                        _kb_auto_stop_task.cancel()
-                    if _kb_handle and not _kb_handle.done():
-                        _kb_handle.stop()
-                    _kb_handle = _bg_audio.play(
-                        AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.55)
-                    )
-                    # Auto-stop after 4 s so long tool calls don't loop the sound
-                    async def _auto_stop_kb(_h=_kb_handle) -> None:
-                        await asyncio.sleep(4.0)
-                        try:
-                            if _h and not _h.done():
-                                _h.stop()
-                        except Exception:
-                            pass
-                    _kb_auto_stop_task = asyncio.create_task(_auto_stop_kb())
-                except Exception:
-                    pass
+                _kb_should_ring = random.random() < _KB_SOUND_PROBABILITY
+                if _kb_should_ring:
+                    try:
+                        if _kb_auto_stop_task and not _kb_auto_stop_task.done():
+                            _kb_auto_stop_task.cancel()
+                        if _kb_handle and not _kb_handle.done():
+                            _kb_handle.stop()
+                        _kb_handle = _bg_audio.play(
+                            AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.55)
+                        )
+                        # Auto-stop after 4 s so long tool calls don't loop the sound
+                        async def _auto_stop_kb(_h=_kb_handle) -> None:
+                            await asyncio.sleep(4.0)
+                            try:
+                                if _h and not _h.done():
+                                    _h.stop()
+                            except Exception:
+                                pass
+                        _kb_auto_stop_task = asyncio.create_task(_auto_stop_kb())
+                    except Exception:
+                        pass
         else:
             _log.info(f"[STATE] unhandled state {state_str!r} — no action taken")
 
@@ -2283,8 +2297,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # ── 14. Hard call timeout (5 min) ──
     _DEFAULT_TIMEOUT_MSG = (
-        _lang_cfg.get("timeout_message")
-        or "जी, मुझे सिर्फ 5 मिनट तक बात करने की permission है. जो भी details मिली हैं, sellers जल्द ही आपसे contact करेंगे. आपका समय देने के लिए धन्यवाद. अलविदा!"
+        "जी, मुझे सिर्फ 5 मिनट तक बात करने की permission है. जो भी details मिली हैं, sellers जल्द ही आपसे contact करेंगे. आपका समय देने के लिए धन्यवाद. अलविदा!"
     )
 
     async def _call_timeout() -> None:
