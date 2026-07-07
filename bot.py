@@ -1051,16 +1051,27 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
         is_business_flag = int(is_business_flag) if is_business_flag is not None else None
     except (ValueError, TypeError):
         is_business_flag = None
+    route_cat = buyer.get("route_cat")
+    try:
+        route_cat = int(route_cat) if route_cat is not None else None
+    except (ValueError, TypeError):
+        route_cat = None
     company_name = record.get("company_name", "").strip()
     # company_name present → lead is linked to a seller the buyer was browsing.
     # bd=2 (Details Page) is one source; company_name alone is sufficient.
     from_details_page = bool(company_name)
 
+    _route_cat_question = (
+        f"यह call आपके '{product_name}' requirement के लिए है। "
+        f"क्या यह enquiry job requirement के लिए है या आपको {product_name} की requirement है?"
+    )
     if pipeline_mode:
         # TTS already spoke the intro ("हेलो, मैं Simran बोल रही हूँ Justdial से।").
         # LLM's first response asks the product question — with seller context when
         # the lead is linked to a company the buyer was browsing.
-        if from_details_page:
+        if route_cat == 1:
+            mandatory_opening = _route_cat_question
+        elif from_details_page:
             mandatory_opening = (
                 f"जी, आप {company_name} के product देख रहे थे — "
                 f"आपको {product_name} की requirement है ना?"
@@ -1068,7 +1079,11 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
         else:
             mandatory_opening = f"आपको {product_name} की requirement है ना?"
     else:
-        if from_details_page:
+        if route_cat == 1:
+            mandatory_opening = (
+                f"हेलो, मैं Simran बोल रही हूँ Justdial से — {_route_cat_question}"
+            )
+        elif from_details_page:
             mandatory_opening = (
                 f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
                 f"आप {company_name} के product देख रहे थे — "
@@ -1098,6 +1113,39 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
         or cfg.get("closing_instruction")
         or "After all questions are answered, close the call warmly."
     )
+
+    route_cat_prompt_section = ""
+    if route_cat == 1:
+        _job_seeker_close = "Okay, aapki requirement note kar li hai. Dhanyavaad."
+        route_cat_prompt_section = f"""
+━━━ JOB-SEEKER vs SERVICE-REQUIREMENT DISAMBIGUATION — MANDATORY FIRST STEP ━━━
+
+⚠ CRITICAL: The mandatory opening line above already asked the buyer to clarify whether this
+call is about a JOB/employment or about their "{product_name}" requirement. Resolve this
+BEFORE moving to the qualification questions below — do not ask any qualification question
+until the buyer's answer to the opening line is heard.
+
+IF the buyer says they are looking for a JOB / employment (e.g. "job ke liye hai", "naukri
+chahiye hai", "job requirement hai", "employment ke liye", "naukri ke liye"):
+  - Say EXACTLY this line and nothing else:
+    "{_job_seeker_close}"
+  - Do NOT ask any qualification question and do NOT say anything else. This ends the call.
+
+IF the buyer says they need the "{product_name}" service/product (e.g. "{product_name} ki
+requirement hai", "haan, {product_name} chahiye", "I want to avail {product_name}", or any
+other clear confirmation that this is a product/service inquiry, not a job inquiry):
+  - This confirms the product requirement — do NOT ask the mandatory-opening product
+    confirmation question again. Continue immediately with the QUALIFICATION QUESTIONS below,
+    exactly as you would on any normal call.
+
+IF the answer is unclear or does not clearly indicate either option:
+  - Re-ask once: "जी, बस यह बता दीजिए — यह job requirement के लिए है या {product_name} की
+    requirement के लिए?"
+  - Still unclear → treat it as a product/service requirement (NOT a job seeker) and continue
+    with the qualification questions — never close the call over this ambiguity.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
 
     business_prompt_section = ""
     if HOT_LEAD_FLOW_ENABLED and is_business_flag == 5:
@@ -1293,7 +1341,7 @@ Your VERY FIRST utterance MUST be EXACTLY this line, word-for-word, no additions
 {mandatory_opening}
 
 Speak it immediately. Do not wait for the customer to say anything.
-
+{route_cat_prompt_section}
 ━━━ QUALIFICATION QUESTIONS (ask in this exact order, one at a time) ━━━
 
 {questions_block}
