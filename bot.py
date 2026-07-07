@@ -1101,53 +1101,86 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
 
     business_prompt_section = ""
     if HOT_LEAD_FLOW_ENABLED and is_business_flag in (1, 2, 3, 4, 5):
+        _gate_q = "क्या यह requirement आपके business के लिए है?"
         _pitch_q = (
-            "क्या आप अपने business के लिए leads लेना चाहेंगे?"
+            "क्या आप भी अपने business के लिए Justdial से leads receive करना चाहेंगे?"
             if is_business_flag == 3
-            else "क्या आप अपने business के लिए verified leads लेना चाहेंगे?"
+            else "क्या आप भी अपने business के लिए Justdial से verified leads receive करना चाहेंगे?"
         )
-        _b2b_followup = (
-            "\n  - Then ask: \"क्या आपका business B2B है?\" and note their yes/no response."
-            if is_business_flag == 5
-            else ""
-        )
+        _b2b_q = "क्या आपका business B2B है?"
+        _city_q = "आपके business की city क्या है?"
+        _name_q = "आपके business का नाम क्या है?"
         _hotlead_close = "Aapki requirement ke liye verified sellers aapse connect kar lenge aur hamari taraf se bhi jald hi sampark kiya jayega. Dhanyavaad."
         business_prompt_section = f"""
-━━━ BUSINESS LEADS PITCH — MANDATORY OVERRIDE ━━━
+━━━ BUSINESS LEADS PITCH — AFTER QUALIFICATION COMPLETE ━━━
 
-⚠ CRITICAL: This pitch MUST be asked before ANY call closing — no exceptions except the
-hard exclusions listed below. This rule OVERRIDES the NOT-INTERESTED close and all other
-closing paths defined above.
+⚠ CRITICAL: This flow runs ONLY when the buyer has answered every qualification question
+normally and the call has reached the Step 3 closing gate (defined above). It replaces ONLY
+that final closing moment — it does not apply anywhere else in the call.
 
-─── HARD EXCLUSIONS (close directly, skip pitch) ───
-  1. Caller is a confirmed seller/manufacturer of the product
-  2. Caller is seeking employment (job seeker)
-  3. Caller is abusive or using profane language
-  4. Caller has a grievance/complaint about a past purchase
+─── THIS FLOW DOES NOT APPLY — close the call exactly as instructed elsewhere in this
+prompt, with NO gate question and nothing from this section ───
+  • Caller is a confirmed seller/manufacturer of the product
+  • Caller is seeking employment (job seeker)
+  • Caller is abusive or using profane language
+  • Caller has a grievance/complaint about a past purchase
+  • Caller explicitly says they do not want to talk / want to end the call
+  • Caller is clearly annoyed or agitated
+  • Caller said NOT-INTERESTED or otherwise disengaged at any point before qualification was
+    fully complete (e.g. Step 1 NO with no other product, mid-call "zaroorat nahi" / "nahi
+    chahiye" / "band karo", unresponsive or repeatedly avoiding questions)
+  • Any other path that ends the call before all qualification questions have been answered
+In every one of these cases, just close the call the way you would have without this section
+existing at all — do not ask the gate question, do not run any part of this flow.
 
-─── ALL OTHER CASES — pitch is mandatory before closing ───
+This flow has up to 5 sequential questions, asked ONE AT A TIME, in this exact order, and only
+once qualification is fully done and normal closing has been reached.
+Never combine two of them into one turn — each step only runs if the previous step's YES
+condition was met.
 
-This includes:
-  • Qualification complete normally → pitch → close
-  • User says they don't need the product mid-call ("zaroorat nahi", "nahi chahiye", "band karo") →
-    acknowledge briefly ("अच्छा जी, कोई बात नहीं.") → THEN ask pitch → close
-  • Step 1: user says NO, no other product either → ask pitch → close
-  • User is unresponsive or keeps avoiding questions → ask pitch → close
-  • Call is about to end for any other reason → ask pitch first
+⚠ HARD RULE — STEP 1 AND STEP 2 ARE NEVER THE SAME TURN: They sound similar but ask
+different things — Step 1 asks whether the requirement is for business use; Step 2 asks
+whether the buyer wants to RECEIVE LEADS for that business. They are two separate turns with
+a real gap for the buyer to respond in between:
+  1. Say ONLY Step 1's question. Then STOP and wait for the buyer's reply.
+  2. Only after hearing that reply — never in the same breath — say Step 2's question.
+A single "haan" / "हाँ" only answers the ONE question that was just asked out loud. NEVER
+treat one yes as satisfying both Step 1 and Step 2, and NEVER write both questions into one
+response even if the buyer sounds eager. If you notice yourself about to say both in a row,
+stop after Step 1 and wait.
 
-TRANSITION when user is disinterested mid-call:
-  Acknowledge: "अच्छा जी, कोई बात नहीं." then naturally pivot:
-  "एक minute — {_pitch_q}"
-  Do NOT say the NOT-INTERESTED close before asking the pitch.
+SKIPPING AHEAD — RELEVANCE-GATED ONLY: If the buyer volunteers, unprompted, a piece of
+information that directly and unambiguously answers a LATER step below (e.g. they state their
+business's city or business name before you've asked for it), accept it, skip that specific
+step, and continue from the next step that is still unanswered. Only skip a step this way when
+the volunteered content is substantive and clearly matches what THAT step asks for — a place
+name only satisfies Step 4, a business/company name only satisfies Step 5. NEVER use a bare
+yes/no or acknowledgement ("haan", "ji", "theek hai", "bilkul") to silently fill in a later
+step — those words only ever answer the specific question that was just asked. If the
+volunteered information could plausibly belong to more than one step, or its relevance is not
+obvious, do NOT skip anything — ask each step normally.
 
-─── PITCH QUESTION ───
+─── STEP 1 — GATE QUESTION (always asked first, exactly once) ───
+  "{_gate_q}"
+
+IF caller says NO (नहीं / no / personal / ghar ke liye — requirement is NOT for their business):
+  - Accept: "अच्छा जी, कोई बात नहीं." → standard closing line. Do NOT ask the pitch question.
+
+IF caller says they do NOT have a business at all (koi business nahi hai / personal buyer):
+  - Accept: "अच्छा जी, कोई बात नहीं." → standard closing line. Do NOT ask the pitch question.
+
+IF caller says YES (हाँ / हां / ji / bilkul / yes — requirement IS for their business):
+  - Move immediately to STEP 2. Do NOT close yet.
+
+IF no clear yes/no:
+  - Re-ask once: "जी, {_gate_q}"
+  - Still unclear → standard closing line. Do NOT ask the pitch question.
+
+─── STEP 2 — LEADS PITCH (only if Step 1 = YES) ───
   "{_pitch_q}"
 
-─── RESPONSES ───
-
-IF caller says YES:{_b2b_followup}
-  - Use this closing line ONLY (replace standard closing entirely):
-    "{_hotlead_close}"
+IF caller says YES:
+  - Move immediately to STEP 3. Do NOT close yet.
 
 IF caller says they do NOT want leads (नहीं / no / nahi chahiye):
   - Accept: "अच्छा जी, कोई बात नहीं." → standard closing line.
@@ -1159,7 +1192,26 @@ IF no clear yes/no:
   - Re-ask once: "जी, {_pitch_q}"
   - Still unclear → standard closing line.
 
-Keep it natural — one question, not an interrogation.
+─── STEP 3 — B2B QUESTION (only if Step 2 = YES) ───
+  "{_b2b_q}"
+  Accept whatever answer is given (yes / no / not sure) and move immediately to STEP 4 — do not
+  re-ask more than once.
+
+─── STEP 4 — BUSINESS CITY (only if Step 2 = YES) ───
+  "{_city_q}"
+  Accept the city given and move immediately to STEP 5.
+
+─── STEP 5 — BUSINESS NAME (only if Step 2 = YES) ───
+  "{_name_q}"
+  Accept the name given, THEN use this closing line ONLY (replace standard closing entirely):
+    "{_hotlead_close}"
+
+CRITICAL: Once the caller says YES at Step 2, this call is a confirmed hot lead regardless of
+what happens afterward. If the call disconnects during or after Step 2's YES — before Step 3, 4,
+or 5 is reached or finished — do NOT try to rush through the remaining steps or skip ahead. Just
+continue asking them in order, one at a time, for as long as the call lasts.
+
+Keep it natural — one question per turn, not an interrogation.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """

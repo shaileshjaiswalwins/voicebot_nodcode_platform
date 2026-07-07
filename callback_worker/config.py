@@ -22,11 +22,8 @@ CALLBACK_UPDATE_API_URL = os.getenv(
 
 GEMINI_API_KEY = os.getenv("GEMINI_ANALYSIS_API_KEY")
 
-# JIRA-AIP-799: hot lead flow (business leads pitch + b2b follow-up) is
-# temporarily disabled. Flip to True to re-enable it — the gated code paths
-# in analysis.py (and bot.py's HOT_LEAD_FLOW_ENABLED) already contain the
-# full flow.
-HOT_LEAD_FLOW_ENABLED = False
+# JIRA-AIP-799: hot lead flow (business leads pitch + b2b follow-up).
+HOT_LEAD_FLOW_ENABLED = True
 
 POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", "60"))
 BATCH_LIMIT = int(os.getenv("BATCH_LIMIT", "50"))
