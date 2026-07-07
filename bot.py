@@ -1100,13 +1100,9 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     )
 
     business_prompt_section = ""
-    if HOT_LEAD_FLOW_ENABLED and is_business_flag in (1, 2, 3, 4, 5):
+    if HOT_LEAD_FLOW_ENABLED and is_business_flag == 5:
         _gate_q = "क्या यह requirement आपके business के लिए है?"
-        _pitch_q = (
-            "क्या आप भी अपने business के लिए Justdial से leads receive करना चाहेंगे?"
-            if is_business_flag == 3
-            else "क्या आप भी अपने business के लिए Justdial से verified leads receive करना चाहेंगे?"
-        )
+        _pitch_q = "क्या आप भी अपने business के लिए Justdial से verified leads receive करना चाहेंगे?"
         _b2b_q = "क्या आपका business B2B है?"
         _city_q = "आपके business की city क्या है?"
         _name_q = "आपके business का नाम क्या है?"
@@ -1212,6 +1208,64 @@ or 5 is reached or finished — do NOT try to rush through the remaining steps o
 continue asking them in order, one at a time, for as long as the call lasts.
 
 Keep it natural — one question per turn, not an interrogation.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+    elif HOT_LEAD_FLOW_ENABLED and is_business_flag in (1, 2, 3, 4):
+        _pitch_q = (
+            "क्या आप अपने business के लिए leads लेना चाहेंगे?"
+            if is_business_flag == 3
+            else "क्या आप अपने business के लिए verified leads लेना चाहेंगे?"
+        )
+        _hotlead_close = "Aapki requirement ke liye verified sellers aapse connect kar lenge aur hamari taraf se bhi jald hi sampark kiya jayega. Dhanyavaad."
+        business_prompt_section = f"""
+━━━ BUSINESS LEADS PITCH — MANDATORY OVERRIDE ━━━
+
+⚠ CRITICAL: This pitch MUST be asked before ANY call closing — no exceptions except the
+hard exclusions listed below. This rule OVERRIDES the NOT-INTERESTED close and all other
+closing paths defined above.
+
+─── HARD EXCLUSIONS (close directly, skip pitch) ───
+  1. Caller is a confirmed seller/manufacturer of the product
+  2. Caller is seeking employment (job seeker)
+  3. Caller is abusive or using profane language
+  4. Caller has a grievance/complaint about a past purchase
+
+─── ALL OTHER CASES — pitch is mandatory before closing ───
+
+This includes:
+  • Qualification complete normally → pitch → close
+  • User says they don't need the product mid-call ("zaroorat nahi", "nahi chahiye", "band karo") →
+    acknowledge briefly ("अच्छा जी, कोई बात नहीं.") → THEN ask pitch → close
+  • Step 1: user says NO, no other product either → ask pitch → close
+  • User is unresponsive or keeps avoiding questions → ask pitch → close
+  • Call is about to end for any other reason → ask pitch first
+
+TRANSITION when user is disinterested mid-call:
+  Acknowledge: "अच्छा जी, कोई बात नहीं." then naturally pivot:
+  "एक minute — {_pitch_q}"
+  Do NOT say the NOT-INTERESTED close before asking the pitch.
+
+─── PITCH QUESTION ───
+  "{_pitch_q}"
+
+─── RESPONSES ───
+
+IF caller says YES:
+  - Use this closing line ONLY (replace standard closing entirely):
+    "{_hotlead_close}"
+
+IF caller says they do NOT want leads (नहीं / no / nahi chahiye):
+  - Accept: "अच्छा जी, कोई बात नहीं." → standard closing line.
+
+IF caller says they are NOT a business owner:
+  - Accept: "अच्छा जी, कोई बात नहीं." → standard closing line.
+
+IF no clear yes/no:
+  - Re-ask once: "जी, {_pitch_q}"
+  - Still unclear → standard closing line.
+
+Keep it natural — one question, not an interrogation.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """

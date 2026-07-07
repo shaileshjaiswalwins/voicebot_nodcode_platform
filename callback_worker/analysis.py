@@ -1459,9 +1459,9 @@ QnA EXTRACTION when buyer turns are absent:
 
     _biz_flag_note = ""
     if HOT_LEAD_FLOW_ENABLED:
-        if is_business_flag in (1, 2, 3, 4, 5):
+        if is_business_flag == 5:
             _biz_flag_note = (
-                f"\n📋 BUSINESS PITCH FLAG: is_business_flag={is_business_flag}. "
+                f"\n📋 BUSINESS PITCH FLAG: is_business_flag=5. "
                 f"The agent was instructed to run the business gate → leads pitch → B2B → city → "
                 f"business name flow, but ONLY after every qualification question was answered "
                 f"and the call reached the normal closing point. business_intent MUST be a "
@@ -1471,6 +1471,15 @@ QnA EXTRACTION when buyer turns are absent:
                 f"unresponsive, disconnect mid-qualification, etc.), or if qualification did "
                 f"finish but the gate question itself was declined/unclear/never answered."
             )
+        elif is_business_flag in (1, 2, 3, 4):
+            _biz_flag_note = (
+                f"\n📋 BUSINESS PITCH FLAG: is_business_flag={is_business_flag}. "
+                f"The agent was instructed to pitch business leads after qualification — a "
+                f"single yes/no question, with NO gate question and NO B2B/city/name "
+                f"follow-up for this call. "
+                f"business_intent MUST be set to a non-empty value for this call — "
+                f"use 'not_pitched' if the caller disconnected before the pitch was made."
+            )
         else:
             _biz_flag_note = (
                 "\n📋 BUSINESS PITCH FLAG: not set (flag 6-9 or absent). "
@@ -1479,21 +1488,22 @@ QnA EXTRACTION when buyer turns are absent:
 
     _hot_lead_step2c = ""
     _hot_lead_step3_keys = ""
-    if HOT_LEAD_FLOW_ENABLED:
+    if HOT_LEAD_FLOW_ENABLED and is_business_flag == 5:
         _hot_lead_step2c = """
 ━━━━━━━━━━━━━━━━━━━━━━━━
 STEP 2C — EXTRACT HOT LEAD FIELDS
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
-The agent runs a fixed sequence for this call: GATE question ("is this requirement for your
-business?") → LEADS PITCH ("do you want Justdial leads for your business?") → B2B question →
-business city → business name. Extract these fields from the full transcript. Do NOT infer or
-guess — only extract values explicitly stated or clearly implied by the buyer's direct response,
-OR by where the transcript cuts off relative to this sequence (see the CUTOFF RULE below).
+The agent runs a fixed sequence for this call (is_business_flag=5): GATE question ("is this
+requirement for your business?") → LEADS PITCH ("do you want Justdial leads for your
+business?") → B2B question → business city → business name. Extract these fields from the full
+transcript. Do NOT infer or guess — only extract values explicitly stated or clearly implied by
+the buyer's direct response, OR by where the transcript cuts off relative to this sequence (see
+the CUTOFF RULE below).
 
   business_intent | Outcome of the gate + leads pitch. This flow is only SUPPOSED to run after
                   | qualification is fully complete and the call reaches the normal closing
-                  | point — but business_intent still needs a value for flag 1-5 calls that never
+                  | point — but business_intent still needs a value even for calls that never
                   | got that far. Values:
                   |   "hot_lead"                — caller said YES to the leads pitch. Once this
                   |                               happens the call IS a hot lead regardless of
@@ -1513,11 +1523,11 @@ OR by where the transcript cuts off relative to this sequence (see the CUTOFF RU
                   |                               etc.), OR qualification finished and the flow
                   |                               began but the gate question was declined,
                   |                               unclear, or never answered.
-                  |   ""                         — flag was not 1-5; no pitch was ever expected.
-                  | RULE: if the BUSINESS PITCH FLAG note says flag is not set → always use "".
-                  | RULE: for any flag 1-5 call, business_intent must be non-empty — default to
-                  | "not_pitched" whenever the call never produced a clear gate/pitch outcome,
-                  | regardless of why (early call end or a failed gate).
+                  |   ""                         — no pitch was ever expected (should not occur
+                  |                               for a flag=5 call, but use if truly N/A).
+                  | RULE: business_intent must be non-empty — default to "not_pitched" whenever
+                  | the call never produced a clear gate/pitch outcome, regardless of why (early
+                  | call end or a failed gate).
                   | CUTOFF RULE: once qualification has genuinely finished and this flow has
                   | begun, use WHERE the transcript ends to decide when there's no explicit
                   | accept/decline:
@@ -1528,7 +1538,7 @@ OR by where the transcript cuts off relative to this sequence (see the CUTOFF RU
                   |     B2B/city/name) → "hot_lead"
 
   b2b_user        | Caller's direct answer to the agent's question "is your business B2B?" /
-                  | "Kya apka business B2B hai?" (asked for every hot_lead call):
+                  | "Kya apka business B2B hai?" (asked for every hot_lead call on this flag):
                   |   "yes" — caller confirmed their business is B2B
                   |   "no"  — caller confirmed their business is NOT B2B
                   |   ""    — call ended before this question was reached, or caller did not
@@ -1537,6 +1547,35 @@ OR by where the transcript cuts off relative to this sequence (see the CUTOFF RU
 For business_intent = "hot_lead", the business city and business name asked afterward are
 captured via the existing business_city / business_name fields (Step 2B) — apply the Step 2B
 extraction rules to the buyer's answers to those two questions.
+"""
+        _hot_lead_step3_keys = """
+  "business_intent": "<'hot_lead'|'business_not_interested'|'not_into_business'|'no_response'|'not_pitched'|'' — per Step 2C>",
+  "b2b_user": "<'yes'|'no'|'' — per Step 2C>","""
+    elif HOT_LEAD_FLOW_ENABLED and is_business_flag in (1, 2, 3, 4):
+        _hot_lead_step2c = """
+━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2C — EXTRACT HOT LEAD FIELDS
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+Extract this field from the full transcript. Do NOT infer or guess — only extract values
+explicitly stated or clearly implied by the buyer's direct response to the agent.
+
+  business_intent | Outcome of the business leads pitch — a single yes/no question. There is
+                  | NO gate question and NO B2B/city/name follow-up for this call. Values:
+                  |   "hot_lead"                — caller confirmed they want to receive leads
+                  |   "business_not_interested" — caller was pitched but clearly declined
+                  |                               (they have a business but don't want leads)
+                  |   "not_into_business"        — caller said they are not a business owner
+                  |                               (flag was set but caller turned out to be
+                  |                               personal)
+                  |   "no_response"              — pitch was made but caller gave no clear yes/no
+                  |   "not_pitched"              — flag was set but caller disconnected before
+                  |                               the pitch was reached
+                  |   ""                         — no pitch was expected or made
+                  | RULE: only use "" if the call is so short the pitch was structurally
+                  | impossible — prefer "not_pitched" over "" otherwise.
+
+  b2b_user        | This call's flow does not include a B2B question — always set b2b_user to "".
 """
         _hot_lead_step3_keys = """
   "business_intent": "<'hot_lead'|'business_not_interested'|'not_into_business'|'no_response'|'not_pitched'|'' — per Step 2C>",
