@@ -219,10 +219,8 @@ def _next_gemini_key() -> str:
 # Module-level constants
 # ---------------------------------------------------------------------------
 
-# JIRA-AIP-799: hot lead flow (business leads pitch + b2b follow-up) is
-# temporarily disabled. Flip to True to re-enable it — the gated code paths
-# below and in callback_worker/analysis.py already contain the full flow.
-HOT_LEAD_FLOW_ENABLED = False
+# JIRA-AIP-799: hot lead flow (business leads pitch + b2b follow-up).
+HOT_LEAD_FLOW_ENABLED = True
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 MIS_API_BASE = "http://192.168.8.67:8000"
@@ -491,41 +489,6 @@ _HARDCODED_BOT_CONFIG: dict = {
         "  • Unclear / no answer: re-ask the original quantity question once — \"तो आपको कितनी quantity चाहिए?\"\n\n"
         "CRITICAL: Ask this confirmation exactly ONCE. Never ask it twice for the same answer.\n"
         "CRITICAL: Do NOT apply this rule for numbers below 5,000 — no echoing or confirming small quantities.\n\n"
-
-        "━━━ HIGH-QUANTITY → BUSINESS GATE (HARD RULE) ━━━\n\n"
-        "If the buyer answers a QUANTITY question with a number ≥ 100 of a BULK or COUNT unit — treat as BUSINESS automatically. Do NOT ask \"business या personal?\" ever for this caller.\n\n"
-        "RANGE ANSWERS: If the buyer gives a quantity range (e.g. '30 to 50 units', '50 se 100 kg', '20–40 boxes', 'between 30 and 50'), "
-        "use the HIGHER number for the ≥ 100 gate check. CRITICAL: NEVER concatenate or merge the two numbers — "
-        "\"30 to 50\" means between 30 and 50 (NOT 3250), \"20 to 40\" means between 20 and 40 (NOT 2040). "
-        "Record the full range as given (e.g. '30–50 units').\n\n"
-        "BULK / COUNT units where ≥ 100 triggers the gate:\n"
-        "  pieces / pcs / units / numbers / sets / boxes / cartons / packets / bags / dozen / rolls\n"
-        "  kg / kilogram / litre / liter / ton / tonne / quintal / bori / nag / sack / drum\n\n"
-        "SMALL-MEASURE units — NEVER trigger the gate regardless of number:\n"
-        "  gram / gm / g / milligram / mg / ml / millilitre / cc / cm / mm / inch / feet / metre — these are personal-scale measures.\n"
-        "  Example: \"100 gram\", \"500 ml\", \"200 gm\" → do NOT treat as business. Run normal gate.\n\n"
-        "Action when triggered — EXACT SEQUENCE, no deviations:\n"
-        "  1. Acknowledge plainly without echoing the number: \"इतनी quantity — business के लिए होगी।\" (vary wording each call)\n"
-        "     NEVER say the number back — say 'इतनी quantity' or 'इतनी बड़ी requirement', NOT '1000 kg — समझ गई'.\n"
-        "  2. Immediately ask: \"आपके business का नाम क्या है?\"\n"
-        "  3. Wait for the answer. Then, for the city:\n"
-        "     • If the buyer mentioned a city name at ANY point earlier in this call — ask to reconfirm: \"क्या आपका business [city] में है?\"\n"
-        "       → If yes: accept it and move on.\n"
-        "       → If no: ask \"तो किस city में है?\"\n"
-        "     • If no city was mentioned yet — ask fresh: \"और कौन से city में?\"\n"
-        "  4. Wait for the answer. Then continue with the remaining qualification questions from the schema, one at a time.\n"
-        "  5. After ALL qualification questions are done, say the closing line.\n\n"
-        "CRITICAL: Business name and city are asked RIGHT AFTER the gate triggers — not at the end. Then qualification questions resume normally.\n"
-        "CRITICAL: Skip the \"business या personal?\" question for the rest of this call. It has been answered by context.\n\n"
-        "If quantity is BELOW 100 of a bulk/count unit (e.g. \"5 piece\", \"50 kg\", \"10 boxes\"), OR if the unit is a small-measure (gram, ml, etc.):\n"
-        "  → run the normal \"business या personal?\" gate.\n\n"
-        "Phrases that ALSO trigger the gate (regardless of number or unit):\n"
-        "  English: \"wholesale\", \"bulk\", \"shop\", \"factory\", \"warehouse\", \"godown\", \"B2B\", \"resale\",\n"
-        "           \"retail sale\", \"food service\", \"catering\", \"restaurant\", \"hotel\", \"canteen\", \"office\", \"commercial\", \"hospital\", \"school\", \"institution\".\n"
-        "  Hindi: \"कैटरिंग\", \"रिटेल\", \"रिटेल सेल\", \"फूड सर्विस\", \"रेस्टोरेंट\", \"होटल\", \"दुकान\", \"फैक्ट्री\", \"ऑफिस\", \"थोक\", \"होलसेल\", \"B2B\", \"रिसेल\", \"कैंटीन\", \"अस्पताल\", \"स्कूल\".\n\n"
-        "RADIO QUESTION RULE: If a qualification question offers options and the buyer picks a clearly commercial one\n"
-        "(retail sale / food service / catering / wholesale / resale / supply / distribution / restaurant / hotel / canteen / institutional — or their Hindi equivalents),\n"
-        "treat it as a business trigger. 'Personal consumption' / 'ghar ke liye' / 'khud ke liye' / 'personal use' are the ONLY non-business options.\n\n"
 
         "Product change mid-call:\n"
         "\"आपको [original] चाहिए या [new product]?\" — wait for answer.\n\n"
@@ -1083,7 +1046,6 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     keyword = search.get("searched_keyword", "")
     product_name = keyword or product.get("product_name", "")
     questions = schema.get("question", [])
-    is_business = buyer.get("is_business", "")
     is_business_flag = buyer.get("is_business_flag")
     try:
         is_business_flag = int(is_business_flag) if is_business_flag is not None else None
@@ -1198,40 +1160,6 @@ IF no clear yes/no:
   - Still unclear → standard closing line.
 
 Keep it natural — one question, not an interrogation.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"""
-    elif is_business == "":
-        business_prompt_section = f"""
-━━━ BUSINESS USE — CONVERSATIONAL HANDLING ━━━
-
-The BUSINESS GATE — its triggers (quantity ≥ 100 of a bulk/count unit, business keywords, commercial radio options) and its exact mid-call sequence (acknowledge plainly without echoing the number → "आपके business का नाम क्या है?" → city → resume remaining questions) — is defined in the "HIGH-QUANTITY → BUSINESS GATE" section above. Apply those rules exactly as written. Business name/city are asked RIGHT WHEN THE GATE TRIGGERS, never at the end, and you NEVER ask "business या personal?" once the gate has triggered.
-
-─────────────────────────────────────────────────
-If the gate is NOT triggered during qualification (quantity < 100, no business keywords):
-
-After ALL qualification questions are answered, ask naturally:
-  "एक बात और — क्या यह {product_name} business के लिए चाहिए आपको?"
-
-IF the buyer says YES (हाँ / हां / ji / bilkul / yes / business ke liye):
-  - Warmly acknowledge: "अच्छा, business के लिए — ज़रूर!"
-  - Ask business name: "आपके business का नाम क्या है?"
-  - After they answer, for the city:
-    • If the buyer mentioned a city name at ANY point earlier in this call — reconfirm: "क्या आपका business [city] में है?"
-      → If yes: accept and close the call.
-      → If no: ask "तो किस city में है?" then close.
-    • If no city was mentioned yet — ask fresh: "और आपका business किस city में है?" then close.
-
-IF the buyer says NO (नहीं / personal / ghar ke liye / khud ke liye):
-  - Accept naturally and move straight to closing. Do NOT ask business name or city.
-
-IF the buyer is unclear or doesn't respond properly:
-  - Re-ask once: "जी, मतलब क्या यह किसी business या shop के लिए है?"
-  - If still unclear: proceed directly to closing WITHOUT saying "personal use" or "business use" — do NOT label it either way. Just say the closing line.
-
-TONE RULES for this section:
-  - Keep it light and quick — these are 2 extra questions, not an interrogation.
-  - Do NOT announce "ab main business ke baare mein poochhungi" — just ask naturally after the last qualification question.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
