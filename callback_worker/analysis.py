@@ -116,6 +116,7 @@ DISPOSITION_MAP: dict[str, str] = {
     "Will do it Myself":                "The customer still has the requirement but will source/handle it themselves without JD's help — they explicitly declined seller connections (e.g. 'मैं खुद देख लूँगा', 'I'll manage it myself'). The need exists; only JD's assistance is rejected. Distinct from Not Interested.",
     "Call Rescheduled":                 "The customer asked to call at a specific date and time.",
     "Seller Intent":                    "The caller is a seller or vendor trying to offer their own products/services — they are NOT a buyer with a requirement. They may want to list on JustDial or pitch their business. This is the opposite of a buyer lead.",
+    "Job Seeker":                       "The caller is seeking employment/a job rather than the product or service being inquired about — this is not a genuine buyer lead. No further call attempts or WhatsApp follow-ups should be made.",
     "Abusive Lead":                     "The recipient exhibited abusive or inappropriate behavior during the call.",
     "DNC Client : Don't Call Further":  "The customer explicitly requested not to be contacted again.",
     "Other Cases":                      "The call outcome does not fit into any predefined categories.",
@@ -714,7 +715,7 @@ async def generate_call_analysis(
         "naukri ke liye",
         "job chahiye", "job chaahiye",
         "job milega", "job milegi",
-        "job ke liye call", "job ke liye phone",
+        "job ke liye", "job ke liye call", "job ke liye phone",
         "job dhundh", "job ki talash",
         "job dila", "job lena hai",
         "rozgar chahiye", "rojgar chahiye",
@@ -813,8 +814,8 @@ async def generate_call_analysis(
             break
     if _job_seeker_literal or _job_seeker_cooccur:
         return {
-            "call_outcome": "Not Interested",
-            "call_outcome_description": DISPOSITION_MAP["Not Interested"],
+            "call_outcome": "Job Seeker",
+            "call_outcome_description": DISPOSITION_MAP["Job Seeker"],
             "call_summary": "Caller is seeking employment/job opportunities — this is not a product inquiry.",
             "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
