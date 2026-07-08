@@ -792,6 +792,10 @@ async def generate_call_analysis(
         "talash", "तलाश", "search", "milega", "milegi", "milni",
         "apply", "karna", "related", "riletad", "lena", "dila",
         "seeking", "seeker",
+        # "requirement"/"inquiry" are too generic alone (buyers say them about the
+        # product too), but paired with a _JOB_CORE word in the same turn they
+        # reliably mean job-seeking — e.g. "job requirement", "job ki inquiry".
+        "requirement", "रिक्वायरमेंट", "inquiry", "enquiry", "इंक्वायरी",
     })
     # Bigrams that look like job-seeking but are actually manufacturing/B2B terms.
     # If any of these appear in a user turn, don't count "job" as an employment indicator.
@@ -812,7 +816,18 @@ async def generate_call_analysis(
         if _words & _JOB_CORE and _words & _SEEKING_CONTEXT:
             _job_seeker_cooccur = True
             break
-    if _job_seeker_literal or _job_seeker_cooccur:
+    # route_cat=1 calls close with a fixed line the instant the buyer confirms job intent
+    # (bot.py _job_seeker_close, said verbatim or paraphrased in Devanagari) — if the agent's
+    # last turn is that closing, the buyer's answer already committed the call to Job Seeker
+    # even when their exact wording (e.g. a referential "पहले वाला") isn't itself matchable.
+    # Scoped to the LAST turn only + requires "requirement": mid-call "note kar li"
+    # acknowledgments before further spec questions use "जानकारी"/info, not "requirement",
+    # and aren't the final turn — verified against a full day of production transcripts.
+    _job_seeker_closing_fired = (
+        ("requirement" in _last_agent_text or "रिक्वायरमेंट" in _last_agent_text)
+        and ("note kar li" in _last_agent_text or "नोट कर ली" in _last_agent_text)
+    )
+    if _job_seeker_literal or _job_seeker_cooccur or _job_seeker_closing_fired:
         return {
             "call_outcome": "Job Seeker",
             "call_outcome_description": DISPOSITION_MAP["Job Seeker"],
