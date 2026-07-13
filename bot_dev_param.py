@@ -94,7 +94,7 @@ load_dotenv(override=True)
 
 # Infrastructure
 _PORT               = int(os.getenv("BOT_PORT", "8085"))
-_AGENT_NAME         = os.getenv("AGENT_NAME", "voice-bot-param")
+_AGENT_NAME         = os.getenv("AGENT_NAME", "voice-bot-justdial-dashboard")
 _NUM_IDLE_PROCESSES = int(os.getenv("NUM_IDLE_PROCESSES", "2"))
 
 # Language
