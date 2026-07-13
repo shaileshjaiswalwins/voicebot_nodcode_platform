@@ -1,0 +1,97 @@
+[2026-07-10T02:54:59.113Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "Based on my comprehensive analysis of the frontend codebase, here's the security vulnerability report:\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/api.ts\",\n      \"line\": 15,\n      \"description\": \"JWT token stored in localStorage — vulnerable to XSS attacks. If an attacker injects malicious JavaScript via XSS, they can access and steal the JWT token from localStorage, gaining unauthorized access to user accounts. localStorage is accessible to any script on the page.\"\n    },\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/api.ts\",\n      \"line\": 35,\n      \"description\": \"Missing Content-Type validation in fetch response before JSON parsing. API should validate response.headers.get('content-type') includes 'application/json' to prevent response smuggling or processing unexpected content types (e.g., HTML error pages as JSON).\"\n    },\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/api.ts\",\n      \"line\": 35,\n      \"description\": \"No CSRF token handling visible in request() function. State-changing requests (POST/PUT/DELETE) should include CSRF tokens to prevent cross-site request forgery attacks where a malicious site tricks authenticated users into making unintended API calls.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 6,\n      \"description\": \"API_BASE defaults to http://localhost:8000 (plaintext HTTP). While acceptable for development, production configuration should enforce HTTPS. Currently no validation that API_BASE uses secure protocol in production environments, risking man-in-the-middle attacks.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 44,\n      \"description\": \"No token expiration validation. Token is cleared only on 401 response, but no proactive validation of JWT exp claim. Expired tokens may persist in localStorage and be sent to the API, which could reject them, or if backend doesn't validate expiration, they grant indefinite access.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/errors.ts\",\n      \"line\": 8,\n      \"description\": \"Error messages leak sensitive infrastructure details: LiveKit configuration, MongoDB connectivity issues, backend port numbers (8010), and SSH tunnel details. Information disclosure aids reconnaissance and attack planning. Should be generic in production.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/cache.ts\",\n      \"line\": 6,\n      \"description\": \"Sensitive data cached in localStorage with only prefix obfuscation (jd-vb:v2:). No encryption, TTL, or validation of what data gets cached. If bot configuration or user data is cached, it's exposed to XSS attacks or local storage inspection.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/App.tsx\",\n      \"line\": 119,\n      \"description\": \"Error messages displayed directly to user without sanitization could expose API response bodies containing sensitive information or configuration details from backend error responses.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/api.ts\",\n      \"line\": 23,\n      \"description\": \"URL validation in apiUrl() only checks for http/https prefix but doesn't fully validate against open redirects. While current usage appears safe, should use URL constructor validation like validation.ts demonstrates for user-supplied paths.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/App.tsx\",\n      \"line\": 94,\n      \"description\": \"No rate limiting on login attempts. Frontend doesn't throttle failed login submissions, allowing brute force attacks. Implement exponential backoff on failed login attempts.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/utils/formatting.ts\",\n      \"line\": 36,\n      \"description\": \"parseApiDate() doesn't validate ISO 8601 format strictly. Could accept malformed dates and return invalid Date object without clear error handling, leading to unexpected NaN values.\"\n    }\n  ],\n  \"riskScore\": 68,\n  \"recommendations\": [\n    \"CRITICAL: Replace localStorage JWT storage with httpOnly, Secure, SameSite cookies. Cookies are not accessible to JavaScript, providing protection against XSS token theft. Implement token refresh flow with refresh_token rotation.\",\n    \"CRITICAL: Add CSRF token generation/validation. Backend should set CSRF-TOKEN cookie; frontend should extract and include in X-CSRF-Token header for state-changing requests (POST/PUT/DELETE).\",\n    \"HIGH: Validate response Content-Type before JSON.parse(). Add guard: `if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Invalid response type')`\",\n    \"HIGH: Enforce HTTPS in production. Add build-time validation: `if (import.meta.env.PROD && !API_BASE.startsWith('https')) throw new Error('Production API must use HTTPS')`\",\n    \"MEDIUM: Implement JWT expiration validation. Decode JWT, compare exp claim to Date.now() / 1000, and clear token if expired before making requests.\",\n    \"MEDIUM: Replace detailed error messages with generic messages in production. Use `import.meta.env.DEV ? detailedError : 'Request failed'` pattern.\",\n    \"MEDIUM: Audit cacheSet() calls to ensure no tokens, passwords, or PII are cached. Add cache TTL for any sensitive configuration data.\",\n    \"MEDIUM: Sanitize error messages before displaying to users. Strip internal API details, infrastructure info, and configuration paths.\",\n    \"LOW: Implement rate limiting on login form. Track failed attempts and introduce exponential backoff after 3 failed attempts.\",\n    \"LOW: Add request timeout handling. Wrap fetch with AbortController and set timeout: `const controller = new AbortController(); setTimeout(() => controller.abort(), 30000)`\",\n    \"LOW: Implement Subresource Integrity (SRI) for any CDN-hosted assets. Backend should set Content-Security-Policy, X-Content-Type-Options, and X-Frame-Options headers.\",\n    \"LOW: Add strict URL validation in apiUrl() using URL constructor to prevent open redirects if user-controlled paths are ever used.\"\n  ]\n}\n```\n\n## Key Findings Summary\n\n**Highest Priority Issues:**\n1. **JWT in localStorage** - Replace with httpOnly cookies to protect against XSS token theft\n2. **No CSRF protection** - Implement CSRF token validation for state-changing requests\n3. **Missing Content-Type validation** - Add response validation before JSON parsing\n4. **No HTTPS enforcement** - Enforce HTTPS in production builds\n\n**Additional Observations:**\n- Error messages expose infrastructure details (LiveKit URLs, ports, backend structure) that aid attackers\n- No token expiration checks - expired tokens may persist indefinitely\n- Cache stores data with minimal protection - vulnerable to XSS or local inspection\n- No rate limiting on login - enables brute force attacks\n- Dependencies appear current with no known vulnerable packages in the audit\n\nThe risk score of **68/100** reflects that while critical issues exist, this is a relatively small frontend codebase with modern security practices (React auto-escapes, no direct SQL injection surface). The vulnerabilities are primarily in authentication, session management, and infrastructure disclosure—typical of frontend applications that need backend security fixes to fully address token storage and CSRF issues.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "high",
+        "file": "src/api.ts",
+        "line": 15,
+        "description": "JWT token stored in localStorage — vulnerable to XSS attacks. If an attacker injects malicious JavaScript via XSS, they can access and steal the JWT token from localStorage, gaining unauthorized access to user accounts. localStorage is accessible to any script on the page."
+      },
+      {
+        "severity": "high",
+        "file": "src/api.ts",
+        "line": 35,
+        "description": "Missing Content-Type validation in fetch response before JSON parsing. API should validate response.headers.get('content-type') includes 'application/json' to prevent response smuggling or processing unexpected content types (e.g., HTML error pages as JSON)."
+      },
+      {
+        "severity": "high",
+        "file": "src/api.ts",
+        "line": 35,
+        "description": "No CSRF token handling visible in request() function. State-changing requests (POST/PUT/DELETE) should include CSRF tokens to prevent cross-site request forgery attacks where a malicious site tricks authenticated users into making unintended API calls."
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 6,
+        "description": "API_BASE defaults to http://localhost:8000 (plaintext HTTP). While acceptable for development, production configuration should enforce HTTPS. Currently no validation that API_BASE uses secure protocol in production environments, risking man-in-the-middle attacks."
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 44,
+        "description": "No token expiration validation. Token is cleared only on 401 response, but no proactive validation of JWT exp claim. Expired tokens may persist in localStorage and be sent to the API, which could reject them, or if backend doesn't validate expiration, they grant indefinite access."
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/errors.ts",
+        "line": 8,
+        "description": "Error messages leak sensitive infrastructure details: LiveKit configuration, MongoDB connectivity issues, backend port numbers (8010), and SSH tunnel details. Information disclosure aids reconnaissance and attack planning. Should be generic in production."
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/cache.ts",
+        "line": 6,
+        "description": "Sensitive data cached in localStorage with only prefix obfuscation (jd-vb:v2:). No encryption, TTL, or validation of what data gets cached. If bot configuration or user data is cached, it's exposed to XSS attacks or local storage inspection."
+      },
+      {
+        "severity": "medium",
+        "file": "src/App.tsx",
+        "line": 119,
+        "description": "Error messages displayed directly to user without sanitization could expose API response bodies containing sensitive information or configuration details from backend error responses."
+      },
+      {
+        "severity": "low",
+        "file": "src/api.ts",
+        "line": 23,
+        "description": "URL validation in apiUrl() only checks for http/https prefix but doesn't fully validate against open redirects. While current usage appears safe, should use URL constructor validation like validation.ts demonstrates for user-supplied paths."
+      },
+      {
+        "severity": "low",
+        "file": "src/App.tsx",
+        "line": 94,
+        "description": "No rate limiting on login attempts. Frontend doesn't throttle failed login submissions, allowing brute force attacks. Implement exponential backoff on failed login attempts."
+      },
+      {
+        "severity": "low",
+        "file": "src/utils/formatting.ts",
+        "line": 36,
+        "description": "parseApiDate() doesn't validate ISO 8601 format strictly. Could accept malformed dates and return invalid Date object without clear error handling, leading to unexpected NaN values."
+      }
+    ],
+    "riskScore": 68,
+    "recommendations": [
+      "CRITICAL: Replace localStorage JWT storage with httpOnly, Secure, SameSite cookies. Cookies are not accessible to JavaScript, providing protection against XSS token theft. Implement token refresh flow with refresh_token rotation.",
+      "CRITICAL: Add CSRF token generation/validation. Backend should set CSRF-TOKEN cookie; frontend should extract and include in X-CSRF-Token header for state-changing requests (POST/PUT/DELETE).",
+      "HIGH: Validate response Content-Type before JSON.parse(). Add guard: `if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Invalid response type')`",
+      "HIGH: Enforce HTTPS in production. Add build-time validation: `if (import.meta.env.PROD && !API_BASE.startsWith('https')) throw new Error('Production API must use HTTPS')`",
+      "MEDIUM: Implement JWT expiration validation. Decode JWT, compare exp claim to Date.now() / 1000, and clear token if expired before making requests.",
+      "MEDIUM: Replace detailed error messages with generic messages in production. Use `import.meta.env.DEV ? detailedError : 'Request failed'` pattern.",
+      "MEDIUM: Audit cacheSet() calls to ensure no tokens, passwords, or PII are cached. Add cache TTL for any sensitive configuration data.",
+      "MEDIUM: Sanitize error messages before displaying to users. Strip internal API details, infrastructure info, and configuration paths.",
+      "LOW: Implement rate limiting on login form. Track failed attempts and introduce exponential backoff after 3 failed attempts.",
+      "LOW: Add request timeout handling. Wrap fetch with AbortController and set timeout: `const controller = new AbortController(); setTimeout(() => controller.abort(), 30000)`",
+      "LOW: Implement Subresource Integrity (SRI) for any CDN-hosted assets. Backend should set Content-Security-Policy, X-Content-Type-Options, and X-Frame-Options headers.",
+      "LOW: Add strict URL validation in apiUrl() using URL constructor to prevent open redirects if user-controlled paths are ever used."
+    ]
+  },
+  "durationMs": 91033,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-10T02:54:59.113Z",
+  "executionId": "audit_1783652008080_k6oxe5"
+}

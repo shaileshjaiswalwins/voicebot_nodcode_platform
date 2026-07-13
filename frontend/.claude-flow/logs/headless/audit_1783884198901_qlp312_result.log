@@ -1,0 +1,81 @@
+[2026-07-12T19:23:56.283Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "Based on my analysis of the provided frontend codebase, here's the comprehensive security vulnerability report:\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/api.ts\",\n      \"line\": 7,\n      \"description\": \"Authentication tokens stored in localStorage are vulnerable to XSS attacks. Any JavaScript injected via XSS can access and steal the token. Best practice is to use httpOnly cookies instead.\",\n      \"category\": \"insecure-storage\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 35,\n      \"description\": \"No CSRF protection mechanism visible. API requests lack CSRF tokens or SameSite cookie settings to prevent cross-site request forgery attacks.\",\n      \"category\": \"csrf-protection\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 49,\n      \"description\": \"Error messages from API responses are returned directly without sanitization. If backend returns HTML/script content, it could lead to XSS when rendered.\",\n      \"category\": \"xss-vulnerability\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/cache.ts\",\n      \"line\": 5,\n      \"description\": \"Sensitive data (including cached configuration) stored in localStorage without encryption. Any data stored here can be read by any script on the page.\",\n      \"category\": \"insecure-storage\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/api.ts\",\n      \"line\": 24,\n      \"description\": \"URL validation in apiUrl() only checks for http/https protocols. Should also validate the host/domain to prevent open redirect vulnerabilities.\",\n      \"category\": \"open-redirect\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/utils/errors.ts\",\n      \"line\": 28,\n      \"description\": \"Error messages truncated to 220 chars but still exposed to user. Detailed error messages can leak backend architecture information.\",\n      \"category\": \"information-disclosure\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/api.ts\",\n      \"line\": 41,\n      \"description\": \"401 response clears token but doesn't explicitly redirect to login. User session state could become inconsistent.\",\n      \"category\": \"session-management\"\n    }\n  ],\n  \"riskScore\": 62,\n  \"recommendations\": [\n    \"🔴 CRITICAL: Replace localStorage token storage with httpOnly, Secure, SameSite cookies. Update backend to set cookies with these flags.\",\n    \"🟠 HIGH: Implement CSRF protection using tokens. Add CSRF token to request headers and validate on backend.\",\n    \"🟠 HIGH: Add Content Security Policy (CSP) headers to prevent inline script execution and XSS attacks.\",\n    \"🟡 MEDIUM: Sanitize all API error messages before displaying. Use a sanitization library (DOMPurify) if any HTML rendering is needed.\",\n    \"🟡 MEDIUM: Encrypt sensitive data stored in localStorage or move to sessionStorage for sensitive temporary data.\",\n    \"🟡 MEDIUM: Add explicit redirect to login after 401 response. Update App.tsx to detect token clear and navigate to login.\",\n    \"🟢 LOW: Extend URL validation to check domain whitelist. Prevent open redirect vulnerabilities.\",\n    \"🟢 LOW: Implement request rate limiting on frontend with exponential backoff to prevent brute force attacks.\",\n    \"🟢 LOW: Add integrity checks for cached configuration. Verify data integrity after retrieval from localStorage.\"\n  ],\n  \"filesScannable\": 8,\n  \"filesAnalyzed\": 8,\n  \"issuesFound\": 7,\n  \"coverage\": \"Frontend files only - backend API security depends on FastAPI implementation\"\n}\n```\n\n## Key Findings Summary\n\n| Category | Count | Severity |\n|----------|-------|----------|\n| Storage Security | 2 | HIGH/MEDIUM |\n| Authentication | 1 | MEDIUM |\n| CSRF | 1 | MEDIUM |\n| XSS | 2 | MEDIUM/LOW |\n| Input Validation | 1 | LOW |\n| Session Management | 1 | LOW |\n\n**Most Critical Issues:**\n1. **Token in localStorage** (line 7, src/api.ts) - Immediately vulnerable to XSS\n2. **Missing CSRF protection** - No tokens or SameSite cookies visible\n3. **Unsanitized error display** - Could expose sensitive information\n\n**Note:** Backend security (SQL injection, authorization, hardcoded secrets) requires separate analysis of the FastAPI backend code in `/backend`. The security posture also depends heavily on backend implementation of authentication, CORS policies, and input validation.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "high",
+        "file": "src/api.ts",
+        "line": 7,
+        "description": "Authentication tokens stored in localStorage are vulnerable to XSS attacks. Any JavaScript injected via XSS can access and steal the token. Best practice is to use httpOnly cookies instead.",
+        "category": "insecure-storage"
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 35,
+        "description": "No CSRF protection mechanism visible. API requests lack CSRF tokens or SameSite cookie settings to prevent cross-site request forgery attacks.",
+        "category": "csrf-protection"
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 49,
+        "description": "Error messages from API responses are returned directly without sanitization. If backend returns HTML/script content, it could lead to XSS when rendered.",
+        "category": "xss-vulnerability"
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/cache.ts",
+        "line": 5,
+        "description": "Sensitive data (including cached configuration) stored in localStorage without encryption. Any data stored here can be read by any script on the page.",
+        "category": "insecure-storage"
+      },
+      {
+        "severity": "low",
+        "file": "src/api.ts",
+        "line": 24,
+        "description": "URL validation in apiUrl() only checks for http/https protocols. Should also validate the host/domain to prevent open redirect vulnerabilities.",
+        "category": "open-redirect"
+      },
+      {
+        "severity": "low",
+        "file": "src/utils/errors.ts",
+        "line": 28,
+        "description": "Error messages truncated to 220 chars but still exposed to user. Detailed error messages can leak backend architecture information.",
+        "category": "information-disclosure"
+      },
+      {
+        "severity": "low",
+        "file": "src/api.ts",
+        "line": 41,
+        "description": "401 response clears token but doesn't explicitly redirect to login. User session state could become inconsistent.",
+        "category": "session-management"
+      }
+    ],
+    "riskScore": 62,
+    "recommendations": [
+      "🔴 CRITICAL: Replace localStorage token storage with httpOnly, Secure, SameSite cookies. Update backend to set cookies with these flags.",
+      "🟠 HIGH: Implement CSRF protection using tokens. Add CSRF token to request headers and validate on backend.",
+      "🟠 HIGH: Add Content Security Policy (CSP) headers to prevent inline script execution and XSS attacks.",
+      "🟡 MEDIUM: Sanitize all API error messages before displaying. Use a sanitization library (DOMPurify) if any HTML rendering is needed.",
+      "🟡 MEDIUM: Encrypt sensitive data stored in localStorage or move to sessionStorage for sensitive temporary data.",
+      "🟡 MEDIUM: Add explicit redirect to login after 401 response. Update App.tsx to detect token clear and navigate to login.",
+      "🟢 LOW: Extend URL validation to check domain whitelist. Prevent open redirect vulnerabilities.",
+      "🟢 LOW: Implement request rate limiting on frontend with exponential backoff to prevent brute force attacks.",
+      "🟢 LOW: Add integrity checks for cached configuration. Verify data integrity after retrieval from localStorage."
+    ],
+    "filesScannable": 8,
+    "filesAnalyzed": 8,
+    "issuesFound": 7,
+    "coverage": "Frontend files only - backend API security depends on FastAPI implementation"
+  },
+  "durationMs": 37382,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-12T19:23:56.283Z",
+  "executionId": "audit_1783884198901_qlp312"
+}

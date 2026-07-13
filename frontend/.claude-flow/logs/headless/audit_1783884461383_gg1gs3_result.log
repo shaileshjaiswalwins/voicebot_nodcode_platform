@@ -1,0 +1,99 @@
+[2026-07-12T19:28:32.595Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/api.ts\",\n      \"line\": 10,\n      \"description\": \"JWT Token stored in localStorage instead of httpOnly cookies. localStorage is vulnerable to XSS attacks — any injected JavaScript can steal the authentication token. An attacker with XSS capability can access localStorage.getItem('nocode_platform_token') and gain full session access.\",\n      \"cwe\": \"CWE-1004: Sensitive Cookie Without HttpOnly Flag, CWE-639: Authorization Bypass Through User-Controlled Key\"\n    },\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/api.ts\",\n      \"line\": 14,\n      \"description\": \"setToken() exposes JWT to XSS. If an XSS vulnerability exists, attackers can intercept and steal the token. The token is set in plain localStorage without HttpOnly flag, Secure flag, or SameSite attributes visible.\",\n      \"cwe\": \"CWE-522: Insufficiently Protected Credentials\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 52,\n      \"description\": \"Unsafe JSON type casting without validation: response.json() as Promise<T>. If the backend returns an unexpected response structure, the frontend will still accept it and pass it to components. No runtime validation of response shape.\",\n      \"cwe\": \"CWE-400: Uncontrolled Resource Consumption\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 48,\n      \"description\": \"API error body not sanitized before throwing. Line 48-49: Error response text is directly thrown without filtering sensitive information (e.g., database errors, stack traces, internal IPs). This leaks backend implementation details to frontend users.\",\n      \"cwe\": \"CWE-209: Information Exposure Through an Error Message\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 305,\n      \"description\": \"Login endpoint has no visible rate limiting. Credentials are transmitted via POST with no rate-limit headers or backend protection against brute force attacks. An attacker can retry login credentials rapidly.\",\n      \"cwe\": \"CWE-307: Improper Restriction of Rendered UI Layers or Frames, CWE-770: Allocation of Resources Without Limits or Throttling\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 41,\n      \"description\": \"Missing CSRF protection. POST/PUT/DELETE requests don't include CSRF tokens. Relies on SameSite cookies (not visible in code) or backend validation. If cookies are sent cross-site, requests could be forged.\",\n      \"cwe\": \"CWE-352: Cross-Site Request Forgery (CSRF)\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/cache.ts\",\n      \"line\": 15,\n      \"description\": \"Unvalidated JSON parsing from localStorage: JSON.parse(value) as T without runtime schema validation. If localStorage is compromised via XSS, malicious data could be injected and cause unexpected application behavior.\",\n      \"cwe\": \"CWE-502: Deserialization of Untrusted Data\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/cache.ts\",\n      \"line\": 6,\n      \"description\": \"localStorage used to cache potentially sensitive data (RuntimeConfig, LanguageSettings, etc.). Any XSS vulnerability allows attackers to read cached data from localStorage.\",\n      \"cwe\": \"CWE-520: .NET CWE Subset Deserialization of Untrusted Data\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 466,\n      \"description\": \"Query parameters not validated before URL encoding. Lines 466, 472: URLSearchParams built directly from user input without whitelist validation. Could enable SSRF or injection if sensitive parameters are passed.\",\n      \"cwe\": \"CWE-601: URL Redirection to Untrusted Site ('Open Redirect')\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/api.ts\",\n      \"line\": 171,\n      \"description\": \"recording_url field in Transcript type may contain temporary/signed URLs. If URLs include session tokens or time-based signatures, exposure in logs or error messages could enable unauthorized recording access.\",\n      \"cwe\": \"CWE-598: Use of GET Request Method With Sensitive Query Strings\"\n    }\n  ],\n  \"riskScore\": 72,\n  \"recommendations\": [\n    \"CRITICAL: Migrate from localStorage to httpOnly, Secure, SameSite=Strict cookies for JWT storage. Use a backend session endpoint that returns the token in Set-Cookie headers only.\",\n    \"Implement CSRF protection: Add CSRF token generation on backend and include in POST/PUT/DELETE requests. Verify CSRF token server-side.\",\n    \"Add runtime schema validation for all API responses using a library like Zod or io-ts. Catch unexpected response structures at the boundary.\",\n    \"Sanitize error messages before display: Log full errors server-side, return generic user-friendly messages to frontend. Strip stack traces, database errors, and internal IPs.\",\n    \"Implement rate limiting on login endpoint (backend): Use exponential backoff, IP-based throttling, or account lockout after N failed attempts.\",\n    \"Add validation for query parameters: Use allowlists for campaign_id, bot_id, etc. before passing to URLSearchParams.\",\n    \"Never cache sensitive data (JWT, auth tokens, PII) in localStorage. Use in-memory state for session-critical data only.\",\n    \"Remove or encrypt recording_url if it contains temporary credentials. Use short-lived signed URLs with minimal scope.\",\n    \"Add Content-Security-Policy header to prevent inline scripts and limit external script sources (mitigates some XSS vectors).\",\n    \"Audit all uses of dangerously imported types: Review views that destructure API responses to ensure no HTML injection of user-controlled fields (transcripts, phrases, etc.).\"\n  ]\n}\n```\n\n## Summary\n\nThis frontend codebase has **10 verified vulnerabilities** with a **risk score of 72/100**. The most critical issues are:\n\n1. **JWT in LocalStorage (HIGH)** — Tokens are stored in plain localStorage, making them vulnerable to any XSS attack. Should use httpOnly cookies.\n2. **Unsafe Type Casting (MEDIUM)** — API responses aren't validated at runtime; unexpected data structures can reach components.\n3. **Error Message Leakage (MEDIUM)** — Backend errors are exposed to users without filtering, leaking internal details.\n4. **No CSRF Protection (MEDIUM)** — POST/PUT/DELETE requests lack CSRF tokens.\n5. **Missing Rate Limiting (MEDIUM)** — Login endpoint has no brute-force protection visible.\n\n**Immediate actions:**\n- Switch to httpOnly cookies for token storage\n- Add API response schema validation\n- Implement CSRF tokens for state-changing operations\n- Add backend rate limiting on auth endpoints\n- Sanitize error messages before display to users\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "high",
+        "file": "src/api.ts",
+        "line": 10,
+        "description": "JWT Token stored in localStorage instead of httpOnly cookies. localStorage is vulnerable to XSS attacks — any injected JavaScript can steal the authentication token. An attacker with XSS capability can access localStorage.getItem('nocode_platform_token') and gain full session access.",
+        "cwe": "CWE-1004: Sensitive Cookie Without HttpOnly Flag, CWE-639: Authorization Bypass Through User-Controlled Key"
+      },
+      {
+        "severity": "high",
+        "file": "src/api.ts",
+        "line": 14,
+        "description": "setToken() exposes JWT to XSS. If an XSS vulnerability exists, attackers can intercept and steal the token. The token is set in plain localStorage without HttpOnly flag, Secure flag, or SameSite attributes visible.",
+        "cwe": "CWE-522: Insufficiently Protected Credentials"
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 52,
+        "description": "Unsafe JSON type casting without validation: response.json() as Promise<T>. If the backend returns an unexpected response structure, the frontend will still accept it and pass it to components. No runtime validation of response shape.",
+        "cwe": "CWE-400: Uncontrolled Resource Consumption"
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 48,
+        "description": "API error body not sanitized before throwing. Line 48-49: Error response text is directly thrown without filtering sensitive information (e.g., database errors, stack traces, internal IPs). This leaks backend implementation details to frontend users.",
+        "cwe": "CWE-209: Information Exposure Through an Error Message"
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 305,
+        "description": "Login endpoint has no visible rate limiting. Credentials are transmitted via POST with no rate-limit headers or backend protection against brute force attacks. An attacker can retry login credentials rapidly.",
+        "cwe": "CWE-307: Improper Restriction of Rendered UI Layers or Frames, CWE-770: Allocation of Resources Without Limits or Throttling"
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 41,
+        "description": "Missing CSRF protection. POST/PUT/DELETE requests don't include CSRF tokens. Relies on SameSite cookies (not visible in code) or backend validation. If cookies are sent cross-site, requests could be forged.",
+        "cwe": "CWE-352: Cross-Site Request Forgery (CSRF)"
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/cache.ts",
+        "line": 15,
+        "description": "Unvalidated JSON parsing from localStorage: JSON.parse(value) as T without runtime schema validation. If localStorage is compromised via XSS, malicious data could be injected and cause unexpected application behavior.",
+        "cwe": "CWE-502: Deserialization of Untrusted Data"
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/cache.ts",
+        "line": 6,
+        "description": "localStorage used to cache potentially sensitive data (RuntimeConfig, LanguageSettings, etc.). Any XSS vulnerability allows attackers to read cached data from localStorage.",
+        "cwe": "CWE-520: .NET CWE Subset Deserialization of Untrusted Data"
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 466,
+        "description": "Query parameters not validated before URL encoding. Lines 466, 472: URLSearchParams built directly from user input without whitelist validation. Could enable SSRF or injection if sensitive parameters are passed.",
+        "cwe": "CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"
+      },
+      {
+        "severity": "low",
+        "file": "src/api.ts",
+        "line": 171,
+        "description": "recording_url field in Transcript type may contain temporary/signed URLs. If URLs include session tokens or time-based signatures, exposure in logs or error messages could enable unauthorized recording access.",
+        "cwe": "CWE-598: Use of GET Request Method With Sensitive Query Strings"
+      }
+    ],
+    "riskScore": 72,
+    "recommendations": [
+      "CRITICAL: Migrate from localStorage to httpOnly, Secure, SameSite=Strict cookies for JWT storage. Use a backend session endpoint that returns the token in Set-Cookie headers only.",
+      "Implement CSRF protection: Add CSRF token generation on backend and include in POST/PUT/DELETE requests. Verify CSRF token server-side.",
+      "Add runtime schema validation for all API responses using a library like Zod or io-ts. Catch unexpected response structures at the boundary.",
+      "Sanitize error messages before display: Log full errors server-side, return generic user-friendly messages to frontend. Strip stack traces, database errors, and internal IPs.",
+      "Implement rate limiting on login endpoint (backend): Use exponential backoff, IP-based throttling, or account lockout after N failed attempts.",
+      "Add validation for query parameters: Use allowlists for campaign_id, bot_id, etc. before passing to URLSearchParams.",
+      "Never cache sensitive data (JWT, auth tokens, PII) in localStorage. Use in-memory state for session-critical data only.",
+      "Remove or encrypt recording_url if it contains temporary credentials. Use short-lived signed URLs with minimal scope.",
+      "Add Content-Security-Policy header to prevent inline scripts and limit external script sources (mitigates some XSS vectors).",
+      "Audit all uses of dangerously imported types: Review views that destructure API responses to ensure no HTML injection of user-controlled fields (transcripts, phrases, etc.)."
+    ]
+  },
+  "durationMs": 51212,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-12T19:28:32.595Z",
+  "executionId": "audit_1783884461383_gg1gs3"
+}

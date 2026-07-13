@@ -1,0 +1,94 @@
+[2026-07-10T03:06:17.563Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "Based on this codebase, here are concrete performance issues with fixes.\n\n## 1. Redundant regex/URL parsing (redundant computation)\n`src/utils/formatting.ts` re-parses dates and re-runs regex on every call, even for the same value repeated across a table render.\n\n```ts\n// parseApiDate is called 3x per transcript row (formatDate, formatTime, timeAgo)\n// each doing its own regex test + new Date()\n```\n**Fix:** memoize per unique input, or compute once and pass the `Date` object down instead of calling all three formatters on the raw string in each row.\n\n## 2. `cacheGet`/`cacheSet` — full JSON.stringify/parse, no TTL, unbounded growth\n`src/utils/cache.ts` has no expiry and `pruneOldCache()` only strips old *prefix* versions, not stale keys within the current version. Over time (bots, campaigns, transcripts all cached under `jd-vb:v2:*`) this grows unbounded in localStorage and every `cacheGet` does a synchronous JSON.parse on the whole blob.\n\n**Fix:** add a `{ value, expiresAt }` wrapper and check expiry on read:\n```ts\nexport function cacheSet<T>(key: string, value: T, ttlMs = 5 * 60_000) {\n  try {\n    window.localStorage.setItem(`${CACHE_PREFIX}${key}`, JSON.stringify({ value, expiresAt: Date.now() + ttlMs }));\n  } catch {}\n}\nexport function cacheGet<T>(key: string, fallback: T): T {\n  try {\n    const raw = window.localStorage.getItem(`${CACHE_PREFIX}${key}`);\n    if (!raw) return fallback;\n    const { value, expiresAt } = JSON.parse(raw);\n    if (Date.now() > expiresAt) { window.localStorage.removeItem(`${CACHE_PREFIX}${key}`); return fallback; }\n    return value as T;\n  } catch { return fallback; }\n}\n```\n\n## 3. `useToasts` — `setTimeout` without cleanup (memory/timer leak)\n```ts\nif (durationMs > 0) {\n  setTimeout(() => dismissToast(id), durationMs);\n}\n```\nIf the component unmounts before the timeout fires, `dismissToast` still runs and calls `setState` on an unmounted hook consumer (no leak in modern React, but the timer isn't cancelled and can fire after a toast was already dismissed manually, causing a stale duplicate-removal call). Track timer ids and clear them:\n```ts\nconst timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());\nconst dismissToast = useCallback((id: string) => {\n  setToasts((prev) => prev.filter((t) => t.id !== id));\n  const t = timers.current.get(id);\n  if (t) { clearTimeout(t); timers.current.delete(id); }\n}, []);\nconst showToast = useCallback((message, tone = 'success', durationMs = DEFAULT_DURATION_MS) => {\n  ...\n  if (durationMs > 0) timers.current.set(id, setTimeout(() => dismissToast(id), durationMs));\n  return id;\n}, [dismissToast]);\n```\n\n## 4. `buildConversationItems` — recomputed on every render, O(n log n) sort with no memoization\n`src/utils/transcript.ts` filters events, maps turns, and sorts on every call. If this is invoked directly in a component body (likely in a transcript detail view) rather than via `useMemo`, it re-runs the full array processing on unrelated re-renders (e.g. parent state changes for toasts, keyboard shortcuts).\n\n**Fix (in the consuming view):**\n```tsx\nconst conversationItems = useMemo(\n  () => buildConversationItems(transcript, events),\n  [transcript, events]\n);\n```\n\n## 5. N+1-shaped pattern: `request<T>` re-reads token from localStorage on every call\n`src/api.ts`'s `request()` calls `getToken()` (a `localStorage.getItem`) on every single API call. Not a true N+1 query, but for pages that fire many parallel requests (bots + campaigns + transcripts + settings on load, per `App.routing.test.tsx`), each hits localStorage synchronously. Minor, but cache the token in memory and invalidate on `setToken`/`clearToken`:\n```ts\nlet cachedToken: string | null = null;\nexport function getToken(): string {\n  if (cachedToken === null) cachedToken = localStorage.getItem(TOKEN_STORAGE_KEY) || '';\n  return cachedToken;\n}\nexport function setToken(token: string): void { cachedToken = token; localStorage.setItem(TOKEN_STORAGE_KEY, token); }\nexport function clearToken(): void { cachedToken = ''; localStorage.removeItem(TOKEN_STORAGE_KEY); }\n```\n\n## 6. Sequential data-loading effects (already flagged in memory as obs #1393)\n`App.tsx` reportedly fires bots/campaigns/transcripts/settings loads sequentially after auth instead of `Promise.all`. Given `mockAuthedDataLoads()` in the test file shows ~7 independent endpoints (`campaigns`, `transcripts`, `platformSettings`, `runtimeSettings`, `langfuseSettings`, `phrases`, `outcomes`, `languageSettings`), these should be parallelized:\n```ts\nconst [campaigns, transcripts, platformSettings, runtimeSettings, langfuse, phrases, outcomes, languages] =\n  await Promise.all([\n    api.campaigns(), api.transcripts(), api.platformSettings(), api.runtimeSettings(),\n    api.langfuseSettings(), api.phrases(), api.outcomes(), api.languageSettings(),\n  ]);\n```\nThis is the single highest-impact fix here — turns N sequential round trips into 1 parallel batch.\n\n## 7. `useCountUp` — no cancellation of in-flight rAF on unmount\n```ts\nuseEffect(() => {\n  ...\n  requestAnimationFrame(tick);\n}, [target, duration]);\n```\nNo cleanup function cancels the `requestAnimationFrame` loop. If `target` changes rapidly (e.g. live-updating dashboard counters) or the component unmounts mid-animation, multiple `tick` loops can run concurrently, each calling `setValue` — wasted renders and a leak until each loop's `progress` naturally reaches 1.\n```ts\nuseEffect(() => {\n  if (target === 0) { setValue(0); return; }\n  let cancelled = false;\n  const start = performance.now();\n  ref.current?.classList.add('counting');\n  const tick = (now: number) => {\n    if (cancelled) return;\n    const progress = Math.min((now - start) / duration, 1);\n    const eased = 1 - Math.pow(1 - progress, 3);\n    setValue(Math.round(target * eased));\n    if (progress < 1) requestAnimationFrame(tick);\n    else ref.current?.classList.remove('counting');\n  };\n  const handle = requestAnimationFrame(tick);\n  return () => { cancelled = true; cancelAnimationFrame(handle); };\n}, [target, duration]);\n```\n\n## Priority order\n1. Parallelize `App.tsx` auth-load effects (#6) — biggest win, straightforward.\n2. Add cleanup to `useCountUp` (#7) and `useToasts` (#3) — small, prevents subtle bugs.\n3. Memoize `buildConversationItems` call site (#4).\n4. Add TTL to the cache layer (#2).\n\nWant me to open `App.tsx` and the transcript view to apply #4 and #6 directly?\n",
+  "parsedOutput": {
+    "sections": [
+      {
+        "title": "1. Redundant regex/URL parsing (redundant computation)",
+        "content": "`src/utils/formatting.ts` re-parses dates and re-runs regex on every call, even for the same value repeated across a table render.\n\n```ts\n// parseApiDate is called 3x per transcript row (formatDate, formatTime, timeAgo)\n// each doing its own regex test + new Date()\n```\n**Fix:** memoize per unique input, or compute once and pass the `Date` object down instead of calling all three formatters on the raw string in each row.\n\n",
+        "level": 2
+      },
+      {
+        "title": "2. `cacheGet`/`cacheSet` — full JSON.stringify/parse, no TTL, unbounded growth",
+        "content": "`src/utils/cache.ts` has no expiry and `pruneOldCache()` only strips old *prefix* versions, not stale keys within the current version. Over time (bots, campaigns, transcripts all cached under `jd-vb:v2:*`) this grows unbounded in localStorage and every `cacheGet` does a synchronous JSON.parse on the whole blob.\n\n**Fix:** add a `{ value, expiresAt }` wrapper and check expiry on read:\n```ts\nexport function cacheSet<T>(key: string, value: T, ttlMs = 5 * 60_000) {\n  try {\n    window.localStorage.setItem(`${CACHE_PREFIX}${key}`, JSON.stringify({ value, expiresAt: Date.now() + ttlMs }));\n  } catch {}\n}\nexport function cacheGet<T>(key: string, fallback: T): T {\n  try {\n    const raw = window.localStorage.getItem(`${CACHE_PREFIX}${key}`);\n    if (!raw) return fallback;\n    const { value, expiresAt } = JSON.parse(raw);\n    if (Date.now() > expiresAt) { window.localStorage.removeItem(`${CACHE_PREFIX}${key}`); return fallback; }\n    return value as T;\n  } catch { return fallback; }\n}\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "3. `useToasts` — `setTimeout` without cleanup (memory/timer leak)",
+        "content": "```ts\nif (durationMs > 0) {\n  setTimeout(() => dismissToast(id), durationMs);\n}\n```\nIf the component unmounts before the timeout fires, `dismissToast` still runs and calls `setState` on an unmounted hook consumer (no leak in modern React, but the timer isn't cancelled and can fire after a toast was already dismissed manually, causing a stale duplicate-removal call). Track timer ids and clear them:\n```ts\nconst timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());\nconst dismissToast = useCallback((id: string) => {\n  setToasts((prev) => prev.filter((t) => t.id !== id));\n  const t = timers.current.get(id);\n  if (t) { clearTimeout(t); timers.current.delete(id); }\n}, []);\nconst showToast = useCallback((message, tone = 'success', durationMs = DEFAULT_DURATION_MS) => {\n  ...\n  if (durationMs > 0) timers.current.set(id, setTimeout(() => dismissToast(id), durationMs));\n  return id;\n}, [dismissToast]);\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "4. `buildConversationItems` — recomputed on every render, O(n log n) sort with no memoization",
+        "content": "`src/utils/transcript.ts` filters events, maps turns, and sorts on every call. If this is invoked directly in a component body (likely in a transcript detail view) rather than via `useMemo`, it re-runs the full array processing on unrelated re-renders (e.g. parent state changes for toasts, keyboard shortcuts).\n\n**Fix (in the consuming view):**\n```tsx\nconst conversationItems = useMemo(\n  () => buildConversationItems(transcript, events),\n  [transcript, events]\n);\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "5. N+1-shaped pattern: `request<T>` re-reads token from localStorage on every call",
+        "content": "`src/api.ts`'s `request()` calls `getToken()` (a `localStorage.getItem`) on every single API call. Not a true N+1 query, but for pages that fire many parallel requests (bots + campaigns + transcripts + settings on load, per `App.routing.test.tsx`), each hits localStorage synchronously. Minor, but cache the token in memory and invalidate on `setToken`/`clearToken`:\n```ts\nlet cachedToken: string | null = null;\nexport function getToken(): string {\n  if (cachedToken === null) cachedToken = localStorage.getItem(TOKEN_STORAGE_KEY) || '';\n  return cachedToken;\n}\nexport function setToken(token: string): void { cachedToken = token; localStorage.setItem(TOKEN_STORAGE_KEY, token); }\nexport function clearToken(): void { cachedToken = ''; localStorage.removeItem(TOKEN_STORAGE_KEY); }\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "6. Sequential data-loading effects (already flagged in memory as obs #1393)",
+        "content": "`App.tsx` reportedly fires bots/campaigns/transcripts/settings loads sequentially after auth instead of `Promise.all`. Given `mockAuthedDataLoads()` in the test file shows ~7 independent endpoints (`campaigns`, `transcripts`, `platformSettings`, `runtimeSettings`, `langfuseSettings`, `phrases`, `outcomes`, `languageSettings`), these should be parallelized:\n```ts\nconst [campaigns, transcripts, platformSettings, runtimeSettings, langfuse, phrases, outcomes, languages] =\n  await Promise.all([\n    api.campaigns(), api.transcripts(), api.platformSettings(), api.runtimeSettings(),\n    api.langfuseSettings(), api.phrases(), api.outcomes(), api.languageSettings(),\n  ]);\n```\nThis is the single highest-impact fix here — turns N sequential round trips into 1 parallel batch.\n\n",
+        "level": 2
+      },
+      {
+        "title": "7. `useCountUp` — no cancellation of in-flight rAF on unmount",
+        "content": "```ts\nuseEffect(() => {\n  ...\n  requestAnimationFrame(tick);\n}, [target, duration]);\n```\nNo cleanup function cancels the `requestAnimationFrame` loop. If `target` changes rapidly (e.g. live-updating dashboard counters) or the component unmounts mid-animation, multiple `tick` loops can run concurrently, each calling `setValue` — wasted renders and a leak until each loop's `progress` naturally reaches 1.\n```ts\nuseEffect(() => {\n  if (target === 0) { setValue(0); return; }\n  let cancelled = false;\n  const start = performance.now();\n  ref.current?.classList.add('counting');\n  const tick = (now: number) => {\n    if (cancelled) return;\n    const progress = Math.min((now - start) / duration, 1);\n    const eased = 1 - Math.pow(1 - progress, 3);\n    setValue(Math.round(target * eased));\n    if (progress < 1) requestAnimationFrame(tick);\n    else ref.current?.classList.remove('counting');\n  };\n  const handle = requestAnimationFrame(tick);\n  return () => { cancelled = true; cancelAnimationFrame(handle); };\n}, [target, duration]);\n```\n\n",
+        "level": 2
+      },
+      {
+        "title": "Priority order",
+        "content": "1. Parallelize `App.tsx` auth-load effects (#6) — biggest win, straightforward.\n2. Add cleanup to `useCountUp` (#7) and `useToasts` (#3) — small, prevents subtle bugs.\n3. Memoize `buildConversationItems` call site (#4).\n4. Add TTL to the cache layer (#2).\n\nWant me to open `App.tsx` and the transcript view to apply #4 and #6 directly?",
+        "level": 2
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "ts",
+        "code": "// parseApiDate is called 3x per transcript row (formatDate, formatTime, timeAgo)\n// each doing its own regex test + new Date()"
+      },
+      {
+        "language": "ts",
+        "code": "export function cacheSet<T>(key: string, value: T, ttlMs = 5 * 60_000) {\n  try {\n    window.localStorage.setItem(`${CACHE_PREFIX}${key}`, JSON.stringify({ value, expiresAt: Date.now() + ttlMs }));\n  } catch {}\n}\nexport function cacheGet<T>(key: string, fallback: T): T {\n  try {\n    const raw = window.localStorage.getItem(`${CACHE_PREFIX}${key}`);\n    if (!raw) return fallback;\n    const { value, expiresAt } = JSON.parse(raw);\n    if (Date.now() > expiresAt) { window.localStorage.removeItem(`${CACHE_PREFIX}${key}`); return fallback; }\n    return value as T;\n  } catch { return fallback; }\n}"
+      },
+      {
+        "language": "ts",
+        "code": "if (durationMs > 0) {\n  setTimeout(() => dismissToast(id), durationMs);\n}"
+      },
+      {
+        "language": "ts",
+        "code": "const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());\nconst dismissToast = useCallback((id: string) => {\n  setToasts((prev) => prev.filter((t) => t.id !== id));\n  const t = timers.current.get(id);\n  if (t) { clearTimeout(t); timers.current.delete(id); }\n}, []);\nconst showToast = useCallback((message, tone = 'success', durationMs = DEFAULT_DURATION_MS) => {\n  ...\n  if (durationMs > 0) timers.current.set(id, setTimeout(() => dismissToast(id), durationMs));\n  return id;\n}, [dismissToast]);"
+      },
+      {
+        "language": "tsx",
+        "code": "const conversationItems = useMemo(\n  () => buildConversationItems(transcript, events),\n  [transcript, events]\n);"
+      },
+      {
+        "language": "ts",
+        "code": "let cachedToken: string | null = null;\nexport function getToken(): string {\n  if (cachedToken === null) cachedToken = localStorage.getItem(TOKEN_STORAGE_KEY) || '';\n  return cachedToken;\n}\nexport function setToken(token: string): void { cachedToken = token; localStorage.setItem(TOKEN_STORAGE_KEY, token); }\nexport function clearToken(): void { cachedToken = ''; localStorage.removeItem(TOKEN_STORAGE_KEY); }"
+      },
+      {
+        "language": "ts",
+        "code": "const [campaigns, transcripts, platformSettings, runtimeSettings, langfuse, phrases, outcomes, languages] =\n  await Promise.all([\n    api.campaigns(), api.transcripts(), api.platformSettings(), api.runtimeSettings(),\n    api.langfuseSettings(), api.phrases(), api.outcomes(), api.languageSettings(),\n  ]);"
+      },
+      {
+        "language": "ts",
+        "code": "useEffect(() => {\n  ...\n  requestAnimationFrame(tick);\n}, [target, duration]);"
+      },
+      {
+        "language": "ts",
+        "code": "useEffect(() => {\n  if (target === 0) { setValue(0); return; }\n  let cancelled = false;\n  const start = performance.now();\n  ref.current?.classList.add('counting');\n  const tick = (now: number) => {\n    if (cancelled) return;\n    const progress = Math.min((now - start) / duration, 1);\n    const eased = 1 - Math.pow(1 - progress, 3);\n    setValue(Math.round(target * eased));\n    if (progress < 1) requestAnimationFrame(tick);\n    else ref.current?.classList.remove('counting');\n  };\n  const handle = requestAnimationFrame(tick);\n  return () => { cancelled = true; cancelAnimationFrame(handle); };\n}, [target, duration]);"
+      }
+    ]
+  },
+  "durationMs": 29261,
+  "model": "sonnet",
+  "sandboxMode": "permissive",
+  "workerType": "optimize",
+  "timestamp": "2026-07-10T03:06:17.563Z",
+  "executionId": "optimize_1783652748302_9u41t9"
+}

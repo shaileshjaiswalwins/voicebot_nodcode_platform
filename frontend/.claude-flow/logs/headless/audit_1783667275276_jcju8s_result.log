@@ -1,0 +1,17 @@
+[2026-07-10T07:07:59.129Z] RESULT
+============================================================
+{
+  "success": false,
+  "output": "You've hit your session limit · resets 2:20pm (Asia/Calcutta)\n",
+  "parsedOutput": {
+    "parseError": true,
+    "rawOutput": "You've hit your session limit · resets 2:20pm (Asia/Calcutta)\n"
+  },
+  "durationMs": 3853,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-10T07:07:59.129Z",
+  "executionId": "audit_1783667275276_jcju8s",
+  "error": "Warning: claude.ai MCP servers blocked by enterprise policy: claude.ai Microsoft 365, claude.ai Slack, claude.ai GitLab, claude.ai Notion, claude.ai monday.com, claude.ai Linear, claude.ai Intercom, claude.ai HubSpot, claude.ai Figma, claude.ai Canva, claude.ai Box, claude.ai Atlassian, claude.ai Asana\n"
+}

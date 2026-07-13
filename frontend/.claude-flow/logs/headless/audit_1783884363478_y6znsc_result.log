@@ -1,0 +1,94 @@
+[2026-07-12T19:26:47.803Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "Based on my analysis of the frontend codebase, here's a comprehensive security audit:\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/api.ts\",\n      \"line\": 9,\n      \"description\": \"Bearer token stored in localStorage is vulnerable to XSS attacks. Any malicious JavaScript on the page can access the token. Tokens should use httpOnly, Secure, SameSite cookies instead.\",\n      \"category\": \"insecure-storage\"\n    },\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/api.ts\",\n      \"line\": 33,\n      \"description\": \"No CSRF token handling in API requests. The request() function doesn't include CSRF protection headers, making it vulnerable to Cross-Site Request Forgery attacks.\",\n      \"category\": \"csrf-missing\"\n    },\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/utils/errors.ts\",\n      \"line\": 17,\n      \"description\": \"Raw API error messages displayed without sanitization. Error responses from backend could contain malicious content or sensitive information, leading to XSS and information disclosure.\",\n      \"category\": \"xss-information-disclosure\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/cache.ts\",\n      \"line\": 7,\n      \"description\": \"Sensitive data cached in localStorage without encryption. Cache may contain user data or config that shouldn't be accessible via localStorage (e.g., via devtools or XSS).\",\n      \"category\": \"unencrypted-storage\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"vite.config.ts\",\n      \"line\": 1,\n      \"description\": \"No Content Security Policy headers configured. Without CSP, XSS attacks can execute arbitrary JavaScript with full access to the application.\",\n      \"category\": \"missing-security-headers\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/validation.ts\",\n      \"line\": 5,\n      \"description\": \"URL validation accepts empty strings as valid. While intentional for optional fields, this could mask misconfigurations or allow open redirect vulnerabilities if used for redirect URLs.\",\n      \"category\": \"insufficient-validation\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 42,\n      \"description\": \"Token cleared on 401 response but no explicit redirect to login page. Users are left in unclear state, potentially seeing broken UI or stale data.\",\n      \"category\": \"incomplete-logout\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/api.ts\",\n      \"line\": 1,\n      \"description\": \"API base URL defaults to http://localhost:8000 if VITE_API_BASE is not set. Could cause production API requests to go to localhost if environment variable is missing.\",\n      \"category\": \"misconfiguration\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/errors.ts\",\n      \"line\": 27,\n      \"description\": \"Detailed error messages expose backend infrastructure details (FastAPI, Mongo, LiveKit). This information helps attackers understand the stack and target specific vulnerabilities.\",\n      \"category\": \"information-disclosure\"\n    }\n  ],\n  \"riskScore\": 72,\n  \"recommendations\": [\n    \"CRITICAL: Migrate token storage from localStorage to httpOnly, Secure, SameSite=Strict cookies. This prevents XSS attacks from stealing tokens and provides automatic CSRF protection for state-changing requests.\",\n    \"CRITICAL: Implement CSRF token protection by: (1) generating tokens on backend, (2) sending as cookie + request header/body, (3) validating on backend for state-changing requests (POST, PUT, DELETE).\",\n    \"HIGH: Sanitize all error messages before displaying to users. Use DOMPurify or similar library to strip HTML/scripts. Only display safe, user-facing error messages; log detailed errors server-side.\",\n    \"HIGH: Add Content Security Policy headers via vite config or backend. Start with: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;`\",\n    \"HIGH: Implement explicit login redirect on 401 response. Redirect to /login, clear all app state, and show a session-expired message.\",\n    \"MEDIUM: Encrypt sensitive cached data in localStorage or migrate to sessionStorage (cleared on tab close). Use TweetNaCl.js or libsodium.js for encryption.\",\n    \"MEDIUM: Reduce error message verbosity in production. Don't expose backend framework names, services (Mongo, LiveKit), or internal paths. Use generic errors like 'Service unavailable, please try again later'.\",\n    \"MEDIUM: Add additional security headers: X-Frame-Options: DENY (prevent clickjacking), X-Content-Type-Options: nosniff, Referrer-Policy: strict-origin-when-cross-origin.\",\n    \"MEDIUM: Implement Rate Limiting on authentication endpoints (backend) to prevent credential stuffing and brute force attacks.\",\n    \"LOW: Use environment variable validation in CI/CD to ensure VITE_API_BASE is always set for production builds. Add a build-time check that fails if missing.\",\n    \"LOW: Consider implementing Subresource Integrity (SRI) for any CDN-hosted dependencies to prevent supply chain attacks.\",\n    \"LOW: Add security logging for sensitive operations (token access, auth failures, unusual API calls) for audit trails and anomaly detection.\"\n  ]\n}\n```\n\n## Summary\n\n**Key Findings:**\n- **Token storage in localStorage** is the most critical issue—any XSS attack can steal the Bearer token and impersonate the user\n- **Missing CSRF protection** allows attackers to trigger state-changing operations (delete bots, modify campaigns) from other sites\n- **Unfiltered error messages** expose backend infrastructure and could enable XSS attacks\n- **No security headers** make the application an easier target for browser-based attacks\n\n**Immediate Action Items:**\n1. Migrate from localStorage to httpOnly cookies (requires backend coordination)\n2. Add CSRF token validation to all state-changing requests\n3. Sanitize error messages and reduce information disclosure\n4. Configure CSP and other security headers in Vite or backend\n\nThe risk score of **72/100** reflects a moderately high-risk application—the primary exposure is to XSS and CSRF attacks, which are common and impactful in modern web applications.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "high",
+        "file": "src/api.ts",
+        "line": 9,
+        "description": "Bearer token stored in localStorage is vulnerable to XSS attacks. Any malicious JavaScript on the page can access the token. Tokens should use httpOnly, Secure, SameSite cookies instead.",
+        "category": "insecure-storage"
+      },
+      {
+        "severity": "high",
+        "file": "src/api.ts",
+        "line": 33,
+        "description": "No CSRF token handling in API requests. The request() function doesn't include CSRF protection headers, making it vulnerable to Cross-Site Request Forgery attacks.",
+        "category": "csrf-missing"
+      },
+      {
+        "severity": "high",
+        "file": "src/utils/errors.ts",
+        "line": 17,
+        "description": "Raw API error messages displayed without sanitization. Error responses from backend could contain malicious content or sensitive information, leading to XSS and information disclosure.",
+        "category": "xss-information-disclosure"
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/cache.ts",
+        "line": 7,
+        "description": "Sensitive data cached in localStorage without encryption. Cache may contain user data or config that shouldn't be accessible via localStorage (e.g., via devtools or XSS).",
+        "category": "unencrypted-storage"
+      },
+      {
+        "severity": "medium",
+        "file": "vite.config.ts",
+        "line": 1,
+        "description": "No Content Security Policy headers configured. Without CSP, XSS attacks can execute arbitrary JavaScript with full access to the application.",
+        "category": "missing-security-headers"
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/validation.ts",
+        "line": 5,
+        "description": "URL validation accepts empty strings as valid. While intentional for optional fields, this could mask misconfigurations or allow open redirect vulnerabilities if used for redirect URLs.",
+        "category": "insufficient-validation"
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 42,
+        "description": "Token cleared on 401 response but no explicit redirect to login page. Users are left in unclear state, potentially seeing broken UI or stale data.",
+        "category": "incomplete-logout"
+      },
+      {
+        "severity": "low",
+        "file": "src/api.ts",
+        "line": 1,
+        "description": "API base URL defaults to http://localhost:8000 if VITE_API_BASE is not set. Could cause production API requests to go to localhost if environment variable is missing.",
+        "category": "misconfiguration"
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/errors.ts",
+        "line": 27,
+        "description": "Detailed error messages expose backend infrastructure details (FastAPI, Mongo, LiveKit). This information helps attackers understand the stack and target specific vulnerabilities.",
+        "category": "information-disclosure"
+      }
+    ],
+    "riskScore": 72,
+    "recommendations": [
+      "CRITICAL: Migrate token storage from localStorage to httpOnly, Secure, SameSite=Strict cookies. This prevents XSS attacks from stealing tokens and provides automatic CSRF protection for state-changing requests.",
+      "CRITICAL: Implement CSRF token protection by: (1) generating tokens on backend, (2) sending as cookie + request header/body, (3) validating on backend for state-changing requests (POST, PUT, DELETE).",
+      "HIGH: Sanitize all error messages before displaying to users. Use DOMPurify or similar library to strip HTML/scripts. Only display safe, user-facing error messages; log detailed errors server-side.",
+      "HIGH: Add Content Security Policy headers via vite config or backend. Start with: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;`",
+      "HIGH: Implement explicit login redirect on 401 response. Redirect to /login, clear all app state, and show a session-expired message.",
+      "MEDIUM: Encrypt sensitive cached data in localStorage or migrate to sessionStorage (cleared on tab close). Use TweetNaCl.js or libsodium.js for encryption.",
+      "MEDIUM: Reduce error message verbosity in production. Don't expose backend framework names, services (Mongo, LiveKit), or internal paths. Use generic errors like 'Service unavailable, please try again later'.",
+      "MEDIUM: Add additional security headers: X-Frame-Options: DENY (prevent clickjacking), X-Content-Type-Options: nosniff, Referrer-Policy: strict-origin-when-cross-origin.",
+      "MEDIUM: Implement Rate Limiting on authentication endpoints (backend) to prevent credential stuffing and brute force attacks.",
+      "LOW: Use environment variable validation in CI/CD to ensure VITE_API_BASE is always set for production builds. Add a build-time check that fails if missing.",
+      "LOW: Consider implementing Subresource Integrity (SRI) for any CDN-hosted dependencies to prevent supply chain attacks.",
+      "LOW: Add security logging for sensitive operations (token access, auth failures, unusual API calls) for audit trails and anomaly detection."
+    ]
+  },
+  "durationMs": 44325,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-12T19:26:47.803Z",
+  "executionId": "audit_1783884363478_y6znsc"
+}

@@ -1,0 +1,111 @@
+[2026-07-10T03:06:56.089Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "Based on my comprehensive security analysis of the frontend codebase, here's the security vulnerability report in JSON format:\n\n```json\n{\n  \"title\": \"Frontend Security Vulnerability Audit\",\n  \"timestamp\": \"2026-07-10T08:35:00Z\",\n  \"codebase\": \"voicebot_nodcode_platform/frontend\",\n  \"summary\": \"Comprehensive security analysis of the frontend codebase identified 12 vulnerabilities across authentication, data protection, and information disclosure categories.\",\n  \"riskScore\": 68,\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/api.ts\",\n      \"line\": 15,\n      \"description\": \"JWT token stored in localStorage via setToken() is vulnerable to XSS attacks. Any XSS vulnerability allows attackers to steal the token and impersonate users.\"\n    },\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/utils/errors.ts\",\n      \"line\": 12,\n      \"description\": \"Error messages expose sensitive infrastructure details: backend ports (8000, 8010), database names (MongoDB), LiveKit URLs, SSH tunnel requirements, and API endpoints. This information helps attackers map the system architecture.\"\n    },\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/api.ts\",\n      \"line\": 35,\n      \"description\": \"No JWT token expiration validation before making requests. Expired tokens only detected on 401 response, leaving them active longer than necessary.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 35,\n      \"description\": \"Missing CSRF token protection on state-changing requests (POST, PUT, DELETE). Attackers could trick users into unintended actions.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/cache.ts\",\n      \"line\": 6,\n      \"description\": \"Sensitive cached data (bot configs, campaigns, transcripts) stored in localStorage with only simple 'jd-vb:v2:' prefix. Vulnerable to XSS attacks.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/config.ts\",\n      \"line\": 4,\n      \"description\": \"JSON parsing without schema validation. parseConfig() accepts arbitrary JSON structures without verifying expected schema, causing potential runtime errors.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 52,\n      \"description\": \"No Content-Type validation before JSON parsing. Server returning HTML instead of JSON would still be parsed, potentially causing XSS.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 43,\n      \"description\": \"No request timeout configuration. Fetch calls can hang indefinitely if server becomes unresponsive.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/api.ts\",\n      \"line\": 6,\n      \"description\": \"Insecure HTTP fallback (http://localhost:8000). If VITE_API_BASE is unset in production, plaintext HTTP is used.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/api.ts\",\n      \"line\": 23,\n      \"description\": \"URL parsing regex `/^https?:\\\\/\\\\/` could be bypassed by protocol-relative URLs (//example.com) or javascript: schemes.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/api.ts\",\n      \"line\": 35,\n      \"description\": \"No rate limiting or request throttling. Vulnerable to brute force attacks on login endpoints and DoS attacks.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/api.ts\",\n      \"line\": 43,\n      \"description\": \"Implicit fetch credentials configuration. Should explicitly set credentials: 'same-origin' for clarity and to prevent CORS accidents.\"\n    }\n  ],\n  \"recommendations\": [\n    \"Move JWT tokens from localStorage to httpOnly cookies with Secure and SameSite=Strict flags\",\n    \"Remove all sensitive infrastructure details from user-facing error messages; log details server-side\",\n    \"Implement proactive JWT expiration validation before each API request\",\n    \"Add CSRF token protection to all state-changing requests (POST/PUT/DELETE)\",\n    \"Stop caching sensitive data in localStorage or encrypt cached data\",\n    \"Implement schema validation (zod/yup) for all JSON parsing and API responses\",\n    \"Validate response Content-Type headers before JSON parsing\",\n    \"Add request timeouts using AbortController (30-60 seconds)\",\n    \"Require explicit VITE_API_BASE configuration; use HTTPS only\",\n    \"Use URL constructor instead of regex for URL validation\",\n    \"Implement client-side rate limiting for API requests\",\n    \"Explicitly configure fetch credentials mode\",\n    \"Implement Content Security Policy (CSP) headers\",\n    \"Add security headers: X-Frame-Options, X-Content-Type-Options, Referrer-Policy\",\n    \"Keep all dependencies updated; monitor for vulnerabilities\",\n    \"Conduct regular penetration testing and security audits\"\n  ]\n}\n```\n\n## Key Findings Summary\n\n**Critical Issues (Address Immediately):**\n1. **SEC-001**: JWT tokens in localStorage vulnerable to XSS token theft\n2. **SEC-002**: Sensitive infrastructure details leaked in error messages\n3. **SEC-003**: No JWT expiration validation\n4. **SEC-004**: Missing CSRF protection\n\n**Overall Risk Score: 68/100** (Medium-High Risk)\n\nThe main vulnerabilities stem from token storage methodology, insufficient validation, and information disclosure. The good news is that no dangerous code patterns (eval, dangerouslySetInnerHTML) were detected, and dependencies are current without known vulnerabilities.\n",
+  "parsedOutput": {
+    "title": "Frontend Security Vulnerability Audit",
+    "timestamp": "2026-07-10T08:35:00Z",
+    "codebase": "voicebot_nodcode_platform/frontend",
+    "summary": "Comprehensive security analysis of the frontend codebase identified 12 vulnerabilities across authentication, data protection, and information disclosure categories.",
+    "riskScore": 68,
+    "vulnerabilities": [
+      {
+        "severity": "high",
+        "file": "src/api.ts",
+        "line": 15,
+        "description": "JWT token stored in localStorage via setToken() is vulnerable to XSS attacks. Any XSS vulnerability allows attackers to steal the token and impersonate users."
+      },
+      {
+        "severity": "high",
+        "file": "src/utils/errors.ts",
+        "line": 12,
+        "description": "Error messages expose sensitive infrastructure details: backend ports (8000, 8010), database names (MongoDB), LiveKit URLs, SSH tunnel requirements, and API endpoints. This information helps attackers map the system architecture."
+      },
+      {
+        "severity": "high",
+        "file": "src/api.ts",
+        "line": 35,
+        "description": "No JWT token expiration validation before making requests. Expired tokens only detected on 401 response, leaving them active longer than necessary."
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 35,
+        "description": "Missing CSRF token protection on state-changing requests (POST, PUT, DELETE). Attackers could trick users into unintended actions."
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/cache.ts",
+        "line": 6,
+        "description": "Sensitive cached data (bot configs, campaigns, transcripts) stored in localStorage with only simple 'jd-vb:v2:' prefix. Vulnerable to XSS attacks."
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/config.ts",
+        "line": 4,
+        "description": "JSON parsing without schema validation. parseConfig() accepts arbitrary JSON structures without verifying expected schema, causing potential runtime errors."
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 52,
+        "description": "No Content-Type validation before JSON parsing. Server returning HTML instead of JSON would still be parsed, potentially causing XSS."
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 43,
+        "description": "No request timeout configuration. Fetch calls can hang indefinitely if server becomes unresponsive."
+      },
+      {
+        "severity": "low",
+        "file": "src/api.ts",
+        "line": 6,
+        "description": "Insecure HTTP fallback (http://localhost:8000). If VITE_API_BASE is unset in production, plaintext HTTP is used."
+      },
+      {
+        "severity": "low",
+        "file": "src/api.ts",
+        "line": 23,
+        "description": "URL parsing regex `/^https?:\\/\\/` could be bypassed by protocol-relative URLs (//example.com) or javascript: schemes."
+      },
+      {
+        "severity": "low",
+        "file": "src/api.ts",
+        "line": 35,
+        "description": "No rate limiting or request throttling. Vulnerable to brute force attacks on login endpoints and DoS attacks."
+      },
+      {
+        "severity": "low",
+        "file": "src/api.ts",
+        "line": 43,
+        "description": "Implicit fetch credentials configuration. Should explicitly set credentials: 'same-origin' for clarity and to prevent CORS accidents."
+      }
+    ],
+    "recommendations": [
+      "Move JWT tokens from localStorage to httpOnly cookies with Secure and SameSite=Strict flags",
+      "Remove all sensitive infrastructure details from user-facing error messages; log details server-side",
+      "Implement proactive JWT expiration validation before each API request",
+      "Add CSRF token protection to all state-changing requests (POST/PUT/DELETE)",
+      "Stop caching sensitive data in localStorage or encrypt cached data",
+      "Implement schema validation (zod/yup) for all JSON parsing and API responses",
+      "Validate response Content-Type headers before JSON parsing",
+      "Add request timeouts using AbortController (30-60 seconds)",
+      "Require explicit VITE_API_BASE configuration; use HTTPS only",
+      "Use URL constructor instead of regex for URL validation",
+      "Implement client-side rate limiting for API requests",
+      "Explicitly configure fetch credentials mode",
+      "Implement Content Security Policy (CSP) headers",
+      "Add security headers: X-Frame-Options, X-Content-Type-Options, Referrer-Policy",
+      "Keep all dependencies updated; monitor for vulnerabilities",
+      "Conduct regular penetration testing and security audits"
+    ]
+  },
+  "durationMs": 118823,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-10T03:06:56.089Z",
+  "executionId": "audit_1783652697266_ro88qj"
+}

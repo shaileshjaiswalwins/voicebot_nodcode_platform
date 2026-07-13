@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-07-13T10:30:01.789Z",
+  "projectRoot": "/Users/justdial/voicebot_nodcode_platform/frontend",
+  "structure": {
+    "hasPackageJson": true,
+    "hasTsConfig": true,
+    "hasClaudeConfig": true,
+    "hasClaudeFlow": true
+  },
+  "scannedAt": 1783938601789
+}

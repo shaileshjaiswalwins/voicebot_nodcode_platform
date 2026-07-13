@@ -1,0 +1,75 @@
+[2026-07-12T19:29:16.632Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "Based on my analysis of the provided frontend codebase, here's the security vulnerability report:\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/api.ts\",\n      \"line\": 8,\n      \"description\": \"JWT token stored in localStorage is vulnerable to XSS attacks. localStorage is accessible to any JavaScript running on the page; a successful XSS injection allows attackers to steal authentication tokens. Should use HTTP-only, secure cookies instead.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/transcript.ts\",\n      \"line\": 46,\n      \"description\": \"Transcript turns and event messages from API responses rendered without explicit sanitization. While React provides default XSS protection, if any code ever uses dangerouslySetInnerHTML with this data, it becomes a vector for stored XSS attacks.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/errors.ts\",\n      \"line\": 10,\n      \"description\": \"Error messages expose VITE_API_BASE URL and internal system configuration (MongoDB, LiveKit, backend details) in user-facing error strings. Information disclosure aids reconnaissance for targeted attacks.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 28,\n      \"description\": \"Missing CSRF token validation. The request function does not include CSRF tokens; if backend doesn't implement SameSite cookie headers or other protections, state-changing requests (POST/PUT/DELETE) are vulnerable to CSRF.\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 28,\n      \"description\": \"Incomplete authorization error handling. Only HTTP 401 (Unauthenticated) clears the token. HTTP 403 (Forbidden) responses are not explicitly handled, which may leave an invalid token in localStorage while user assumes they're still authenticated.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/utils/validation.ts\",\n      \"line\": 6,\n      \"description\": \"URL validation function accepts any URL protocol without blocking javascript: or data: URLs, which could be XSS vectors if used for link href attributes. Mitigated for API calls by apiUrl() function regex check, but presents risk for other uses.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/hooks/useCountUp.ts\",\n      \"line\": 14,\n      \"description\": \"Memory leak: requestAnimationFrame scheduled in effect without cancellation. If component unmounts before animation completes, the RAF callback continues to run, wasting resources.\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/hooks/useToasts.ts\",\n      \"line\": 24,\n      \"description\": \"Memory leak: setTimeout scheduled without tracking. If component unmounts before timeout fires, the callback queues but may execute against unmounted component, risking state updates on unmounted component warnings.\"\n    }\n  ],\n  \"riskScore\": 68,\n  \"recommendations\": [\n    \"CRITICAL: Migrate token storage from localStorage to HTTP-only, Secure, SameSite cookies. Requires backend coordination to set cookies instead of relying on Authorization headers.\",\n    \"Implement CSRF token handling: include X-CSRF-Token header in state-changing requests and validate token rotation per request or session.\",\n    \"Scrub error messages: Never expose API_BASE, internal service names (Mongo, LiveKit), or backend URLs in user-facing errors. Log full errors server-side only.\",\n    \"Add explicit 403 Forbidden handling: Clear stored credentials and redirect to login/re-auth flow when 403 received, matching 401 behavior.\",\n    \"Fix memory leaks: (1) useCountUp.ts: Store RAF ID in ref and cancel on unmount; (2) useToasts.ts: Track setTimeout IDs in a Set and clear all on unmount.\",\n    \"Restrict URL validation: Add allowlist check to block javascript:, data:, vbscript: protocols in isValidUrl() for any non-API URL fields.\",\n    \"Content Security Policy: Implement strict CSP headers on backend to block inline scripts and restrict script sources, providing defense-in-depth against XSS.\",\n    \"Audit backend token validation: Ensure backend validates JWT signature, expiration, and issuer on every request; do not trust frontend token claims.\"\n  ]\n}\n```\n\n**Key Findings:**\n\n- **Risk Score: 68/100** — Moderate-High risk, primarily driven by localStorage token storage and information disclosure in error messages.\n- **Highest Impact:** The localStorage token vulnerability combined with missing XSS-in-error-messages creates a path for attackers to steal tokens if they achieve code injection.\n- **Architectural Issue:** This is a frontend-only view; full risk depends on backend validation, CORS configuration, and API security (not visible in provided code).\n\nWould you like me to:\n1. Provide code fixes for the memory leaks and URL validation?\n2. Audit the backend security (if backend code is available)?\n3. Review specific components like authentication flows or API request patterns?\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "high",
+        "file": "src/api.ts",
+        "line": 8,
+        "description": "JWT token stored in localStorage is vulnerable to XSS attacks. localStorage is accessible to any JavaScript running on the page; a successful XSS injection allows attackers to steal authentication tokens. Should use HTTP-only, secure cookies instead."
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/transcript.ts",
+        "line": 46,
+        "description": "Transcript turns and event messages from API responses rendered without explicit sanitization. While React provides default XSS protection, if any code ever uses dangerouslySetInnerHTML with this data, it becomes a vector for stored XSS attacks."
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/errors.ts",
+        "line": 10,
+        "description": "Error messages expose VITE_API_BASE URL and internal system configuration (MongoDB, LiveKit, backend details) in user-facing error strings. Information disclosure aids reconnaissance for targeted attacks."
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 28,
+        "description": "Missing CSRF token validation. The request function does not include CSRF tokens; if backend doesn't implement SameSite cookie headers or other protections, state-changing requests (POST/PUT/DELETE) are vulnerable to CSRF."
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 28,
+        "description": "Incomplete authorization error handling. Only HTTP 401 (Unauthenticated) clears the token. HTTP 403 (Forbidden) responses are not explicitly handled, which may leave an invalid token in localStorage while user assumes they're still authenticated."
+      },
+      {
+        "severity": "low",
+        "file": "src/utils/validation.ts",
+        "line": 6,
+        "description": "URL validation function accepts any URL protocol without blocking javascript: or data: URLs, which could be XSS vectors if used for link href attributes. Mitigated for API calls by apiUrl() function regex check, but presents risk for other uses."
+      },
+      {
+        "severity": "low",
+        "file": "src/hooks/useCountUp.ts",
+        "line": 14,
+        "description": "Memory leak: requestAnimationFrame scheduled in effect without cancellation. If component unmounts before animation completes, the RAF callback continues to run, wasting resources."
+      },
+      {
+        "severity": "low",
+        "file": "src/hooks/useToasts.ts",
+        "line": 24,
+        "description": "Memory leak: setTimeout scheduled without tracking. If component unmounts before timeout fires, the callback queues but may execute against unmounted component, risking state updates on unmounted component warnings."
+      }
+    ],
+    "riskScore": 68,
+    "recommendations": [
+      "CRITICAL: Migrate token storage from localStorage to HTTP-only, Secure, SameSite cookies. Requires backend coordination to set cookies instead of relying on Authorization headers.",
+      "Implement CSRF token handling: include X-CSRF-Token header in state-changing requests and validate token rotation per request or session.",
+      "Scrub error messages: Never expose API_BASE, internal service names (Mongo, LiveKit), or backend URLs in user-facing errors. Log full errors server-side only.",
+      "Add explicit 403 Forbidden handling: Clear stored credentials and redirect to login/re-auth flow when 403 received, matching 401 behavior.",
+      "Fix memory leaks: (1) useCountUp.ts: Store RAF ID in ref and cancel on unmount; (2) useToasts.ts: Track setTimeout IDs in a Set and clear all on unmount.",
+      "Restrict URL validation: Add allowlist check to block javascript:, data:, vbscript: protocols in isValidUrl() for any non-API URL fields.",
+      "Content Security Policy: Implement strict CSP headers on backend to block inline scripts and restrict script sources, providing defense-in-depth against XSS.",
+      "Audit backend token validation: Ensure backend validates JWT signature, expiration, and issuer on every request; do not trust frontend token claims."
+    ]
+  },
+  "durationMs": 44036,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-12T19:29:16.631Z",
+  "executionId": "audit_1783884512595_aubhgo"
+}

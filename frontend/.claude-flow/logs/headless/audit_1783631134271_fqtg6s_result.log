@@ -1,0 +1,103 @@
+[2026-07-09T21:06:07.281Z] RESULT
+============================================================
+{
+  "success": true,
+  "output": "Based on my analysis of the frontend codebase, here's the security vulnerability report:\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/api.ts\",\n      \"line\": 6,\n      \"description\": \"JWT token stored in localStorage instead of httpOnly cookie. Vulnerable to XSS attacks that can steal authentication credentials.\",\n      \"category\": \"authentication\"\n    },\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/api.ts\",\n      \"line\": 3,\n      \"description\": \"API_BASE defaults to HTTP without enforcing HTTPS. Production environment should enforce encrypted communication to prevent MITM attacks on sensitive data.\",\n      \"category\": \"transport-security\"\n    },\n    {\n      \"severity\": \"high\",\n      \"file\": \"src/api.ts\",\n      \"line\": 20,\n      \"description\": \"URL validation in apiUrl() uses simple regex that could be bypassed. Insufficient protection against protocol confusion or open redirect attacks.\",\n      \"category\": \"input-validation\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/cache.ts\",\n      \"line\": 7,\n      \"description\": \"Cache stores data in localStorage without encryption. Sensitive information (tokens, user data) stored plaintext and readable by any script.\",\n      \"category\": \"data-protection\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 25,\n      \"description\": \"No CSRF protection mechanism visible. Request function does not include CSRF tokens or validation headers.\",\n      \"category\": \"csrf\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/errors.ts\",\n      \"line\": 7,\n      \"description\": \"Error messages expose infrastructure details including API base URLs, backend service names (LiveKit, MongoDB), and deployment configuration.\",\n      \"category\": \"information-disclosure\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/utils/config.ts\",\n      \"line\": 5,\n      \"description\": \"parseConfig() deserializes JSON without schema validation. Malicious or malformed config could introduce unexpected object structures.\",\n      \"category\": \"deserialization\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"src/api.ts\",\n      \"line\": 43,\n      \"description\": \"API responses parsed directly without sanitization. If backend returns HTML/script content, could be displayed unsanitized in views.\",\n      \"category\": \"output-encoding\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/api.ts\",\n      \"line\": 38,\n      \"description\": \"401 response clears token without user notification or redirect. Could leave UI in confused/inconsistent state.\",\n      \"category\": \"user-feedback\"\n    },\n    {\n      \"severity\": \"low\",\n      \"file\": \"src/hooks/useKeyboardShortcuts.ts\",\n      \"line\": 14,\n      \"description\": \"ContentEditable detection only checks direct element, not parent elements or shadow DOM. Could allow keyboard shortcuts on editable content.\",\n      \"category\": \"dom-check\"\n    }\n  ],\n  \"riskScore\": 72,\n  \"recommendations\": [\n    \"CRITICAL: Migrate JWT storage from localStorage to httpOnly, Secure cookies. Implement token refresh mechanism with secure storage.\",\n    \"CRITICAL: Enforce HTTPS in production. Add environment-specific configuration that validates VITE_API_BASE uses https:// protocol.\",\n    \"HIGH: Implement CSRF protection using double-submit cookies or CSRF tokens in request headers.\",\n    \"HIGH: Replace simple URL validation with full URL.parse() validation. Use allowlist for allowed domains instead of regex patterns.\",\n    \"HIGH: Implement Content Security Policy (CSP) headers to mitigate XSS and restrict script execution.\",\n    \"MEDIUM: Encrypt sensitive data before storing in localStorage, or migrate to sessionStorage with automatic clearing.\",\n    \"MEDIUM: Add schema validation (e.g., Zod, io-ts) to parseConfig() to ensure config structure matches expected RuntimeConfig.\",\n    \"MEDIUM: Remove infrastructure details from user-facing error messages. Log full errors server-side; return generic messages to frontend.\",\n    \"MEDIUM: Sanitize API responses before rendering (use textContent instead of innerHTML, or DOMPurify for HTML content).\",\n    \"MEDIUM: Implement SRI (Subresource Integrity) for npm dependencies in vite.config.ts.\",\n    \"LOW: Add 401 handler that clears token AND redirects to login page with notification.\",\n    \"LOW: Enhance contentEditable check to use getSelection().focusNode and walk parent chain.\",\n    \"BEST PRACTICE: Implement rate limiting for API requests on frontend to detect abuse patterns.\",\n    \"BEST PRACTICE: Add request/response logging and monitoring to detect suspicious patterns.\"\n  ]\n}\n```\n\n## Key Findings Summary\n\n**Critical Issues** (3):\n1. **JWT in localStorage** - Any XSS vulnerability gives attackers permanent token access\n2. **HTTP by default** - MITM attacks possible on all API communication in production\n3. **Weak URL validation** - Could allow redirect or protocol confusion exploits\n\n**Medium Issues** (5):\n- Unencrypted cache storage, missing CSRF tokens, information disclosure in errors, unvalidated config deserialization, unsanitized responses\n\n**Risk Score: 72/100** - This frontend has significant security gaps that require immediate remediation before production deployment.\n\nThe most impactful fixes would be implementing httpOnly cookies for auth, enforcing HTTPS, adding CSRF protection, and enhancing error message handling.\n",
+  "parsedOutput": {
+    "vulnerabilities": [
+      {
+        "severity": "high",
+        "file": "src/api.ts",
+        "line": 6,
+        "description": "JWT token stored in localStorage instead of httpOnly cookie. Vulnerable to XSS attacks that can steal authentication credentials.",
+        "category": "authentication"
+      },
+      {
+        "severity": "high",
+        "file": "src/api.ts",
+        "line": 3,
+        "description": "API_BASE defaults to HTTP without enforcing HTTPS. Production environment should enforce encrypted communication to prevent MITM attacks on sensitive data.",
+        "category": "transport-security"
+      },
+      {
+        "severity": "high",
+        "file": "src/api.ts",
+        "line": 20,
+        "description": "URL validation in apiUrl() uses simple regex that could be bypassed. Insufficient protection against protocol confusion or open redirect attacks.",
+        "category": "input-validation"
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/cache.ts",
+        "line": 7,
+        "description": "Cache stores data in localStorage without encryption. Sensitive information (tokens, user data) stored plaintext and readable by any script.",
+        "category": "data-protection"
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 25,
+        "description": "No CSRF protection mechanism visible. Request function does not include CSRF tokens or validation headers.",
+        "category": "csrf"
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/errors.ts",
+        "line": 7,
+        "description": "Error messages expose infrastructure details including API base URLs, backend service names (LiveKit, MongoDB), and deployment configuration.",
+        "category": "information-disclosure"
+      },
+      {
+        "severity": "medium",
+        "file": "src/utils/config.ts",
+        "line": 5,
+        "description": "parseConfig() deserializes JSON without schema validation. Malicious or malformed config could introduce unexpected object structures.",
+        "category": "deserialization"
+      },
+      {
+        "severity": "medium",
+        "file": "src/api.ts",
+        "line": 43,
+        "description": "API responses parsed directly without sanitization. If backend returns HTML/script content, could be displayed unsanitized in views.",
+        "category": "output-encoding"
+      },
+      {
+        "severity": "low",
+        "file": "src/api.ts",
+        "line": 38,
+        "description": "401 response clears token without user notification or redirect. Could leave UI in confused/inconsistent state.",
+        "category": "user-feedback"
+      },
+      {
+        "severity": "low",
+        "file": "src/hooks/useKeyboardShortcuts.ts",
+        "line": 14,
+        "description": "ContentEditable detection only checks direct element, not parent elements or shadow DOM. Could allow keyboard shortcuts on editable content.",
+        "category": "dom-check"
+      }
+    ],
+    "riskScore": 72,
+    "recommendations": [
+      "CRITICAL: Migrate JWT storage from localStorage to httpOnly, Secure cookies. Implement token refresh mechanism with secure storage.",
+      "CRITICAL: Enforce HTTPS in production. Add environment-specific configuration that validates VITE_API_BASE uses https:// protocol.",
+      "HIGH: Implement CSRF protection using double-submit cookies or CSRF tokens in request headers.",
+      "HIGH: Replace simple URL validation with full URL.parse() validation. Use allowlist for allowed domains instead of regex patterns.",
+      "HIGH: Implement Content Security Policy (CSP) headers to mitigate XSS and restrict script execution.",
+      "MEDIUM: Encrypt sensitive data before storing in localStorage, or migrate to sessionStorage with automatic clearing.",
+      "MEDIUM: Add schema validation (e.g., Zod, io-ts) to parseConfig() to ensure config structure matches expected RuntimeConfig.",
+      "MEDIUM: Remove infrastructure details from user-facing error messages. Log full errors server-side; return generic messages to frontend.",
+      "MEDIUM: Sanitize API responses before rendering (use textContent instead of innerHTML, or DOMPurify for HTML content).",
+      "MEDIUM: Implement SRI (Subresource Integrity) for npm dependencies in vite.config.ts.",
+      "LOW: Add 401 handler that clears token AND redirects to login page with notification.",
+      "LOW: Enhance contentEditable check to use getSelection().focusNode and walk parent chain.",
+      "BEST PRACTICE: Implement rate limiting for API requests on frontend to detect abuse patterns.",
+      "BEST PRACTICE: Add request/response logging and monitoring to detect suspicious patterns."
+    ]
+  },
+  "durationMs": 33010,
+  "model": "haiku",
+  "sandboxMode": "strict",
+  "workerType": "audit",
+  "timestamp": "2026-07-09T21:06:07.281Z",
+  "executionId": "audit_1783631134271_fqtg6s"
+}
