@@ -277,7 +277,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # ── 2. Resolve bot config and settings ──
     _assistant_id = _room_meta_raw.get("assistant_id", "")
-    _bc = await fetch_bot_config(_assistant_id) if _assistant_id else None
+    _bot_id_meta = _room_meta_raw.get("bot_id", "")
+    _test_version_meta = _room_meta_raw.get("test_bot_version_id", "")
+    _bc = await fetch_bot_config(_bot_id_meta, _test_version_meta) if (_bot_id_meta and _test_version_meta) else None
     _bot_config: dict = _bc or _HARDCODED_BOT_CONFIG
 
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
@@ -287,7 +289,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _category_change_api = _api_urls.get("category_change_api") or CATEGORY_CHANGE_API
     _language = "hindi"
     _temperature = float(_bot_config.get("temperature") or 0.4)
-    _max_call_duration = 300
+    _max_call_duration = int(_bot_config.get("max_call_duration") or 300)
     # Pipeline mode: higher threshold than bot.py defaults — filters TTS echo
     # and background IVR music that would otherwise pass the muted-capture gate.
     _silero_threshold = float(_bot_config.get("silero_threshold") or 0.6)
@@ -330,7 +332,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                     "call_id": call_state["call_id"],
                     "model_llm": "gemini-3.1-flash-lite",
                     "model_stt": "saaras:v3-codemix",
-                    "model_tts": "bulbul:v3-simran",
+                    "model_tts": f"bulbul:v3-{_bot_config.get('tts_voice') or _bot_config.get('voice') or 'simran'}",
                 },
             )
             _lf_trace = _LFTraceShim(_lf_obs, _langfuse_client)
@@ -393,10 +395,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         api_key=_gemini_api_key or None,
         temperature=_temperature,
     )
+    _tts_speaker = _bot_config.get("tts_voice") or _bot_config.get("voice") or "simran"
     tts = sarvam.TTS(
         target_language_code="hi-IN",
         model="bulbul:v3",
-        speaker="simran",
+        speaker=_tts_speaker,
         api_key=SARVAM_API_KEY or None,
         # linear16 at 24000Hz: 24000×50ms = 1200 samples (integer, no drift).
         # 22050Hz gave 1102.5 samples/frame causing accumulating timing jitter.
@@ -856,9 +859,11 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     }
 
     # Bot-echo markers: Sarvam capturing our own TTS via speakerphone echo
+    _echo_agent_name = (_bot_config.get("agent_name") or "Simran").strip().lower()
     _BOT_ECHO_MARKERS = [
         "सिमरन बोल रही",
         "simran bol",
+        f"{_echo_agent_name} bol",
     ]
 
     def _is_bot_echo(text: str) -> bool:
@@ -1931,7 +1936,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                             name=f"tts-turn-{_speaking_turns_completed}",
                             metadata={
                                 "duration_ms": round(speaking_duration * 1000),
-                                "model": "bulbul:v3-simran",
+                                "model": f"bulbul:v3-{_tts_speaker}",
                             },
                         ).end()
                     except Exception:
@@ -2273,7 +2278,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # product confirmations.
     def _build_greeting(rec: dict) -> str:
         """Identity-only opening line. Product question is asked by the LLM as its first response."""
-        return "हेलो, मैं Simran बोल रही हूँ Justdial से।"
+        _agent_name = _bot_config.get("agent_name") or "Simran"
+        _org_name = _bot_config.get("organization_name") or "Justdial"
+        return f"हेलो, मैं {_agent_name} बोल रही हूँ {_org_name} से।"
 
     _greeting_text = _build_greeting(record)
     _log.info(f"[GREETING] Text: {_greeting_text!r}")
@@ -2362,7 +2369,7 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm_fnc,
-            agent_name="voice-bot-justdial-fallback",
+            agent_name=os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial-dashboard"),
             port=8082,
             num_idle_processes=3,
         )

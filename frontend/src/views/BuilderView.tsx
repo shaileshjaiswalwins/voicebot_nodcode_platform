@@ -512,7 +512,7 @@ export function BuilderView({
                       <option value="elevenlabs">ElevenLabs</option>
                     </select>
                   </label>
-                  {value.tts_provider === 'sarvam' && (
+                  {(value.tts_provider === 'sarvam' || !value.tts_provider) && (
                     <>
                       <label>
                         Sarvam voice
