@@ -1,1 +1,24 @@
 .claude-flow/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Logs / runtime
+logs/
+*.log
+
+# OS
+.DS_Store
