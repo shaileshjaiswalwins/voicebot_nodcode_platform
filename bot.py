@@ -247,6 +247,8 @@ def _get_http_session() -> aiohttp.ClientSession:
 
 
 import numpy as _np
+from bson import ObjectId
+from bson.errors import InvalidId
 from pymongo import MongoClient as _MongoClient
 
 _mongo_client: _MongoClient | None = None
@@ -257,6 +259,26 @@ def _get_mongo_collection():
     if _mongo_client is None:
         _mongo_client = _MongoClient(MONGO_URI)
     return _mongo_client[MONGO_DB][MONGO_COLLECTION]
+
+
+# ---------------------------------------------------------------------------
+# Dashboard config store (ai_voice_bot_management) — separate DB from the
+# lead-qualify DB above. Only used to resolve a specific pinned version for
+# dashboard "Test Call" runs; real production dispatch does not yet put a
+# bot_id/version into room metadata (see backend/routers/phone_numbers.py),
+# so this path is a no-op for live inbound/campaign calls.
+# ---------------------------------------------------------------------------
+PLATFORM_MONGO_URI = os.getenv("PLATFORM_MONGO_URI", MONGO_URI)
+PLATFORM_DB_NAME = os.getenv("VOICEBOT_PLATFORM_DB", "ai_voice_bot_management")
+
+_platform_mongo_client: _MongoClient | None = None
+
+
+def _get_platform_db():
+    global _platform_mongo_client
+    if _platform_mongo_client is None:
+        _platform_mongo_client = _MongoClient(PLATFORM_MONGO_URI)
+    return _platform_mongo_client[PLATFORM_DB_NAME]
 
 
 # ---------------------------------------------------------------------------
@@ -615,9 +637,39 @@ _HARDCODED_BOT_CONFIG: dict = {
 }
 
 
-async def fetch_bot_config(assistant_id: str) -> dict | None:
-    """Return hardcoded bot config (no HTTP call)."""
-    return _HARDCODED_BOT_CONFIG
+async def fetch_bot_config(bot_id: str, test_bot_version_id: str) -> dict | None:
+    """Resolve a specific bot version's config from the dashboard's config store, for
+    dashboard "Test Call" runs only (see backend/routers/testcall.py, which is the only
+    dispatch path that puts bot_id/test_bot_version_id into room metadata today).
+
+    Returns None (caller falls back to _HARDCODED_BOT_CONFIG) if either id is missing,
+    malformed, or no matching version is found — this keeps real production calls, whose
+    room metadata never carries these keys, completely unaffected."""
+    if not bot_id or not test_bot_version_id:
+        return None
+    try:
+        version_oid = ObjectId(test_bot_version_id)
+        bot_oid = ObjectId(bot_id)
+    except (InvalidId, TypeError):
+        logger.warning(f"[CONFIG] Malformed bot_id/test_bot_version_id in room metadata: {bot_id!r}/{test_bot_version_id!r}")
+        return None
+
+    loop = asyncio.get_running_loop()
+    try:
+        version_doc = await loop.run_in_executor(
+            None,
+            lambda: _get_platform_db()["tbl_ai_vb_bot_versions"].find_one(
+                {"_id": version_oid, "bot_id": bot_oid}
+            ),
+        )
+    except Exception as exc:
+        logger.warning(f"[CONFIG] Could not reach platform DB for bot_id={bot_id!r} version={test_bot_version_id!r}: {exc}")
+        return None
+
+    if not version_doc:
+        logger.warning(f"[CONFIG] No bot_version found for bot_id={bot_id!r} version={test_bot_version_id!r}")
+        return None
+    return version_doc.get("config") or None
 
 
 # ---------------------------------------------------------------------------
@@ -1578,8 +1630,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     await ctx.wait_for_participant()
 
     # 2. Resolve bot config and settings
-    _assistant_id = _room_meta_raw.get("assistant_id", "")
-    _bc = await fetch_bot_config(_assistant_id) if _assistant_id else None
+    _bot_id_meta = _room_meta_raw.get("bot_id", "")
+    _test_version_meta = _room_meta_raw.get("test_bot_version_id", "")
+    _bc = await fetch_bot_config(_bot_id_meta, _test_version_meta) if (_bot_id_meta and _test_version_meta) else None
     _bot_config: dict = _bc or _HARDCODED_BOT_CONFIG
 
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
@@ -1593,7 +1646,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _vad_end            = _bot_config.get("gemini_end_sensitivity")   or "END_SENSITIVITY_HIGH"
     _vad_silence_ms     = int(_bot_config.get("gemini_silence_duration_ms") or 1500)
     _vad_prefix_ms      = int(_bot_config.get("gemini_prefix_padding_ms")   or 100)
-    _max_call_duration  = 300
+    _max_call_duration  = int(_bot_config.get("max_call_duration") or 300)
     _sarvam_min_rms                  = int(_bot_config.get("sarvam_min_rms") or 600)
     _sarvam_min_speech_ms            = int(_bot_config.get("sarvam_min_speech_ms") or 500)
     _sarvam_min_speech_ms_singleword = int(_bot_config.get("sarvam_min_speech_ms_singleword") or 1500)
@@ -3842,7 +3895,7 @@ if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
-            agent_name="voice-bot-justdial",
+            agent_name="voice-bot-justdial-gemini-live-unused",
             num_idle_processes=3,
         )
     )

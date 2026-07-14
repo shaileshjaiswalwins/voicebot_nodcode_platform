@@ -299,7 +299,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # ── 2. Resolve bot config and settings ──
     _assistant_id = _room_meta_raw.get("assistant_id", "")
-    _bc = await fetch_bot_config(_assistant_id) if _assistant_id else None
+    _bot_id_meta = _room_meta_raw.get("bot_id", "")
+    _test_version_meta = _room_meta_raw.get("test_bot_version_id", "")
+    _bc = await fetch_bot_config(_bot_id_meta, _test_version_meta) if (_bot_id_meta and _test_version_meta) else None
     _bot_config: dict = _bc or _HARDCODED_BOT_CONFIG
 
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
@@ -309,7 +311,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _category_change_api = _api_urls.get("category_change_api") or CATEGORY_CHANGE_API
     _language = "hindi"
     _temperature = float(_bot_config.get("temperature") or 0.4)
-    _max_call_duration = 300
+    _max_call_duration = int(_bot_config.get("max_call_duration") or 300)
     # Pipeline mode: higher threshold than bot.py defaults — filters TTS echo
     # and background IVR music that would otherwise pass the muted-capture gate.
     _silero_threshold = float(_bot_config.get("silero_threshold") or 0.6)
