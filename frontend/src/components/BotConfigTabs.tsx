@@ -5,6 +5,8 @@ import type { LanguageOption } from '../api';
 import { SARVAM_TTS_VOICES, SARVAM_TTS_LANGUAGES } from '../constants/ui';
 import { CustomFunctionsEditor } from './CustomFunctionsEditor';
 import { CloseMarkersEditor } from './CloseMarkersEditor';
+import { ProviderOptionsEditor } from './ProviderOptionsEditor';
+import { SARVAM_STT_FIELDS, SARVAM_TTS_FIELDS, GEMINI_LLM_FIELDS } from '../constants/providerParams';
 
 export type BuilderTab = 'agent' | 'speed' | 'stt' | 'tts' | 'llm' | 'functions' | 'advanced';
 
@@ -46,6 +48,8 @@ export function BotConfigTabs({
   const [tab, setTab] = useState<BuilderTab>('agent');
   const recording = (typeof value.recording === 'object' && value.recording ? value.recording : {}) as RuntimeConfig['recording'];
   const apiUrls = (typeof value.api_urls === 'object' && value.api_urls ? value.api_urls : {}) as Record<string, string>;
+  const optsFor = (key: 'stt_options' | 'tts_options' | 'llm_options'): Record<string, unknown> =>
+    (typeof value[key] === 'object' && value[key] ? value[key] : {}) as Record<string, unknown>;
 
   return (
     <div className="bot-config-tabs">
@@ -191,6 +195,14 @@ export function BotConfigTabs({
               </label>
             </>
           )}
+          {(value.stt_provider === 'sarvam' || !value.stt_provider) && (
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
+                Sarvam STT parameters
+              </div>
+              <ProviderOptionsEditor fields={SARVAM_STT_FIELDS} value={optsFor('stt_options')} onChange={(next) => onUpdateConfig('stt_options', next)} />
+            </div>
+          )}
         </div>
       )}
 
@@ -229,6 +241,14 @@ export function BotConfigTabs({
               <small>Find voice IDs at elevenlabs.io under Voices.</small>
             </label>
           )}
+          {(value.tts_provider === 'sarvam' || !value.tts_provider) && (
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
+                Sarvam TTS parameters
+              </div>
+              <ProviderOptionsEditor fields={SARVAM_TTS_FIELDS} value={optsFor('tts_options')} onChange={(next) => onUpdateConfig('tts_options', next)} />
+            </div>
+          )}
         </div>
       )}
 
@@ -253,6 +273,14 @@ export function BotConfigTabs({
             <input type="number" min="0" max="2" step="0.1" value={Number(value.temperature ?? 0.4)} onChange={(e) => onUpdateConfig('temperature', Number(e.target.value))} />
             <small>LLM sampling temperature.</small>
           </label>
+          {(value.llm_provider === 'gemini' || !value.llm_provider) && (
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
+                Gemini parameters
+              </div>
+              <ProviderOptionsEditor fields={GEMINI_LLM_FIELDS} value={optsFor('llm_options')} onChange={(next) => onUpdateConfig('llm_options', next)} />
+            </div>
+          )}
         </div>
       )}
 

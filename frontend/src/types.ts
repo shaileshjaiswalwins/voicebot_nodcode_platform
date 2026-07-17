@@ -84,6 +84,11 @@ export type RuntimeConfig = {
   tts_language?: string;
   llm_provider?: '' | 'gemini' | 'openai';
   llm_model?: string;
+  /** Full per-provider parameter surface (see provider_params.py). Free-form so every
+   * Sarvam STT / Sarvam TTS / Gemini knob is tunable without a schema change per param. */
+  stt_options?: Record<string, unknown>;
+  tts_options?: Record<string, unknown>;
+  llm_options?: Record<string, unknown>;
   max_call_duration?: number;
   system_prompt?: string;
   initial_message?: string;
