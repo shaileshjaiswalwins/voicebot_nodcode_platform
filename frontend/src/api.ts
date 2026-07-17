@@ -3,6 +3,9 @@
 // Phase 1a for the audit that produced this. Types intentionally match what every view
 // already destructures; extend fields here rather than casting in views.
 
+// Type-only import (erased at build) — safe despite types.ts importing from api.ts.
+import type { CustomFunction, FunctionTestResult } from './types';
+
 export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) || 'http://localhost:8000';
 
 const TOKEN_STORAGE_KEY = 'nocode_platform_token';
@@ -347,6 +350,16 @@ export const api = {
   },
   compileFlowPreview(flow: Flow): Promise<{ compiled_prompt: string }> {
     return request('/api/bots/compile-flow-preview', { method: 'POST', body: JSON.stringify({ flow }) });
+  },
+  testCustomFunction(
+    id: string,
+    fn: CustomFunction,
+    args: Record<string, unknown> = {},
+  ): Promise<FunctionTestResult> {
+    return request(`/api/bots/${id}/functions/test`, {
+      method: 'POST',
+      body: JSON.stringify({ function: fn, args }),
+    });
   },
 
   // pre-publish evals/simulations

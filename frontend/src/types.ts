@@ -14,6 +14,54 @@ export type Diagnostic = {
   createdAt: string;
 };
 
+/** Mirrors backend/models.py CustomFunction — an HTTP call a bot can make before / during /
+ * after a conversation. `trigger` decides when it fires; during_call functions become LLM
+ * tools, pre_call/post_call functions run as lifecycle hooks. */
+export type FunctionParamType = 'string' | 'number' | 'boolean' | 'object' | 'array';
+
+export type FunctionParam = {
+  name: string;
+  description?: string;
+  type: FunctionParamType;
+  required: boolean;
+};
+
+export type StoreVariable = {
+  variable: string;
+  json_path: string;
+};
+
+export type FunctionTrigger = 'pre_call' | 'during_call' | 'post_call';
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+export type CustomFunction = {
+  id: string;
+  name: string;
+  description?: string;
+  url?: string;
+  method: HttpMethod;
+  timeout_ms: number;
+  headers: Record<string, string>;
+  query_params: Record<string, string>;
+  body_mode: 'form' | 'json';
+  parameters: FunctionParam[];
+  raw_body_schema?: Record<string, unknown>;
+  store_variables: StoreVariable[];
+  trigger: FunctionTrigger;
+  enabled: boolean;
+};
+
+/** Response shape of POST /api/bots/{id}/functions/test. */
+export type FunctionTestResult = {
+  ok: boolean;
+  status_code: number | null;
+  latency_ms: number;
+  response: unknown;
+  extracted_vars: Record<string, unknown>;
+  error: string | null;
+  request: { method: string; url: string; params: unknown; json: unknown; data: unknown };
+};
+
 export type RuntimeConfig = {
   assistant_id?: string;
   agent_name?: string;
@@ -57,7 +105,7 @@ export type RuntimeConfig = {
     dialer_city?: string;
   };
   prompt_config?: Record<string, unknown>;
-  functions?: unknown[];
+  functions?: CustomFunction[];
   close_markers?: string[];
   flow?: Flow;
   /** Config-surface only — see backend/models.py BotConfig for pipeline-wiring status. */
