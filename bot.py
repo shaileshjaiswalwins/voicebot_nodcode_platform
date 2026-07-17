@@ -37,6 +37,15 @@ import aiohttp
 from dotenv import load_dotenv
 from loguru import logger
 
+from custom_functions import (
+    apply_store_variables,
+    build_http_call,
+    interpolate_vars,
+    resolve_timeout_seconds,
+    run_lifecycle_functions,
+)
+from custom_function_tools import build_during_call_tools
+
 from livekit import rtc
 from livekit.agents import (
     Agent,
@@ -804,16 +813,29 @@ async def _execute_function_call(fn_name: str, fn_args: dict, functions: list[di
         lead_id = call_state.get("record_id") or (call_state.get("lead_record") or {}).get("_id") or ""
         merged["lead_id"] = lead_id
         merged["search_term"] = srchterm
-    logger.info(f"[FnCall] {method} {url} | args={merged}")
+    # Per-function timeout (default 10s preserves prior behavior); body encoding honors the
+    # configured body_mode (json default, or 'form'). See custom_functions.py.
+    timeout = aiohttp.ClientTimeout(total=resolve_timeout_seconds(fn_cfg, default=10.0))
+    body_mode = fn_cfg.get("body_mode") or ("form" if fn_cfg.get("body_format") == "form" else "json")
+    logger.info(f"[FnCall] {method} {url} | args={merged} | timeout={timeout.total}s")
 
     try:
         sess = _get_http_session()
         if method == "GET":
-            async with sess.get(url, params=merged, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            async with sess.get(url, params=merged, headers=headers, timeout=timeout) as resp:
+                result = json.loads(await resp.text())
+        elif body_mode == "form":
+            async with sess.request(method, url, data=merged, headers=headers, timeout=timeout) as resp:
                 result = json.loads(await resp.text())
         else:
-            async with sess.request(method, url, json=merged, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            async with sess.request(method, url, json=merged, headers=headers, timeout=timeout) as resp:
                 result = json.loads(await resp.text())
+
+        # Extract configured response fields into dynamic variables (call_state["vars"]) so the
+        # prompt and post-call functions can reference them. No-op when store_variables unset.
+        _stored = apply_store_variables(fn_cfg.get("store_variables"), result, call_state.setdefault("vars", {}))
+        if _stored:
+            logger.info(f"[FnCall] {fn_name} stored vars: {list(_stored)}")
 
         if fn_name == "FetchCategorySchema":
             schema = result.get("results", {}).get("search_result", {}) if isinstance(result, dict) else {}
@@ -860,35 +882,36 @@ async def _execute_function_call(fn_name: str, fn_args: dict, functions: list[di
 
 
 async def call_configured_function(func_config: dict, runtime_params: dict) -> dict | None:
-    url = (func_config.get("url") or "").strip()
-    if not url:
+    """Fire a configured custom function (used by pre_call / post_call lifecycle hooks).
+
+    Request shape and body encoding are computed by custom_functions.build_http_call so the
+    logic stays unit-tested and identical to the in-call tool path. `custom_body` may be a
+    JSON string on legacy configs — parse it before merging. Returns the decoded JSON
+    response, or None on any failure (lifecycle hooks must never break a call)."""
+    if not (func_config.get("url") or "").strip():
         return None
-    method = (func_config.get("method") or "GET").upper()
-    headers = func_config.get("headers") or {}
-    merged = {**dict(func_config.get("query_params") or {}), **runtime_params}
-    merged = {k: v for k, v in merged.items() if v}
-    query_string = "&".join(f"{k}={v}" for k, v in merged.items())
-    full_url = f"{url}?{query_string}" if query_string else url
-    logger.info(f"[FUNC CALL] {method} {full_url}")
+
+    # Legacy configs stored custom_body as a JSON string; normalize to a dict.
+    cfg = dict(func_config)
+    body = cfg.get("custom_body")
+    if isinstance(body, str):
+        try:
+            cfg["custom_body"] = json.loads(body)
+        except Exception:
+            cfg["custom_body"] = {}
+
+    # Preserve prior behavior: lifecycle hooks don't send empty/falsy runtime params.
+    filtered_params = {k: v for k, v in (runtime_params or {}).items() if v}
+    call = build_http_call(cfg, filtered_params)
+    timeout = aiohttp.ClientTimeout(total=resolve_timeout_seconds(cfg, default=8.0))
+    logger.info(f"[FUNC CALL] {call['method']} {call['url']} | timeout={timeout.total}s")
     try:
         session = _get_http_session()
-        if method == "GET":
-            async with session.get(full_url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                return await resp.json(content_type=None)
-        else:
-            body = func_config.get("custom_body") or {}
-            if isinstance(body, str):
-                try:
-                    body = json.loads(body)
-                except Exception:
-                    body = {}
-            body = {**body, **runtime_params}
-            if func_config.get("body_format") == "form":
-                async with session.post(full_url, headers=headers, data=body, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                    return await resp.json(content_type=None)
-            else:
-                async with session.post(full_url, headers=headers, json=body, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                    return await resp.json(content_type=None)
+        async with session.request(
+            call["method"], call["url"], headers=call["headers"],
+            params=call["params"], json=call["json"], data=call["data"], timeout=timeout,
+        ) as resp:
+            return await resp.json(content_type=None)
     except Exception as e:
         logger.error(f"[FUNC CALL] {func_config.get('name')!r} failed: {e}")
     return None
@@ -1685,10 +1708,32 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         )
         call_state["lead_record"] = _prefetched_lead
 
+    # 3b. Pre-call custom functions — fetch lead/caller details etc. before the greeting.
+    # Extracted store_variables land in call_state["vars"] and are interpolated into the
+    # system prompt below. Failures never block the call (see run_lifecycle_functions).
+    _pre_call_params = {
+        "lead_id": _lead_id_meta or (call_state.get("record_id") or ""),
+        "mobile": _room_mobile,
+        "call_id": call_state.get("call_id") or room_name,
+    }
+    try:
+        _pre_results = await run_lifecycle_functions(
+            _functions, "pre_call", _pre_call_params,
+            call_configured_function, call_state.setdefault("vars", {}),
+        )
+        if _pre_results:
+            _log.info(f"[PRE-CALL] ran {len(_pre_results)} function(s): "
+                      f"{[(r['name'], r['ok']) for r in _pre_results]} | vars={list(call_state['vars'])}")
+    except Exception as _pre_ex:
+        _log.warning(f"[PRE-CALL] hook error (ignored): {_pre_ex}")
+
     # 4. Build system instruction from lead (or base rules if no lead yet)
     system_instruction = build_system_prompt(
         _prefetched_lead, lang_key=_language, bot_config=_bot_config
     )
+    # Inject pre-call dynamic variables into the prompt ({{var}} / {{vars.var}}).
+    if call_state.get("vars"):
+        system_instruction = interpolate_vars(system_instruction, call_state["vars"])
 
     # 5. RealtimeModel — same Gemini config as the Pipecat bot
     _selected_key = _next_gemini_key()
@@ -1897,6 +1942,31 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "sentiment": "neutral",
         }
         await save_call_log_to_backend(call_log_payload)
+
+        # Post-call custom functions — analytics / persistence after the conversation.
+        # Runs with the transcript, outcome, product change and any pre-call/in-call vars.
+        # Never raises: teardown must always complete.
+        try:
+            _post_params = {
+                "lead_id": call_state.get("record_id") or "",
+                "call_id": call_state.get("call_id") or room_name,
+                "mobile": _room_mobile,
+                "status": status,
+                "duration_sec": _duration,
+                "product": _product,
+                "product_change": call_state.get("product_change") or {},
+                "transcript": transcript,
+                **(call_state.get("vars") or {}),
+            }
+            _post_results = await run_lifecycle_functions(
+                _functions, "post_call", _post_params,
+                call_configured_function, call_state.setdefault("vars", {}),
+            )
+            if _post_results:
+                _log.info(f"[POST-CALL] ran {len(_post_results)} function(s): "
+                          f"{[(r['name'], r['ok']) for r in _post_results]}")
+        except Exception as _post_ex:
+            _log.warning(f"[POST-CALL] hook error (ignored): {_post_ex}")
 
         for _p in _wav_paths:
             try:
@@ -2730,6 +2800,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         return result
 
     tools = [FetchCategorySchema, FetchLead] if _function_calling else []
+    if _function_calling:
+        _dynamic_tools = build_during_call_tools(_functions, _execute_function_call, call_state)
+        if _dynamic_tools:
+            logger.info(f"[FnCall] registered {len(_dynamic_tools)} custom during-call tool(s): "
+                        f"{[t.info.name for t in _dynamic_tools]}")
+            tools += _dynamic_tools
     agent = Agent(instructions=system_instruction, tools=tools)
 
     # 8. AgentSession

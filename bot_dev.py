@@ -101,6 +101,8 @@ from bot import (
     INACTIVITY_END_PHRASE,
     _get_mongo_collection,
 )
+from custom_function_tools import build_during_call_tools
+from custom_functions import interpolate_vars, run_lifecycle_functions
 
 load_dotenv(override=True)
 
@@ -348,10 +350,29 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         )
         call_state["lead_record"] = _prefetched_lead
 
+    # ── 3b. Pre-call custom functions (fetch lead/caller details before greeting) ──
+    _pre_call_params = {
+        "lead_id": _lead_id_meta or (call_state.get("record_id") or ""),
+        "mobile": _room_mobile,
+        "call_id": call_state.get("call_id") or room_name,
+    }
+    try:
+        _pre_results = await run_lifecycle_functions(
+            _functions, "pre_call", _pre_call_params,
+            call_configured_function, call_state.setdefault("vars", {}),
+        )
+        if _pre_results:
+            _log.info(f"[PRE-CALL] ran {len(_pre_results)} function(s): "
+                      f"{[(r['name'], r['ok']) for r in _pre_results]} | vars={list(call_state['vars'])}")
+    except Exception as _pre_ex:
+        _log.warning(f"[PRE-CALL] hook error (ignored): {_pre_ex}")
+
     # ── 4. Build system instruction from lead (or base rules if no lead yet) ──
     system_instruction = build_system_prompt(
         _prefetched_lead, lang_key=_language, bot_config=_bot_config
     )
+    if call_state.get("vars"):
+        system_instruction = interpolate_vars(system_instruction, call_state["vars"])
 
     # Log the exact qualification questions the backend returned for this lead, so
     # the set the bot is supposed to ask is visible in the call logs. Source: the
@@ -597,6 +618,29 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "sentiment": "neutral",
         }
         await save_call_log_to_backend(call_log_payload)
+
+        # ── Post-call custom functions (analytics/persistence after the conversation) ──
+        try:
+            _post_params = {
+                "lead_id": call_state.get("record_id") or "",
+                "call_id": call_state.get("call_id") or room_name,
+                "mobile": _room_mobile,
+                "status": status,
+                "duration_sec": _duration,
+                "product": _product,
+                "product_change": call_state.get("product_change") or {},
+                "transcript": transcript,
+                **(call_state.get("vars") or {}),
+            }
+            _post_results = await run_lifecycle_functions(
+                _functions, "post_call", _post_params,
+                call_configured_function, call_state.setdefault("vars", {}),
+            )
+            if _post_results:
+                _log.info(f"[POST-CALL] ran {len(_post_results)} function(s): "
+                          f"{[(r['name'], r['ok']) for r in _post_results]}")
+        except Exception as _post_ex:
+            _log.warning(f"[POST-CALL] hook error (ignored): {_post_ex}")
 
         # Finalise Langfuse trace
         if _lf_trace:
@@ -1255,6 +1299,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     system_instruction = system_instruction + _LATENCY_HINT
 
     tools = [FetchCategorySchema, FetchLead] if _function_calling else []
+    if _function_calling:
+        _dynamic_tools = build_during_call_tools(_functions, _execute_function_call, call_state)
+        if _dynamic_tools:
+            _log.info(f"[FnCall] registered {len(_dynamic_tools)} custom during-call tool(s): "
+                      f"{[t.info.name for t in _dynamic_tools]}")
+            tools += _dynamic_tools
 
     # Sanitize text before it reaches Sarvam TTS. The LLM occasionally leaks
     # bracketed stage-directions into spoken text (e.g. the product-change line

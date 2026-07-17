@@ -102,6 +102,7 @@ from bot import (
     INACTIVITY_END_PHRASE,
     _get_mongo_collection,
 )
+from custom_function_tools import build_during_call_tools
 
 load_dotenv(override=True)
 
@@ -1235,6 +1236,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     system_instruction = system_instruction + _LATENCY_HINT
 
     tools = [FetchCategorySchema, FetchLead] if _function_calling else []
+    if _function_calling:
+        _dynamic_tools = build_during_call_tools(_functions, _execute_function_call, call_state)
+        if _dynamic_tools:
+            _log.info(f"[FnCall] registered {len(_dynamic_tools)} custom during-call tool(s): "
+                      f"{[t.info.name for t in _dynamic_tools]}")
+            tools += _dynamic_tools
 
     # Sanitize text before it reaches Sarvam TTS. The LLM occasionally leaks
     # bracketed stage-directions into spoken text (e.g. the product-change line
