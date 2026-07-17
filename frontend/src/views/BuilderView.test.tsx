@@ -1,7 +1,13 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BuilderView } from './BuilderView';
+
+/** Settings now live under tabs (Agent · Speed · STT · TTS · LLM · Functions · Advanced).
+ * Click into a tab before asserting on its fields. */
+function gotoTab(name: string) {
+  fireEvent.click(screen.getByRole('tab', { name }));
+}
 import type { Bot, BotVersion } from '../api';
 import { defaultConfig } from '../constants/ui';
 
@@ -55,6 +61,7 @@ describe('BuilderView — speech-to-speech field cleanup', () => {
 
   it('shows the real bot_pipeline.py controls instead: silero and inactivity timeouts', () => {
     render(<BuilderView {...baseProps} />);
+    gotoTab('Speed');
     expect(screen.getByText('Voice-activity threshold')).toBeInTheDocument();
     expect(screen.getByText('Min speech duration ms')).toBeInTheDocument();
     expect(screen.getByText('First rescue (s)')).toBeInTheDocument();
@@ -72,15 +79,21 @@ describe('BuilderView — speech-to-speech field cleanup', () => {
 describe('BuilderView — per-agent STT/TTS/LLM provider selection', () => {
   it('shows provider dropdowns for STT, TTS, and LLM defaulting to the existing stack', () => {
     render(<BuilderView {...baseProps} />);
+    gotoTab('STT');
     expect(screen.getByLabelText('Speech-to-text (STT)')).toHaveValue('');
+    gotoTab('TTS');
     expect(screen.getByLabelText('Text-to-speech (TTS)')).toHaveValue('');
+    gotoTab('LLM');
     expect(screen.getByLabelText('LLM')).toHaveValue('');
   });
 
   it('hides provider-specific sub-fields until a non-default provider is selected', () => {
     render(<BuilderView {...baseProps} />);
+    gotoTab('STT');
     expect(screen.queryByLabelText('STT model')).not.toBeInTheDocument();
+    gotoTab('TTS');
     expect(screen.queryByLabelText('ElevenLabs voice ID')).not.toBeInTheDocument();
+    gotoTab('LLM');
     expect(screen.queryByLabelText('LLM model')).not.toBeInTheDocument();
   });
 
@@ -88,6 +101,7 @@ describe('BuilderView — per-agent STT/TTS/LLM provider selection', () => {
     const user = userEvent.setup();
     const onUpdateConfig = vi.fn();
     render(<BuilderView {...baseProps} onUpdateConfig={onUpdateConfig} />);
+    gotoTab('STT');
     await user.selectOptions(screen.getByLabelText('Speech-to-text (STT)'), 'deepgram');
     expect(onUpdateConfig).toHaveBeenCalledWith('stt_provider', 'deepgram');
   });
@@ -95,6 +109,7 @@ describe('BuilderView — per-agent STT/TTS/LLM provider selection', () => {
   it('reveals a free-text voice ID field for ElevenLabs TTS, not a fixed dropdown', () => {
     const config = { ...defaultConfig, tts_provider: 'elevenlabs' as const };
     render(<BuilderView {...baseProps} config={{ ok: true, value: config }} />);
+    gotoTab('TTS');
     const voiceField = screen.getByLabelText(/ElevenLabs voice ID/);
     expect(voiceField.tagName).toBe('INPUT');
   });
@@ -102,6 +117,7 @@ describe('BuilderView — per-agent STT/TTS/LLM provider selection', () => {
   it('reveals a real Sarvam voice dropdown (from the actual bulbul:v3 voice list) when Sarvam TTS is explicitly selected', () => {
     const config = { ...defaultConfig, tts_provider: 'sarvam' as const };
     render(<BuilderView {...baseProps} config={{ ok: true, value: config }} />);
+    gotoTab('TTS');
     const voiceField = screen.getByLabelText('Sarvam voice');
     expect(voiceField.tagName).toBe('SELECT');
     expect(screen.getByRole('option', { name: 'simran' })).toBeInTheDocument();
@@ -111,6 +127,7 @@ describe('BuilderView — per-agent STT/TTS/LLM provider selection', () => {
   it('reveals an LLM model field when OpenAI is selected', () => {
     const config = { ...defaultConfig, llm_provider: 'openai' as const };
     render(<BuilderView {...baseProps} config={{ ok: true, value: config }} />);
+    gotoTab('LLM');
     expect(screen.getByLabelText('LLM model')).toBeInTheDocument();
   });
 });

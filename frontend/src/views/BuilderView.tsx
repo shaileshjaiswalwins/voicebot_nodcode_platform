@@ -9,40 +9,12 @@ import { defaultConfig, SARVAM_TTS_VOICES, SARVAM_TTS_LANGUAGES } from '../const
 import { StatusPill } from '../components/StatusPill';
 import { TimeAgo } from '../components/TimeAgo';
 import { Detail } from '../components/Detail';
+import { BotConfigTabs } from '../components/BotConfigTabs';
+import { api } from '../api';
+import type { CustomFunction } from '../types';
 
-export function CloseMarkersEditor({ markers, onChange }: { markers: string[]; onChange: (value: string[]) => void }) {
-  const [input, setInput] = useState('');
-  function add() {
-    const trimmed = input.trim();
-    if (trimmed && !markers.includes(trimmed)) onChange([...markers, trimmed]);
-    setInput('');
-  }
-  return (
-    <label className="full">
-      Call-end close phrases
-      <small>Bot ends the call when it detects any of these phrases. Override the hardcoded Hindi defaults for non-Hindi bots.</small>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.4rem', marginBottom: '0.4rem', minHeight: '2rem' }}>
-        {markers.map(m => (
-          <span key={m} style={{ background: 'var(--surface-2)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            {m}
-            <button style={{ padding: 0, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', lineHeight: 1 }} onClick={() => onChange(markers.filter(x => x !== m))}>×</button>
-          </span>
-        ))}
-        {markers.length === 0 && <span style={{ fontSize: '0.78rem', color: 'var(--muted)', fontStyle: 'italic' }}>Using hardcoded defaults (Hindi)</span>}
-      </div>
-      <div style={{ display: 'flex', gap: '0.5rem' }}>
-        <input
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          placeholder="e.g. thank you, goodbye, dhanyavaad"
-          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
-          style={{ flex: 1 }}
-        />
-        <button onClick={add} style={{ whiteSpace: 'nowrap' }}><Plus size={14} /> Add</button>
-      </div>
-    </label>
-  );
-}
+// Re-exported from its own module for backward compatibility with existing imports.
+export { CloseMarkersEditor } from '../components/CloseMarkersEditor';
 
 export function PromptPreview({ version, srchterm }: { version: BotVersion; srchterm: string }) {
   const cfg = version.config as Record<string, string | undefined>;
@@ -405,309 +377,25 @@ export function BuilderView({
               )}
             </div>
 
-            {/* ── Persona & Identity — always visible ── */}
-            <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginBottom: '0.25rem' }}>
-              <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Persona &amp; Identity</div>
-              <div className="form-grid">
-                <label>
-                  Persona name
-                  <input value={String(value.agent_name || '')} placeholder="e.g. Tarun, Priya, Aman" onChange={(e) => onUpdateConfig('agent_name', e.target.value)} />
-                  <small>Used in opening line and system prompt.</small>
-                </label>
-                <label>
-                  Organization name
-                  <input value={String(value.organization_name || '')} placeholder="e.g. JustDial" onChange={(e) => onUpdateConfig('organization_name', e.target.value)} />
-                </label>
-                {isAdvanced && (
-                  <>
-                    <label>
-                      AI partner key
-                      <input value={String(value.ai_partner || '')} placeholder="e.g. inh-suny-bot" onChange={(e) => onUpdateConfig('ai_partner', e.target.value)} />
-                      <small>Dialer lead fetch tag. Leave blank to use platform default.</small>
-                    </label>
-                    <label>
-                      Inactivity end phrase
-                      <input value={String(value.inactivity_end_text || '')} placeholder="Platform default used if blank" onChange={(e) => onUpdateConfig('inactivity_end_text', e.target.value)} />
-                      <small>Spoken after extended silence. Language-specific.</small>
-                    </label>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* ── Core content — always visible ── */}
-            <label className="full">
-              System prompt
-              <textarea className="prompt-editor" value={String(value.system_prompt || '')} onChange={(event) => onUpdateConfig('system_prompt', event.target.value)} />
-            </label>
-            <div className="form-grid">
-              <label>
-                Opening line
-                <input value={String(value.initial_message || '')} onChange={(event) => onUpdateConfig('initial_message', event.target.value)} />
-              </label>
-              <label>
-                Closing line
-                <input value={String(value.call_end_text || '')} onChange={(event) => onUpdateConfig('call_end_text', event.target.value)} />
-              </label>
-              <label>
-                Language
-                <select value={String(value.language || '')} onChange={(event) => onUpdateLanguage(event.target.value)}>
-                  {languages.map((language) => <option key={language.id} value={language.id}>{language.label}</option>)}
-                </select>
-                <small>Not yet wired into the runtime — bot_pipeline.py's Sarvam STT/TTS currently always runs in Hindi (hi-IN) regardless of this setting.</small>
-              </label>
-              <label>
-                Max call duration: {Number(value.max_call_duration || 300)}s ({Math.round(Number(value.max_call_duration || 300) / 60)} min)
-                <input type="range" min={60} max={600} step={30} value={Number(value.max_call_duration || 300)} onChange={(event) => onUpdateConfig('max_call_duration', Number(event.target.value))} />
-                <small>Also update the "X minutes" mention in your system prompt.</small>
-              </label>
-            </div>
-
-            {/* ── Advanced-only fields ── */}
-            {isAdvanced && (
-              <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: '0.5rem' }}>
-                <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <SlidersHorizontal size={12} /> Pipeline
-                </div>
-                <div className="form-grid">
-                  <label>
-                    Speech-to-text (STT)
-                    <select
-                      value={String(value.stt_provider || '')}
-                      onChange={(event) => onUpdateConfig('stt_provider', event.target.value)}
-                    >
-                      <option value="">Sarvam (default)</option>
-                      <option value="sarvam">Sarvam</option>
-                      <option value="deepgram">Deepgram</option>
-                    </select>
-                  </label>
-                  {value.stt_provider === 'deepgram' && (
-                    <>
-                      <label>
-                        STT model
-                        <input
-                          value={String(value.stt_model || '')}
-                          placeholder="nova-3 (default)"
-                          onChange={(event) => onUpdateConfig('stt_model', event.target.value)}
-                        />
-                      </label>
-                      <label>
-                        STT language
-                        <input
-                          value={String(value.stt_language || '')}
-                          placeholder="en-US (default)"
-                          onChange={(event) => onUpdateConfig('stt_language', event.target.value)}
-                        />
-                      </label>
-                    </>
-                  )}
-                  <label>
-                    Text-to-speech (TTS)
-                    <select
-                      value={String(value.tts_provider || '')}
-                      onChange={(event) => onUpdateConfig('tts_provider', event.target.value)}
-                    >
-                      <option value="">Sarvam (default)</option>
-                      <option value="sarvam">Sarvam</option>
-                      <option value="elevenlabs">ElevenLabs</option>
-                    </select>
-                  </label>
-                  {(value.tts_provider === 'sarvam' || !value.tts_provider) && (
-                    <>
-                      <label>
-                        Sarvam voice
-                        <select
-                          value={String(value.tts_voice || '')}
-                          onChange={(event) => onUpdateConfig('tts_voice', event.target.value)}
-                        >
-                          <option value="">simran (default)</option>
-                          {SARVAM_TTS_VOICES.map((voice) => <option key={voice} value={voice}>{voice}</option>)}
-                        </select>
-                      </label>
-                      <label>
-                        Sarvam language
-                        <select
-                          value={String(value.tts_language || '')}
-                          onChange={(event) => onUpdateConfig('tts_language', event.target.value)}
-                        >
-                          <option value="">Hindi (default)</option>
-                          {SARVAM_TTS_LANGUAGES.map((lang) => <option key={lang.id} value={lang.id}>{lang.label}</option>)}
-                        </select>
-                      </label>
-                    </>
-                  )}
-                  {value.tts_provider === 'elevenlabs' && (
-                    <label>
-                      ElevenLabs voice ID
-                      <input
-                        value={String(value.tts_voice || '')}
-                        placeholder="Paste a voice ID from your ElevenLabs dashboard"
-                        onChange={(event) => onUpdateConfig('tts_voice', event.target.value)}
-                      />
-                      <small>Find voice IDs at elevenlabs.io under Voices — click a voice and copy its ID.</small>
-                    </label>
-                  )}
-                  <label>
-                    LLM
-                    <select
-                      value={String(value.llm_provider || '')}
-                      onChange={(event) => onUpdateConfig('llm_provider', event.target.value)}
-                    >
-                      <option value="">Gemini (default)</option>
-                      <option value="gemini">Gemini</option>
-                      <option value="openai">OpenAI</option>
-                    </select>
-                  </label>
-                  {value.llm_provider === 'openai' && (
-                    <label>
-                      LLM model
-                      <input
-                        value={String(value.llm_model || '')}
-                        placeholder="gpt-4.1 (default)"
-                        onChange={(event) => onUpdateConfig('llm_model', event.target.value)}
-                      />
-                    </label>
-                  )}
-                </div>
-
-                <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.75rem', marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <SlidersHorizontal size={12} /> Advanced / Admin settings
-                </div>
-                <div className="form-grid">
-                  <label>
-                    Temperature
-                    <input type="number" min="0" max="2" step="0.1" value={Number(value.temperature ?? 0.4)} onChange={(event) => onUpdateConfig('temperature', Number(event.target.value))} />
-                    <small>LLM (gemini-3.1-flash-lite) sampling temperature.</small>
-                  </label>
-                  <label>
-                    Post-speech hold ms
-                    <input type="number" value={Number(value.post_speech_hold_ms ?? 400)} onChange={(event) => onUpdateConfig('post_speech_hold_ms', Number(event.target.value))} />
-                    <small>How long to hold after the caller stops speaking before the bot responds.</small>
-                  </label>
-                  <label>
-                    Voice-activity threshold
-                    <input type="number" min="0" max="1" step="0.05" value={Number(value.silero_threshold ?? 0.6)} onChange={(event) => onUpdateConfig('silero_threshold', Number(event.target.value))} />
-                    <small>Sensitivity for detecting real speech vs. background noise during muted-window capture.</small>
-                  </label>
-                  <label>
-                    Min speech duration ms
-                    <input type="number" value={Number(value.silero_min_speech_ms ?? 1000)} onChange={(event) => onUpdateConfig('silero_min_speech_ms', Number(event.target.value))} />
-                    <small>Minimum voiced audio duration to count as real speech.</small>
-                  </label>
-                  <label>
-                    First rescue (s)
-                    <input type="number" step="0.5" value={Number(value.inactivity_first_rescue_secs ?? 4)} onChange={(event) => onUpdateConfig('inactivity_first_rescue_secs', Number(event.target.value))} />
-                    <small>Silence before the first inactivity check-in.</small>
-                  </label>
-                  <label>
-                    First nudge gap (s)
-                    <input type="number" step="0.5" value={Number(value.inactivity_first_nudge_gap_secs ?? 4)} onChange={(event) => onUpdateConfig('inactivity_first_nudge_gap_secs', Number(event.target.value))} />
-                  </label>
-                  <label>
-                    Nudge interval (s)
-                    <input type="number" step="0.5" value={Number(value.inactivity_nudge_secs ?? 10)} onChange={(event) => onUpdateConfig('inactivity_nudge_secs', Number(event.target.value))} />
-                    <small>Gap between repeated nudges while the caller stays silent.</small>
-                  </label>
-                  <label>
-                    Auto-close (s)
-                    <input type="number" step="0.5" value={Number(value.inactivity_close_secs ?? 5)} onChange={(event) => onUpdateConfig('inactivity_close_secs', Number(event.target.value))} />
-                    <small>Final silence window before the call ends automatically.</small>
-                  </label>
-                  <label>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      <input
-                        type="checkbox"
-                        checked={Boolean(value.backchanneling_enabled)}
-                        onChange={(event) => onUpdateConfig('backchanneling_enabled', event.target.checked)}
-                      />
-                      Backchanneling
-                    </span>
-                    <small>Plays a short hold/acknowledgment sound during tool calls. Read by the LiveKit runtime at call start.</small>
-                  </label>
-                  <label>
-                    Noise filter sensitivity
-                    <select
-                      value={String(value.noise_filter_sensitivity || 'medium')}
-                      onChange={(event) => onUpdateConfig('noise_filter_sensitivity', event.target.value)}
-                    >
-                      <option value="low">Low</option>
-                      <option value="medium">Medium</option>
-                      <option value="high">High</option>
-                    </select>
-                    <small>Controls the VAD noise threshold used by the LiveKit runtime. Applied per-call from this bot's config.</small>
-                  </label>
-                  <label>
-                    Dialer service ID
-                    <input
-                      type="number"
-                      value={Number((value.recording as RuntimeConfig['recording'] | undefined)?.service_id || 293)}
-                      onChange={(event) => onUpdateConfig('recording', {
-                        ...(typeof value.recording === 'object' && value.recording ? value.recording : {}),
-                        service_id: Number(event.target.value)
-                      })}
-                    />
-                  </label>
-                  <label>
-                    Dialer city
-                    <input
-                      value={String((value.recording as RuntimeConfig['recording'] | undefined)?.dialer_city || 'bangalore')}
-                      onChange={(event) => onUpdateConfig('recording', {
-                        ...(typeof value.recording === 'object' && value.recording ? value.recording : {}),
-                        dialer_city: event.target.value
-                      })}
-                    />
-                  </label>
-                  <label>
-                    MIS API base URL
-                    <input
-                      value={String((value.api_urls as Record<string,string> | undefined)?.mis_api_base || '')}
-                      placeholder="Leave blank to use platform default"
-                      onChange={(event) => onUpdateConfig('api_urls', {
-                        ...(typeof value.api_urls === 'object' && value.api_urls ? value.api_urls : {}),
-                        mis_api_base: event.target.value
-                      })}
-                    />
-                    <small>Per-bot override for MIS lead fetch endpoint.</small>
-                  </label>
-                </div>
-                <CloseMarkersEditor
-                  markers={Array.isArray(value.close_markers) ? value.close_markers as string[] : []}
-                  onChange={v => onUpdateConfig('close_markers', v)}
-                />
-                <label style={{ marginTop: '0.5rem', display: 'block' }}>
-                  Function calling
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.3rem' }}>
-                    <input type="checkbox" checked={Boolean(value.function_calling)} onChange={(e) => onUpdateConfig('function_calling', e.target.checked)} style={{ width: 'auto' }} />
-                    <span style={{ fontSize: '0.85rem' }}>Enable function calling (requires functions list in JSON)</span>
-                  </div>
-                </label>
-              </div>
-            )}
+            {/* Tabbed settings: Agent · Speed · STT · TTS · LLM · Functions · Advanced */}
+            <BotConfigTabs
+              value={value}
+              onUpdateConfig={onUpdateConfig}
+              onUpdateLanguage={onUpdateLanguage}
+              languages={languages}
+              configText={configText}
+              onConfigTextChange={onConfigTextChange}
+              configOk={config.ok}
+              configError={config.ok ? undefined : config.error}
+              botId={selectedBot?._id}
+              onTestFunction={
+                selectedBot?._id
+                  ? (fn: CustomFunction, args: Record<string, unknown>) => api.testCustomFunction(selectedBot!._id, fn, args)
+                  : undefined
+              }
+            />
           </div>
         </div>
-        {isAdvanced && (
-          <div className="panel json-panel">
-            <div className="panel-header">
-              <div>
-                <h2>Developer JSON</h2>
-                <p>Full runtime config. Only visible in Advanced mode.</p>
-              </div>
-              <Database size={18} />
-            </div>
-            <textarea
-              className="json-editor"
-              value={configText}
-              onChange={(event) => onConfigTextChange(event.target.value)}
-              spellCheck={false}
-              aria-invalid={!config.ok}
-            />
-            {!config.ok && (
-              <div className="notice error" role="alert" style={{ marginTop: '0.5rem' }}>
-                <AlertTriangle size={16} /> Invalid JSON — fix before saving: {config.error}
-              </div>
-            )}
-          </div>
-        )}
       </div>
       <aside className="right-rail">
         <div className="panel compact">

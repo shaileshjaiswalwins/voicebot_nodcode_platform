@@ -405,6 +405,8 @@ describe('Bot select -> builder -> EvalsPanel microinteractions', () => {
     await loginAndOpenBuilder(user, bot);
 
     await user.click(screen.getByRole('button', { name: /advanced/i }));
+    // The Developer JSON editor now lives under the settings "Advanced" tab.
+    await user.click(screen.getByRole('tab', { name: 'Advanced' }));
 
     const editor = await waitFor(() => {
       const el = document.querySelector('.json-editor');
