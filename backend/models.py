@@ -57,6 +57,58 @@ class Flow(BaseModel):
     edges: list[FlowEdge] = Field(default_factory=list)
 
 
+class FunctionParam(BaseModel):
+    """One LLM-facing argument of a custom function (the 'Request Body → Parameters'
+    rows in the UI). Turned into a JSON-schema property when the function is registered
+    as an LLM tool (during_call) — see bot_pipeline.py's dynamic tool builder."""
+
+    name: str
+    description: str = ""
+    type: Literal["string", "number", "boolean", "object", "array"] = "string"
+    required: bool = False
+
+
+class StoreVariable(BaseModel):
+    """'Store Fields as Variables' — extract a value from the function's JSON response
+    and expose it as a dynamic variable (usable in the system prompt / greeting and by
+    post-call functions). `json_path` is a dotted path into the response, e.g.
+    'data.lead_name' or 'results.0.id'."""
+
+    variable: str
+    json_path: str
+
+
+class CustomFunction(BaseModel):
+    """A configurable HTTP call a bot can make before / during / after a conversation.
+
+    - trigger='pre_call'    → fired in entrypoint before the greeting (lead/caller fetch).
+    - trigger='during_call' → registered as an LLM tool the model can invoke mid-call.
+    - trigger='post_call'   → fired during save_call_data teardown (analytics/persistence).
+
+    `name` must be a valid identifier for during_call functions (it becomes the LLM tool
+    name) and must not collide with built-ins (FetchLead, FetchCategorySchema).
+    """
+
+    id: str = ""
+    name: str = ""
+    description: str = ""
+    url: str = ""
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "POST"
+    timeout_ms: int = 120000
+    headers: dict[str, str] = Field(default_factory=dict)
+    query_params: dict[str, str] = Field(default_factory=dict)
+    body_mode: Literal["form", "json"] = "form"
+    parameters: list[FunctionParam] = Field(default_factory=list)
+    raw_body_schema: dict[str, Any] = Field(default_factory=dict)
+    store_variables: list[StoreVariable] = Field(default_factory=list)
+    trigger: Literal["pre_call", "during_call", "post_call"] = "during_call"
+    enabled: bool = True
+    # Back-compat: legacy stored functions used a free-form `custom_body` dict. Kept so
+    # existing bots round-trip without data loss (bot.py:862 call_configured_function
+    # still reads it). New functions should use body_mode + parameters instead.
+    custom_body: dict[str, Any] = Field(default_factory=dict)
+
+
 class BotConfig(BaseModel):
     """Mirrors RuntimeConfig in frontend/src/types.ts — the fields a PM can edit.
 
@@ -86,7 +138,7 @@ class BotConfig(BaseModel):
     # Real bot_pipeline.py runtime knobs (backend/evals.py:307-323).
     temperature: float = 0.4
     function_calling: bool = False
-    functions: list[dict[str, Any]] = Field(default_factory=list)
+    functions: list[CustomFunction] = Field(default_factory=list)
     post_speech_hold_ms: int = 400
     silero_threshold: float = 0.6
     silero_min_speech_ms: int = 1000
@@ -132,6 +184,14 @@ class BotUpdateConfig(BaseModel):
 
 class CompileFlowPreviewRequest(BaseModel):
     flow: Flow
+
+
+class FunctionTestRequest(BaseModel):
+    """Dry-run a custom function from the builder's 'Test' button. The function need not be
+    saved yet — its full config is sent inline along with sample args."""
+
+    function: CustomFunction
+    args: dict[str, Any] = Field(default_factory=dict)
 
 
 class AttemptStep(BaseModel):

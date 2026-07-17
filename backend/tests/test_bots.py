@@ -8,6 +8,35 @@ def _create_bot(client, auth_headers, name="Test Bot"):
     return resp.json()
 
 
+def test_legacy_function_dict_with_custom_body_round_trips(client, auth_headers):
+    """Existing bots stored functions as loose dicts (name/url/method/headers/query_params/
+    custom_body). Migrating `functions` to the typed CustomFunction model must not drop those
+    fields — FetchLead/FetchCategorySchema entries and their custom_body must survive a save."""
+    bot = _create_bot(client, auth_headers)
+    legacy_fn = {
+        "name": "FetchLead",
+        "url": "http://mis.internal/lead",
+        "method": "POST",
+        "headers": {"Authorization": "Bearer x"},
+        "query_params": {"src": "dialer"},
+        "custom_body": {"lead_id": "{{lead_id}}"},
+    }
+    resp = client.put(
+        f"/api/bots/{bot['_id']}/draft",
+        json={"config": {"function_calling": True, "functions": [legacy_fn]}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    detail = client.get(f"/api/bots/{bot['_id']}", headers=auth_headers).json()
+    saved = detail["versions"][0]["config"]["functions"][0]
+    for k, v in legacy_fn.items():
+        assert saved.get(k) == v, f"legacy function field {k} dropped: got {saved.get(k)!r}"
+    # New typed defaults are applied so the pipeline/UI can rely on them.
+    assert saved["trigger"] == "during_call"
+    assert saved["enabled"] is True
+    assert saved["timeout_ms"] == 120000
+
+
 def test_empty_bot_list_returns_empty_array_not_error(client, auth_headers):
     resp = client.get("/api/bots", headers=auth_headers)
     assert resp.status_code == 200
@@ -177,7 +206,21 @@ def test_saving_a_draft_persists_every_field_the_pipeline_actually_reads(client,
         "agent_name": "Priya",
         "temperature": 0.85,
         "function_calling": True,
-        "functions": [{"name": "fetch_lead"}],
+        "functions": [
+            {
+                "id": "fn1",
+                "name": "fetch_lead",
+                "description": "Fetch lead details",
+                "url": "http://mis.internal/lead",
+                "method": "POST",
+                "timeout_ms": 8000,
+                "trigger": "pre_call",
+                "parameters": [
+                    {"name": "mobile", "description": "caller mobile", "type": "string", "required": True}
+                ],
+                "store_variables": [{"variable": "lead_name", "json_path": "data.name"}],
+            }
+        ],
         "post_speech_hold_ms": 650,
         "silero_threshold": 0.72,
         "silero_min_speech_ms": 1200,
@@ -203,4 +246,12 @@ def test_saving_a_draft_persists_every_field_the_pipeline_actually_reads(client,
     detail = client.get(f"/api/bots/{bot['_id']}", headers=auth_headers).json()
     saved_config = detail["versions"][0]["config"]
     for key, value in full_config.items():
+        if key == "functions":
+            # CustomFunction fills schema defaults on save, so assert the fields we set
+            # survived rather than exact equality against the sparse input.
+            saved_fn = saved_config["functions"][0]
+            expected_fn = value[0]
+            for fk, fv in expected_fn.items():
+                assert saved_fn.get(fk) == fv, f"functions[0].{fk} dropped: got {saved_fn.get(fk)!r}"
+            continue
         assert saved_config.get(key) == value, f"{key} was dropped on save: got {saved_config.get(key)!r}"
