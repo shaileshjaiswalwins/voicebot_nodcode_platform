@@ -163,6 +163,14 @@ class BotConfig(BaseModel):
     llm_provider: Literal["", "gemini", "openai"] = ""
     llm_model: str = ""
 
+    # Full per-provider parameter surface — see provider_params.py for the assembled kwargs
+    # and the exact keys each accepts. These free-form dicts let a PM tune every relevant
+    # Sarvam STT / Sarvam TTS / Gemini knob (VAD sensitivity, pace/pitch/loudness, top_p,
+    # thinking_config, …) without a schema change per parameter. Empty = pipeline defaults.
+    stt_options: dict[str, Any] = Field(default_factory=dict)
+    tts_options: dict[str, Any] = Field(default_factory=dict)
+    llm_options: dict[str, Any] = Field(default_factory=dict)
+
     # Conversational-polish intent (Vapi/Bland benchmark, Phase 2a). Wired into
     # bot_pipeline.py: noise_filter_sensitivity selects a threshold, backchanneling_enabled
     # gates a hold-message playback during tool calls (see bot_pipeline.py's

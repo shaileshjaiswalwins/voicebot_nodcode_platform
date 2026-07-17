@@ -103,6 +103,7 @@ from bot import (
 )
 from custom_function_tools import build_during_call_tools
 from custom_functions import interpolate_vars, run_lifecycle_functions
+from pipeline_providers import build_llm, build_stt, build_tts
 
 load_dotenv(override=True)
 
@@ -404,33 +405,16 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _gemini_api_key = os.getenv("GEMINI_API_KEY", "")
     _log.info(f"[LLM] Using GEMINI_API_KEY ...{_gemini_api_key[-6:] if _gemini_api_key else 'NOT SET'}")
 
-    stt = sarvam.STT(
-        language="hi-IN",
-        model="saaras:v3",
-        mode="transcribe",
-        api_key=SARVAM_API_KEY or None,
-        flush_signal=True,
-    )
-    llm = google.LLM(
-        model="gemini-3.1-flash-lite",
-        api_key=_gemini_api_key or None,
-        temperature=_temperature,
-    )
-    _tts_speaker = _bot_config.get("tts_voice") or _bot_config.get("voice") or "simran"
-    tts = sarvam.TTS(
-        target_language_code="hi-IN",
-        model="bulbul:v3",
-        speaker=_tts_speaker,
-        api_key=SARVAM_API_KEY or None,
-        # linear16 at 24000Hz: 24000×50ms = 1200 samples (integer, no drift).
-        # 22050Hz gave 1102.5 samples/frame causing accumulating timing jitter.
-        # 24000→48000Hz is exact 2× upsample (no aliasing vs 22050's 2.177×).
-        speech_sample_rate=24000,
-        output_audio_codec="linear16",
-        temperature=0.75,
-        pace=1.0,
-        send_completion_event=True,
-    )
+    # STT/TTS/LLM built dynamically from the bot config (see provider_params.py) so the full
+    # Sarvam STT / Sarvam TTS / Gemini parameter surface is tunable per bot. No *_options set
+    # reproduces the exact prior stack. Preserve bot_dev's legacy `voice` fallback for the
+    # TTS speaker (tts_voice takes precedence, then the older `voice` field).
+    _tts_cfg = _bot_config
+    if not (_bot_config.get("tts_voice") or "").strip() and (_bot_config.get("voice") or "").strip():
+        _tts_cfg = {**_bot_config, "tts_voice": _bot_config["voice"]}
+    stt = build_stt(_bot_config)
+    llm = build_llm(_bot_config)
+    tts = build_tts(_tts_cfg)
 
     # Pre-synthesize hold message (no-op if already cached from a previous call)
     await _preload_hold_message(tts)
