@@ -8,7 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..audit import log_audit
 from ..auth import require_user
 from ..db import bot_versions, bots
-from ..models import BotConfig, BotCreate, BotUpdateConfig, CompileFlowPreviewRequest
+from ..models import (
+    BotConfig,
+    BotCreate,
+    BotUpdateConfig,
+    CompileFlowPreviewRequest,
+    FunctionTestRequest,
+)
 
 # flow_compiler.py lives at the repo root (shared with bot.py/bot_pipeline.py/bot_dev.py),
 # not inside the backend/ package. Import defensively: in a deployment that only ships
@@ -24,6 +30,13 @@ try:
     from flow_compiler import compile_flow_to_prompt
 except ImportError:
     compile_flow_to_prompt = None
+
+# Pure custom-function helpers (repo root). Same defensive import: if backend/ ships without
+# them, only the function-test endpoint degrades to 501 rather than taking down the router.
+try:
+    from custom_functions import apply_store_variables, build_http_call, resolve_timeout_seconds
+except ImportError:
+    build_http_call = None
 
 router = APIRouter(prefix="/api/bots", tags=["bots"])
 
@@ -239,6 +252,67 @@ def compile_flow_preview(payload: CompileFlowPreviewRequest, _: dict = Depends(r
     if compile_flow_to_prompt is None:
         raise HTTPException(501, "Flow preview is unavailable on this deployment (flow_compiler module not found)")
     return {"compiled_prompt": compile_flow_to_prompt(payload.flow.model_dump())}
+
+
+async def _execute_test_request(call: dict, timeout: float) -> tuple[int, object]:
+    """Perform the actual HTTP round-trip for a custom-function dry-run and return
+    ``(status_code, decoded_body)``. Isolated so tests can monkeypatch it (no real network)
+    and so the endpoint stays a thin orchestrator."""
+    import aiohttp
+
+    async with aiohttp.ClientSession() as session:
+        async with session.request(
+            call["method"], call["url"], headers=call["headers"],
+            params=call["params"], json=call["json"], data=call["data"],
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as resp:
+            try:
+                body = await resp.json(content_type=None)
+            except Exception:
+                body = await resp.text()
+            return resp.status, body
+
+
+@router.post("/{bot_id}/functions/test")
+async def test_custom_function(
+    bot_id: str, payload: FunctionTestRequest, _: dict = Depends(require_user)
+) -> dict:
+    """Dry-run a custom function server-side so the builder's 'Test' button can validate an
+    endpoint without a live call. Returns the HTTP status, latency, decoded response, and any
+    variables the configured store_variables would extract. A non-2xx status is reported (not
+    an error); only a transport failure sets ``error``."""
+    import time as _time
+
+    if build_http_call is None:
+        raise HTTPException(501, "Function testing is unavailable on this deployment (custom_functions module not found)")
+    if not bots.find_one({"_id": _oid(bot_id)}):
+        raise HTTPException(404, "Bot not found")
+
+    fn = payload.function.model_dump()
+    if not (fn.get("url") or "").strip():
+        raise HTTPException(400, "Function URL is required to run a test")
+
+    call = build_http_call(fn, payload.args or {})
+    timeout = resolve_timeout_seconds(fn, default=10.0)
+    result = {
+        "ok": False, "status_code": None, "latency_ms": 0,
+        "response": None, "extracted_vars": {}, "error": None,
+        "request": {"method": call["method"], "url": call["url"],
+                    "params": call["params"], "json": call["json"], "data": call["data"]},
+    }
+    _start = _time.perf_counter()
+    try:
+        status, body = await _execute_test_request(call, timeout)
+        result["status_code"] = status
+        result["response"] = body
+        result["ok"] = 200 <= status < 300
+        extracted: dict = {}
+        apply_store_variables(fn.get("store_variables"), body, extracted)
+        result["extracted_vars"] = extracted
+    except Exception as exc:  # noqa: BLE001 — surface any transport failure to the PM
+        result["error"] = str(exc) or exc.__class__.__name__
+    result["latency_ms"] = int((_time.perf_counter() - _start) * 1000)
+    return result
 
 
 @router.delete("/{bot_id}")
