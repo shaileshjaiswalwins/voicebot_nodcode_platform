@@ -22,3 +22,12 @@ logs/
 
 # OS
 .DS_Store
+
+# Docs (local notes, PRDs, plans)
+docs/
+
+# Agent tooling scratch (worktrees, local overrides, browser session logs)
+.claude/worktrees/
+.claude/settings.local.json
+.gstack/
+DESIGN-IS-*/
