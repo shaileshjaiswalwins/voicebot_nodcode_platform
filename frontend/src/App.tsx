@@ -2,14 +2,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
 import {
   Activity, BarChart2, BookOpen, Bot as BotIcon, ClipboardList, FileText, Gauge, GitBranch,
-  Keyboard, Megaphone, Menu, Phone, PhoneCall, Settings as SettingsIcon, X
+  IndianRupee, Keyboard, Megaphone, Menu, Phone, PhoneCall, Settings as SettingsIcon, X
 } from 'lucide-react';
 
-import { api, ApiError, getToken } from './api';
+import { api, ApiError, getToken, setToken, API_BASE } from './api';
 import type {
-  Bot, BotVersion, Campaign, CallEvent, EvalRun, LangfuseSettings, LanguageOption,
+  AnalysisPromptEntry, AnalysisPromptKey, Bot, BotVersion, Campaign, CallEvent, EvalRun, LangfuseSettings, LanguageOption,
   LanguageSettings, LibraryPhrase, OutcomeEntry, PhoneNumber, PhoneNumberEnvironment,
-  PlatformSettings, RuntimeSettings, Transcript, TestRecordingLookup, DialingStrategy
+  PlatformSettings, RuntimeSettings, Transcript, TestRecordingLookup, DialingStrategy, PricingConfig
 } from './api';
 import type { AgentWorkspaceMode, BuilderMode, CmdKExtra, Diagnostic, RuntimeConfig, TestForm, View } from './types';
 
@@ -44,6 +44,7 @@ import { ObservabilityView } from './views/ObservabilityView';
 import { TestCallPanel, titleFor, subtitleFor } from './views/TestCallPanel';
 import { SettingsView } from './views/SettingsView';
 import { AuditLogView } from './views/AuditLogView';
+import { AdminView } from './views/AdminView';
 
 // Real WebRTC test-call connection is owned by <LiveKitRoom> inside
 // components/LiveKitTestSession.tsx, not managed manually here.
@@ -63,6 +64,7 @@ const NAV_ICONS: Record<View, React.ReactNode> = {
   library: <BookOpen size={17} />,
   settings: <SettingsIcon size={17} />,
   audit_log: <ClipboardList size={17} />,
+  admin: <IndianRupee size={17} />,
 };
 
 const EMPTY_TEST_FORM: TestForm = {
@@ -93,11 +95,11 @@ const DEFAULT_LANGUAGES: LanguageOption[] = [
 // Login gate
 // ---------------------------------------------------------------------------
 
-function LoginForm({ onLoggedIn }: { onLoggedIn: () => void }) {
+function LoginForm({ onLoggedIn, ssoError }: { onLoggedIn: () => void; ssoError?: string }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(ssoError || '');
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -132,6 +134,10 @@ function LoginForm({ onLoggedIn }: { onLoggedIn: () => void }) {
         <button className="primary" type="submit" disabled={busy}>
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
+        <div className="sso-divider"><span>or</span></div>
+        <a className="sso-button" href={`${API_BASE}/api/auth/sso/login`}>
+          Sign in with Justdial SSO
+        </a>
       </form>
     </div>
   );
@@ -155,6 +161,27 @@ function AppShell() {
   const lastSyncedPathRef = useRef<string>('');
 
   const [authed, setAuthed] = useState<boolean>(Boolean(getToken()));
+  const [ssoError, setSsoError] = useState<string>('');
+
+  // Consume the token (or error) the backend's /api/auth/sso/callback redirected back with
+  // (see backend/routers/auth.py sso_callback) and strip it from the URL immediately so it
+  // never lingers in browser history/referrer headers.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const ssoToken = params.get('sso_token');
+    const err = params.get('sso_error');
+    if (ssoToken) {
+      setToken(ssoToken);
+      setAuthed(true);
+    }
+    if (ssoToken || err) {
+      if (err) setSsoError(err);
+      params.delete('sso_token');
+      params.delete('sso_error');
+      navigate({ pathname: location.pathname, search: params.toString() }, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Navigation ──────────────────────────────────────────────────────
   const [view, setView] = useState<View>('bots');
@@ -178,9 +205,11 @@ function AppShell() {
   const [platformSettings, setPlatformSettings] = useState<PlatformSettings | null>(null);
   const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings | null>(null);
   const [langfuseSettings, setLangfuseSettings] = useState<LangfuseSettings | null>(null);
+  const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
   const [phrases, setPhrases] = useState<LibraryPhrase[]>([]);
   const [outcomes, setOutcomes] = useState<OutcomeEntry[]>([]);
   const [languageSettings, setLanguageSettings] = useState<LanguageSettings[]>([]);
+  const [analysisPrompts, setAnalysisPrompts] = useState<AnalysisPromptEntry[]>([]);
 
   const [loadingBots, setLoadingBots] = useState(false);
   const [loadingCampaigns, setLoadingCampaigns] = useState(false);
@@ -223,7 +252,7 @@ function AppShell() {
 
   // ── Campaigns ───────────────────────────────────────────────────────
   const [selectedCampaignKey, setSelectedCampaignKey] = useState<string>('');
-  const [campaignWorkspaceMode, setCampaignWorkspaceMode] = useState<'list' | 'strategy'>('list');
+  const [campaignWorkspaceMode, setCampaignWorkspaceMode] = useState<'list' | 'strategy' | 'leads'>('list');
   const [campaignSaveState, setCampaignSaveState] = useState<AsyncState>('idle');
   const [assignBotState, setAssignBotState] = useState<Record<string, AsyncState>>({});
   const [campaignCreateState, setCampaignCreateState] = useState<AsyncState>('idle');
@@ -386,16 +415,33 @@ function AppShell() {
     }
   }, []);
 
+  const loadPricingConfig = useCallback(async () => {
+    try {
+      setPricingConfig(await api.getPricingAdminConfig());
+    } catch (err) {
+      pushDiagnostic('Pricing config', err, 'Retry loading pricing', 'warning');
+    }
+  }, []);
+
   const loadLibrary = useCallback(async () => {
     try {
-      const [p, o, l] = await Promise.all([
-        api.phrases(), api.outcomes(), api.languageSettings()
+      const [p, o, l, a] = await Promise.all([
+        api.phrases(), api.outcomes(), api.languageSettings(), api.analysisPrompts()
       ]);
-      setPhrases(p); setOutcomes(o); setLanguageSettings(l);
+      setPhrases(p); setOutcomes(o); setLanguageSettings(l); setAnalysisPrompts(a);
     } catch (err) {
       pushDiagnostic('Library', err, 'Retry loading library', 'warning');
     }
   }, []);
+
+  async function handleUpdateAnalysisPrompt(key: AnalysisPromptKey, promptTemplate: string) {
+    const updated = await api.updateAnalysisPrompt(key, promptTemplate);
+    setAnalysisPrompts((prev) => {
+      const next = prev.filter((p) => p.key !== key);
+      next.push(updated);
+      return next;
+    });
+  }
 
   // Initial load once authenticated
   useEffect(() => {
@@ -406,6 +452,7 @@ function AppShell() {
     loadTranscripts();
     loadSettings();
     loadLibrary();
+    loadPricingConfig();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed]);
 
@@ -704,6 +751,11 @@ function AppShell() {
     setCampaignWorkspaceMode('strategy');
   }
 
+  function handleSelectCampaignLeads(key: string) {
+    setSelectedCampaignKey(key);
+    setCampaignWorkspaceMode('leads');
+  }
+
   function handleBackToCampaignList() {
     setCampaignWorkspaceMode('list');
   }
@@ -750,7 +802,14 @@ function AppShell() {
 
   async function handleSetCampaignStatus(campaignKey: string, status: string) {
     try {
-      await api.setCampaignStatus(campaignKey, status);
+      // Activating must enqueue call_jobs for any pending leads, not just flip the status
+      // label — startCampaign does both (idempotent), so Activate here matches what
+      // CampaignLeadsPanel's own Start/Resume button does.
+      if (status === 'active') {
+        await api.startCampaign(campaignKey);
+      } else {
+        await api.setCampaignStatus(campaignKey, status);
+      }
       await loadCampaigns();
       showToast(status === 'active' ? 'Campaign activated' : 'Campaign paused');
     } catch (err) {
@@ -905,6 +964,16 @@ function AppShell() {
       .catch((err) => pushDiagnostic('Runtime settings', err, 'Retry save', 'error'));
   }
 
+  async function handleUpdatePricingConfig(payload: PricingConfig): Promise<void> {
+    try {
+      const updated = await api.updatePricingAdminConfig(payload);
+      setPricingConfig(updated);
+    } catch (err) {
+      pushDiagnostic('Pricing config', err, 'Retry save', 'error');
+      throw err;
+    }
+  }
+
   async function handleUpdatePlatformSettings(payload: PlatformSettings): Promise<void> {
     try {
       const updated = await api.updatePlatformSettings(payload);
@@ -1005,7 +1074,7 @@ function AppShell() {
   }
 
   if (!authed) {
-    return <LoginForm onLoggedIn={() => setAuthed(true)} />;
+    return <LoginForm onLoggedIn={() => setAuthed(true)} ssoError={ssoError} />;
   }
 
   return (
@@ -1193,6 +1262,7 @@ function AppShell() {
               workspaceMode={campaignWorkspaceMode}
               selectedCampaignKey={selectedCampaignKey}
               onSelectCampaign={handleSelectCampaign}
+              onSelectCampaignLeads={handleSelectCampaignLeads}
               onBackToList={handleBackToCampaignList}
               onSaveStrategy={handleSaveStrategy}
               saveState={campaignSaveState}
@@ -1285,12 +1355,14 @@ function AppShell() {
               phrases={phrases}
               outcomes={outcomes}
               languageSettings={languageSettings}
+              analysisPrompts={analysisPrompts}
               onCreate={handleCreatePhrase}
               onUpdate={handleUpdatePhrase}
               onDelete={handleDeletePhrase}
               onUpdateOutcome={handleUpdateOutcome}
               onUpsertLanguageSettings={handleUpsertLanguageSettings}
               onDeleteLanguageSettings={handleDeleteLanguageSetting}
+              onUpdateAnalysisPrompt={handleUpdateAnalysisPrompt}
             />
           )}
 
@@ -1304,6 +1376,10 @@ function AppShell() {
           )}
 
           {view === 'audit_log' && <AuditLogView />}
+
+          {view === 'admin' && (
+            <AdminView config={pricingConfig} onSave={handleUpdatePricingConfig} />
+          )}
         </ResilientPanel>
       </main>
 

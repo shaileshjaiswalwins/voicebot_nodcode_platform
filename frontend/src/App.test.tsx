@@ -54,6 +54,13 @@ vi.mock('./api', async () => {
       qualityAlerts: vi.fn(),
       startTestCall: vi.fn(),
       stopTestCall: vi.fn(),
+      getPricingAdminConfig: vi.fn().mockResolvedValue({
+        stt: [], llm: [], tts: [], telephony: [],
+      }),
+      updatePricingAdminConfig: vi.fn(),
+      pricingMatrix: vi.fn(),
+      pricingTiers: vi.fn(),
+      pricingBudgetRoute: vi.fn(),
     },
   };
 });
