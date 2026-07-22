@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pymongo.errors import PyMongoError
 
+from .analysis_prompts import seed_default_analysis_prompts
 from .auth import ensure_default_admin
 from .routers import analytics, audit, auth, bots, campaigns, evals, library, phone_numbers, runtime, settings, testcall, transcripts
 
@@ -55,6 +56,7 @@ async def _unhandled_error_handler(_: Request, exc: Exception) -> JSONResponse:
 @app.on_event("startup")
 def on_startup() -> None:
     ensure_default_admin()
+    seed_default_analysis_prompts()
 
 
 @app.get("/health")

@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend import db as db_module
+from backend import analysis_prompts as analysis_prompts_module
 from backend.main import app
 
 
@@ -23,10 +24,12 @@ def _clean_db():
         db_module.language_settings,
         db_module.db["tbl_ai_vb_library_phrases"],
         db_module.db["tbl_ai_vb_outcome_catalog"],
+        db_module.db["tbl_ai_vb_analysis_prompts"],
         db_module.phone_numbers,
         db_module.audit_log,
     ):
         coll.delete_many({})
+    analysis_prompts_module._cache.clear()
     yield
 
 

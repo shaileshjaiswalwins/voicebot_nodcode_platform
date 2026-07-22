@@ -298,6 +298,10 @@ class LanguageSettingsUpsert(BaseModel):
     lang_notes: str = ""
 
 
+class AnalysisPromptUpdate(BaseModel):
+    prompt_template: str
+
+
 class RuntimeSettingsPayload(BaseModel):
     livekit_api_url: str = ""
     livekit_browser_url: str = ""

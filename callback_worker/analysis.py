@@ -8,9 +8,33 @@ from datetime import datetime, timedelta, timezone
 import aiohttp
 from loguru import logger
 
+from backend.analysis_prompts import (
+    B2B_SCORE_KEY,
+    CALL_ANALYSIS_KEY,
+    DEFAULT_PROMPTS,
+    get_analysis_prompt_for_runtime,
+)
+
 from .config import GEMINI_API_KEY, HOT_LEAD_FLOW_ENABLED
 
 IST = timezone(timedelta(hours=5, minutes=30))
+
+
+class _SafeFormatDict(dict):
+    """Renders unknown {placeholder} names as-is instead of raising KeyError, so a PM
+    typo in the stored template can never crash post-call analysis in production."""
+
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _render_analysis_prompt(key: str, ctx: dict) -> str:
+    template = get_analysis_prompt_for_runtime(key)
+    try:
+        return template.format_map(_SafeFormatDict(ctx))
+    except Exception:
+        logger.error("Failed to render analysis prompt '{}' from stored template — falling back to default.", key)
+        return DEFAULT_PROMPTS[key].format_map(_SafeFormatDict(ctx))
 
 
 def _strip_punct(s: str) -> str:
@@ -1597,486 +1621,28 @@ explicitly stated or clearly implied by the buyer's direct response to the agent
   "business_intent": "<'hot_lead'|'business_not_interested'|'not_into_business'|'no_response'|'not_pitched'|'' — per Step 2C>",
   "b2b_user": "<'yes'|'no'|'' — per Step 2C>","""
 
-    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_wrong_opener_note}{_truncated_greeting_note}{_phantom_connect_note}{_identity_q_note}{_reask_opening_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}{_biz_flag_note}
-
-Current date/time (IST, GMT+5:30): {current_dt_str}
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-TRANSCRIPT
-━━━━━━━━━━━━━━━━━━━━━━━━
-{lines}{_muted_lines}
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-QUALIFICATION QUESTIONS
-━━━━━━━━━━━━━━━━━━━━━━━━
-{q_list}
-{_agent_inference_section}
-━━━━━━━━━━━━━━━━━━━━━━━━
-GLOBAL PRINCIPLES (defined once — referenced by name throughout)
-━━━━━━━━━━━━━━━━━━━━━━━━
-
-GP-1  POSITIVE PROGRESSION: A reflex "नहीं" followed by spec details, a product question, or
-      continued engagement means product IS confirmed. Classify on the final positive stance,
-      not the opening negative.
-      SUB-QUESTION "नहीं": "नहीं" / "नहीं है" / "नहीं पता" / "नहीं है सो" / "कुछ नहीं है
-      पसंद" / "वैसे तो कुछ नहीं चाहिए" spoken in reply to a spec sub-question (quantity,
-      type, size, grade, preference — any question AFTER the opening product question) means
-      "I don't have / don't know that spec / no strong preference," NOT product rejection.
-      The agent continuing to ask the next spec question is structural proof (GP-7) that the
-      requirement is still alive. Do NOT treat this as a rejection.
-      ACTIVE BROWSING: buyer saying "लेना था" / "check kar raha tha" / "dekhna tha" /
-      "सोच रहा था" with no explicit final rejection signals live consideration — treat as
-      Interested, not Not Interested.
-
-GP-2  FINAL STATE WINS:
-      • Explicit final rejection overrides earlier weak interest.
-      • Explicit final confirmation overrides early reflex "नहीं".
-      • Off-topic later turns (agent identity, caller location, unrelated topics) do NOT undo
-        prior confirmed qualification. Only an explicit requirement withdrawal can downgrade
-        a Tier 3 classification.
-
-GP-3  NEGATIVE TONE ≠ REJECTION: Rudeness, impatience, or dismissive phrasing ("jaldi bolo",
-      "kya hai", "nahi nahi") is NOT a rejection. Rejection requires explicit, final
-      requirement withdrawal.
-
-GP-4  GENERIC CONVERSATION ≠ INTEREST: The following are participation signals only —
-      they do NOT imply product interest:
-        "haan bolo" / "achha" / "theek hai" / "kaun hai" / "kis company se?" /
-        "human ho ya bot?" / "can you help me?" / "why are you calling?" / "hello"
-      Interest requires: product confirmation OR a product-specific question OR a buying signal.
-
-GP-5  OPERATIONAL > CONVERSATIONAL: A buyer saying "haan / ji / ok / standard / kuch bhi /
-      you decide" to a spec question is answering conversationally — NOT providing a
-      valid_spec_value. Only concrete, operationally useful data counts.
-
-GP-6  SELF-SOURCING OVERRIDES REJECTION: "Khud dekh lenge / apne aap le lenge" with a live
-      requirement → Will do it Myself, not Not Interested. Requirement exists; only JD's
-      help is declined.
-
-GP-7  AGENT PROGRESSION GUARANTEES PRODUCT CONFIRMATION: The bot is strictly programmed and
-      NEVER asks any qualification question (quantity, grade, spec, type, application, etc.)
-      without first receiving product confirmation from the buyer. Therefore:
-        • If the transcript shows the agent asking ANY question from the qualification schema
-          listed above → product_confirmed is STRUCTURALLY TRUE.
-        • The outcome CANNOT be Could Not Confirm or Short Hangup in this case.
-        • This overrides any superficially vague or unclear buyer responses you observe.
-      You do not need to re-derive product_confirmed from buyer turns alone when the agent's
-      own behaviour already proves it.
-      EXCEPTION — bot mis-step (applies to FIRST turn OR ALL turns):
-        Case A — First turn only: if the buyer's first response to the opening product question
-          was entirely off-topic (e.g., a person's name, a personal-call response, an unrelated
-          utterance like "Aryan" or "Himank hello"), the bot may have advanced incorrectly on a
-          misread. GP-7 does NOT apply — evaluate product_confirmed from the buyer's actual words.
-        Case B — All turns are background noise (apply GP-8 before GP-7): if EVERY buyer turn
-          throughout the entire call is off-topic personal chatter, name-calls, or background
-          conversation unrelated to the product — domestic talk, side conversations, commenting on
-          unrelated things (water, bathroom, payments, people nearby, "बना कर दे दिया क्लाइंट को",
-          "पानी मत दो", "बाथरूम में से ना बात करो") — no single turn engages with any product
-          topic, spec, or buying signal — then the bot ran a one-sided conversation with background
-          noise. GP-7 does NOT apply. Evaluate as Could Not Confirm.
-        Case C — Wrong opener (🚨 GREETING FAILURE note present above): the agent started with
-          a connection probe ("क्या आप अभी line पर हैं?") instead of the product greeting, so
-          the bot may have advanced on ambient noise. GP-7 does NOT apply regardless of agent
-          turn count. Evaluate product confirmation from the buyer's actual words only.
-        Case D — Explicit buyer rejection ignored by bot (bot error): if the buyer's FIRST
-          live response to the opening product question begins with or prominently contains
-          "नहीं" (no) — e.g. "नहीं मैम", "नहीं जी", "नहीं, हमें नहीं चाहिए" — AND the agent
-          then proceeded to ask spec questions without resolving the rejection, this is a bot
-          programming error. The agent advanced on a misread. GP-7 does NOT apply. Evaluate
-          product_confirmed from the buyer's actual words. A clear consistent "नहीं" to the
-          opening question = product_confirmed FALSE → classify as Not Interested.
-        Case E — Bare phone-pickup signal injected as muted capture: if the only user signal
-          is a reflexive greeting or acknowledgement ("हाँ जी", "हाँ", "जी", "हेलो") captured
-          during the bot's greeting window (mic was muted), and the agent advanced on this
-          signal alone with no subsequent live user confirmation — the bot advanced on a
-          phone-pickup reflex, not a product confirmation. GP-7 does NOT apply. Evaluate as
-          Could Not Confirm or Short Hangup based on actual engagement.
-
-GP-8  PHANTOM ENGAGEMENT / BACKGROUND NOISE: When ALL of the following are true simultaneously:
-        ✓ ZERO valid_spec_values were captured across all questions
-        ✓ NO buyer turn contains any product-related word, quantity, spec, or buying signal
-        ✓ Buyer turns read as background conversations, name-calls, or side-chatter
-          (e.g. calling out a person's name, commenting on unrelated topics like payments/internet,
-          domestic talk, conversations with people nearby, rambling with no product relevance)
-      → The agent was capturing background noise, not a real engaged buyer.
-      → product_confirmed = FALSE. GP-7 does NOT apply.
-      → Outcome: "Could Not Confirm"
-      This applies regardless of whether closing_line_spoken is TRUE or FALSE — a bot that
-      ran its full flow (or any part of it) while the user was talking to someone else or
-      in a noisy environment did not achieve genuine qualification.
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-DEFINITIONS
-━━━━━━━━━━━━━━━━━━━━━━━━
-
-product_topic_reached — agent named the product AND buyer responded to the product itself
-                        (not merely to the caller's identity or presence).
-
-product_confirmed     — TRUE if ANY of:
-                          • buyer said yes/ji/bilkul/theek hai/haan in response to
-                            "आपको X की requirement है ना?" or equivalent opening question
-                          • buyer provided a spec value, quantity, or product variant
-                          • buyer asked a product-specific question (pricing, delivery,
-                            availability, specs) — generic call questions do NOT count.
-                        Apply GP-1: later confirmation overrides early "नहीं".
-
-valid_spec_value      — a concrete, operationally useful answer: named option, number+unit,
-                        material/grade, specific measurable choice.
-                        NOT valid: "haan / yes / ji / ok", "standard", "kuch bhi",
-                        "you decide", "don't know", "हम्म", or any vague filler.
-                        ASR CORRUPTION: interpret phonetically/contextually garbled text by
-                        intent and context; the agent's echo-confirmation in the next turn
-                        is the strongest signal.
-
-closing_line_spoken   — ALL of the following conditions are met:
-                          1. The LAST assistant turn contains "relevant sellers"
-                          2. The LAST assistant turn also contains EITHER
-                               "सारी details मिल गईं"  (mixed Hindi+English form)
-                             OR "सारी डिटेल्स मिल गई" (full Devanagari form)
-                        Both conditions must be satisfied simultaneously. No other phrasing qualifies.
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-EVALUATION ORDER
-━━━━━━━━━━━━━━━━━━━━━━━━
-
-Evaluate tiers in order: Tier 1 → Tier 2 → Tier 3 → Tier 4.
-Within each tier, return the FIRST fully satisfied outcome.
-Once an outcome is matched, do not evaluate lower tiers.
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-TIER 1 — SYSTEM / TERMINAL
-━━━━━━━━━━━━━━━━━━━━━━━━
-These override everything else when the signal is unambiguous.
-
-SHORT HANGUP
-  Condition: product_topic_reached == FALSE AND buyer gave only bare call-presence signals.
-  Bare signals: "hello", "haan", "kaun hai", "ek second", "hold on", "ruko", calling out a
-    name thinking it was a personal call, or asking "kaun bol raha hai?" — responses about the
-    caller's identity or presence, not the product.
-  Test: Did the buyer engage with the product topic in ANY way?
-    YES → do NOT use Short Hangup.   NO → Short Hangup.
-  NOT ALLOWED IF: buyer said "नहीं" in response to the product question (that IS product
-    engagement). Short Hangup requires zero product engagement.
-  NOT ALLOWED IF: buyer said "हाँ" / "जी" / "हाँ जी" directly in response to the opening
-    product requirement question — this IS product confirmation, not a bare presence signal.
-    "जी" answering "आपको X की requirement है ना?" = product_confirmed TRUE. Use Interested.
-  NOT ALLOWED IF: the agent asked any qualification spec question (body type, quantity, size,
-    type, grade, etc.) — GP-7 applies, product topic was reached and product_confirmed is TRUE.
-    Use Interested minimum, never Short Hangup.
-  → "Short Hangup"
-
-VOICEMAIL
-  Condition: call answered by automated voicemail/IVR, not a live human.
-  Signals (any one is sufficient):
-    English: "leave a message", "after the beep", "you have reached [name/voicemail]",
-             "unable to take your call", "mailbox is full"
-    Hindi:   "sandesh chhod", "beep ke baad", "uplabdh nahi / उपलब्ध नहीं",
-             "aapka call abhi", "subscriber"
-  Pattern: robotic/templated text with no human conversational structure.
-  NOT ALLOWED IF: a real human conversational response exists anywhere in the transcript.
-  → "Voicemail"
-
-CALL ON HOLD
-  Condition: a carrier/PBX hold-music announcement appears in a user turn — same phrase
-    repeated in multiple languages, OR any of: "put your call on hold", "placed your call on
-    hold", "hold par rakha hai", "होल्ड पर राख्यो छे".
-  Note: buyer saying "hold on" themselves → Short Hangup, NOT this. This applies only when
-    the carrier/PBX automated message appears as a transcript turn.
-  → "Could Not Confirm"
-
-WRONG NUMBER
-  Condition: person who answered confirmed the number belongs to someone else.
-  → "Wrong Number"
-
-LANGUAGE ISSUE
-  Condition: communication was entirely impossible throughout the call due to language mismatch.
-  → "Language Issue"
-
-ABUSIVE LEAD
-  Condition: a live HUMAN was abusive or used profanity. NOT automated system messages —
-    phrases like "hang up" or "call cannot be taken" from IVR/voicemail are NEVER abusive.
-  → "Abusive Lead"
-
-DNC
-  Condition: buyer explicitly asked not to be contacted again.
-  Examples: "dobara mat call karna", "remove my number", "number हटा दो".
-  → "DNC Client : Don't Call Further"
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-TIER 2 — OPERATIONAL ROUTING
-━━━━━━━━━━━━━━━━━━━━━━━━
-Check these before qualification outcomes (Tier 3).
-
-SELLER INTENT
-  Condition: caller is on the supply/service side — NOT a buyer.
-  Signals: offering own products/services, seeking manufacturing contracts, wanting to list
-    on JD, or supplying the exact product being discussed.
-  Strict: must be clear from what the caller SAYS. A manufacturer buying materials for their
-    own use is still a buyer.
-  → "Seller Intent"
-
-ALREADY SPOKEN
-  Condition: requirement already discussed with JD/seller, OR requirement already fulfilled/no longer active.
-  Examples: "already purchased", "kaam ho gaya", "le liya", "sorted", "already spoken to seller",
-    "ab nahi hai" / "nahi ab nahi hai" (not anymore — requirement existed but is now gone/fulfilled),
-    "ho gaya" / "khatam ho gaya" / "pura ho gaya" (done / finished / completed),
-    "already hua" / "already le liya" / "already connected" / "already kisi ne baat ki",
-    "requirement complete ho gaya" / "jo requirement tha wo complete ho chuka hai" /
-    "already requirement complete" — requirement existed and has since been fulfilled.
-  PURCHASE SIGNALS (always Already Spoken, never Not Interested):
-    "ले लिया है" / "ले लिया" / "le liya" — product has already been purchased/acquired.
-    "खरीद लिया" / "khareed liya" — already bought.
-    "close ho gaya" / "क्लोज हो गया" / "close hua" / "band ho gaya" — requirement closed/done.
-    "ho gaya maadam" / "ho gaya sir" + any completion signal — requirement has been fulfilled.
-    The agent's NI closing phrase ("कोई बात नहीं") appearing after a purchase signal does NOT
-    override the purchase signal — the buyer fulfilled the requirement, that is Already Spoken.
-  KEY RULE: if the buyer uses "ab" (now/anymore) to negate the requirement — "ab nahi chahiye",
-    "ab nahi hai", "pehle tha ab nahi", "ab zaroorat nahi" — treat as Already Spoken, NOT Not
-    Interested. The "ab" signals the requirement existed before and has since been resolved.
-  → "Already Spoken"
-
-CALL RESCHEDULED
-  Condition: buyer asked to be called at a SPECIFIC date and/or time.
-  Strict: "baad mein / call later / abhi busy hoon" without a specific time → Could Not
-    Confirm (Tier 4), NOT this outcome.
-  EXCEPTION: if valid_spec_count ≥ 1 AND product_confirmed — do NOT use this outcome.
-    The enrichment data is complete and valuable. Evaluate Tier 3 (Enriched/Approved) instead.
-  PATTERN — product correction + callback: buyer opens with "नहीं" but IMMEDIATELY corrects
-    to a specific product variant ("नहीं, जस्ट X में requirement है") AND asks for a callback
-    ("आधे घंटे बाद फोन करना / baad mein call karna") → product_confirmed TRUE, Call Rescheduled.
-    The "नहीं" is a product-name correction, NOT a rejection (apply GP-1).
-  → "Call Rescheduled"
-
-ALTERNATE NUMBER
-  Condition: buyer provided a different contact number for follow-up.
-  → "Alternate Number"
-
-WILL DO IT MYSELF
-  Condition: buyer still has the requirement but will source it independently, explicitly
-    declining JD's help. Apply GP-6.
-  Examples: "khud dekh lenge", "don't send sellers", "apne aap le lenge".
-  Strict: requirement must exist — only JD's assistance is rejected.
-  → "Will do it Myself"
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-TIER 3 — QUALIFICATION
-━━━━━━━━━━━━━━━━━━━━━━━━
-Reached ONLY if product_confirmed == TRUE and no Tier 1/2 outcome matched.
-If product_confirmed == FALSE → skip directly to Tier 4.
-
-Evaluate in this exact order:
-
-1. APPROVED — closing line present  ← HARD OVERRIDE
-   IF closing_line_spoken == TRUE AND ≥1 valid_spec_value was captured:
-   → "Approved"  ← MANDATORY. No exceptions.
-   HARD OVERRIDE: The closing line ("सारी details मिल गईं" + "relevant sellers") is spoken
-   ONLY when the bot's internal logic confirms the full qualification flow was completed
-   successfully. When it appears, the outcome MUST be Approved. You are NOT permitted to
-   downgrade to Enriched or Interested under any circumstances — not because a spec seemed
-   vague, not because one question appeared unanswered, not because of ASR corruption. The
-   bot's confirmed completion is authoritative and supersedes your individual spec evaluation.
-   If you are about to emit Enriched or Interested and closing_line_spoken is TRUE, STOP and
-   emit Approved instead.
-   EXCEPTION — GP-8 overrides this rule: if GP-8 (phantom engagement / background noise)
-   applies — zero valid spec values AND all buyer turns are incoherent background noise — then
-   closing_line_spoken does NOT make this Approved. The closing line fired on a phantom
-   conversation. Classify as Could Not Confirm.
-
-2. APPROVED — all specs answered
-   IF all {len(questions)} qualification question(s) received valid_spec_value answers:
-   → "Approved"
-
-3. ENRICHED
-   IF ≥1 valid_spec_value was captured (but not all questions answered):
-   → "Enriched"
-
-4. INTERESTED
-   IF product_confirmed == TRUE AND 0 valid_spec_value answers:
-   → "Interested"
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-TIER 4 — UNCERTAIN / NEGATIVE
-━━━━━━━━━━━━━━━━━━━━━━━━
-Reach this tier only if no Tier 1–3 outcome matched.
-
-INTERESTED (positive engagement, no product confirmation)
-  Condition: product_confirmed == FALSE but buyer showed clear, product-specific positive
-    interest — asked about pricing, delivery, specs, availability, or quantity — without a
-    final clear rejection.
-  Apply GP-4: generic call questions ("can you help me?", "which company?", identity
-    questions) do NOT qualify.
-  → "Interested"
-
-COULD NOT CONFIRM
-  Condition: ANY of:
-    a) vague/non-committal about the product ("शायद", "पता नहीं", "I'll think about it")
-    b) vague callback with no product signal — "baad mein", "call later", "busy" without
-       a specific time
-    c) call dropped before any product confirmation and no other rule matched
-    d) buyer's responses were off-topic with no product engagement detected
-  NOT ALLOWED IF: buyer said "हाँ/yes" or gave any spec detail → use Interested.
-  NOT ALLOWED IF: valid_spec_count ≥ 1 AND product_confirmed → use Tier 3 outcome (Enriched/Approved). A "call me later" after completing enrichment does not undo the collected data.
-  NOT ALLOWED IF: buyer clearly rejected → use Not Interested.
-  NOT ALLOWED IF: the agent asked ANY qualification question from the schema listed above
-    (see GP-7 — agent progression structurally proves product_confirmed is TRUE; Could Not
-    Confirm requires product_confirmed == FALSE or never reached). Use Interested minimum.
-  → "Could Not Confirm"
-
-Disambiguation:
-  product_topic_reached | product engagement     | final stance     → outcome
-  FALSE                 | none (bare signals)    | —                → Short Hangup (Tier 1)
-  TRUE                  | vague / off-topic      | unclear          → Could Not Confirm
-  TRUE                  | product-specific       | unclear          → Interested (Tier 4)
-  TRUE                  | product-specific       | explicit reject  → Not Interested
-  TRUE                  | any                    | self-source      → Will do it Myself (Tier 2)
-
-NOT INTERESTED
-  Condition: buyer CONSISTENTLY and CLEARLY stated they do not need the product. The
-    requirement itself is entirely gone AND was never fulfilled elsewhere.
-  ALL must be true:
-    ✓ buyer explicitly rejected the product (not just an initial reflex "नहीं")
-    ✓ NO positive engagement, NO spec answers, NO product questions anywhere in the call
-    ✓ buyer's FINAL overall stance is negative
-    ✓ cannot be explained by Seller Intent / Will do it Myself / Already Spoken / Wrong Number
-  STRICT EXCLUSION — sub-question "नहीं": if the buyer said "नहीं" / "नहीं है" /
-    "कुछ नहीं है पसंद" / "वैसे तो कुछ नहीं चाहिए" in reply to a spec sub-question
-    (quantity, type, size, grade, preference — anything after the opening) AND the agent then
-    continued asking further spec questions, product_confirmed is TRUE (GP-7). NOT ALLOWED
-    here — classify as Enriched or Interested minimum.
-  STRICT EXCLUSION — active browsing: buyer saying "लेना था" / "check kar raha tha" /
-    "dekhna tha" / "सोच रहा था लेना" with no clear final rejection — apply GP-1 (active
-    consideration). NOT ALLOWED here — classify as Interested or Could Not Confirm.
-  STRICT EXCLUSION: if buyer uses temporal language — "ab nahi chahiye", "ab nahi hai",
-    "pehle tha ab nahi", "nahi ab nahi" — the requirement existed before and is now gone.
-    This is Already Spoken (fulfilled), NOT Not Interested.
-  STRICT EXCLUSION — purchase fulfilled: if buyer says "ले लिया" / "le liya" / "khareed liya" /
-    "खरीद लिया" / "close ho gaya" / "क्लोज हो गया" / "ho gaya" referring to the requirement —
-    the product was purchased or the need was closed elsewhere. This is Already Spoken, NOT
-    Not Interested. The agent's NI closing appearing after this does NOT change the outcome.
-  STRICT EXCLUSION — trading/reseller: if buyer indicates they are in a trading/reseller
-    business ("ट्रेडिंग का", "trading business", "hum trading karte hain") — they are on the
-    supply side, NOT a consumer rejecting the product. This is Seller Intent, NOT Not Interested.
-  Apply GP-1 (POSITIVE PROGRESSION) and GP-3 (NEGATIVE TONE ≠ REJECTION).
-  → "Not Interested"
-
-TECHNICAL ISSUE
-  Condition: call connected but disrupted entirely by technical problems with no meaningful
-    exchange achieved. Strict: if any positive exchange occurred before the issue, use the
-    appropriate Tier 3 outcome instead.
-  → "Technical Issue - Call Connected"
-
-OTHER CASES
-  Use ONLY if truly none of the above applies after careful evaluation of all tiers.
-  → "Other Cases"
-
-Valid outcome values (use EXACT strings only):
-{disposition_options}
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-CONSISTENCY CHECK (mandatory before emitting JSON)
-━━━━━━━━━━━━━━━━━━━━━━━━
-After completing Step 2 (qna extraction), self-verify:
-• valid_spec_count ≥ 1 AND product_confirmed → outcome MUST be Enriched or Approved (never Interested, never Not Interested, never Call Rescheduled, never Could Not Confirm — spec data is complete and valuable regardless of any late buyer statement).
-• valid_spec_count == 0 AND product_confirmed AND NO explicit buyer rejection → outcome MUST be Interested (never Enriched or Approved).
-• valid_spec_count == 0 AND product_confirmed AND buyer explicitly rejected → outcome MUST be Not Interested (never Interested or Enriched).
-• closing_line_spoken AND product_confirmed AND valid_spec_count ≥ 1 → outcome MUST be Approved.
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 2 — EXTRACT QnA
-━━━━━━━━━━━━━━━━━━━━━━━━
-
-PRE-STEP (mandatory): Read the transcript sequentially. Each time the AGENT asks one of the
-listed qualification questions (in any language/paraphrase), record the question_id and the
-IMMEDIATELY FOLLOWING buyer turn as its raw answer.
-
-EXTRACTION RULES (all mandatory):
-
-1. POSITION RULE: Attribute each buyer response to the qualification question the AGENT asked
-   immediately before that buyer turn. Nth question asked = Nth buyer answer. Never reassign
-   based on answer format or data type.
-
-2. AGENT-CONFIRMATION RULE: If the buyer's response is garbled/unclear (STT noise),
-   verbose/embedded in a long sentence, OR missing entirely (no buyer turn between two agent
-   turns), and the AGENT's next turn explicitly restates or confirms a value (e.g. "ठीक है —
-   [value]", "okay, X", "aapne [value] bataya", "achha, [value]"), treat that agent-confirmed
-   value as the buyer's answer for the preceding question.
-   STT NUMBERS: agent may render Hindi numerals in romanized form — "das/dash"=10, "bees"=20,
-   "teen"=3, "paanch"=5, "sau"=100. "dash units note kar liya" means agent confirmed 10 units.
-   ANTI-HALLUCINATION: if buyer turn is missing AND agent gave no confirmed value, set
-   answ "Not Sure", opt_id null. A vague filler ("हम्म", "umm", "achha") followed by an
-   agent assumption is NOT a confirmed answer.
-   UNANSWERED FINAL QUESTION: transcript ends immediately after the agent's question with no
-   subsequent user OR agent turn → question is completely unanswered. Omit from qna entirely.
-
-3. CORRECTION RULE: If a buyer turn clearly corrects or confirms a PREVIOUSLY answered
-   question (does NOT match any option of the current question), update the prior answer —
-   do NOT assign to the current question.
-
-4. POST-WRAP-UP RULE: If the buyer speaks AFTER the agent's closing statement and clearly
-   answers an unanswered question, include it in qna.
-
-5. NO CROSS-TYPE REASSIGNMENT: a grade/spec answer stays with the spec question; a quantity
-   answer stays with the quantity question.
-
-6. OPT_ID MATCHING:
-   a. Exact match (case-insensitive) → use that option's id.
-   b. STT digit-drop: "40 GSM" vs option "140 GSM" (buyer value is a numeric suffix of the
-      option text) → use that option's id.
-   c. No match → set opt_id to null.
-
-7. QUANTITY FORMAT: For type=="quantity" questions, answ MUST be "<number> <unit>" (e.g.
-   "5 pieces"). Use buyer's unit if stated; else use first value from that question's
-   quantity_unit list. If buyer could not give a number → set answ to "Not Sure".
-   Apply this format ONLY to quantity questions — never to grade/spec answers.
-
-Each qna entry: {{"id": <qid>, "quest": <2–4 word English keyword label for the question — NOT the full text (e.g. "Material Type", "Brand Preference", "Usage Type", "Capacity")>, "answ": <normalized English answer>, "opt_id": <matching option id or null>}}
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 2B — EXTRACT BUSINESS DETAILS
-━━━━━━━━━━━━━━━━━━━━━━━━
-
-Extract these three fields from the full transcript. Do NOT infer or guess — only extract
-values explicitly stated by the buyer.
-
-  Field          | Value rules
-  is_business    | "True" if buyer confirmed business/commercial/shop/company use — this
-                 | INCLUDES a YES answer to the hot-lead gate question ("is this requirement
-                 | for your business?"), if that flow ran on this call (see Step 2C below);
-                 | "False" if buyer said personal/home use;
-                 | "" if not discussed or answer was unclear.
-  business_name  | Exact name buyer stated for their business/shop/company; "" if not stated.
-                 | MUST be in English — transliterate Devanagari/regional script to Roman letters
-                 | (e.g. "एस एस पोर्टेबल कैबिन" → "SS Portable Cabin").
-  business_city  | City buyer stated specifically for their business location; "" if not stated.
-                 | MUST be in English — use the standard English spelling of the city/state
-                 | (e.g. "भुवनेश्वर, उड़ीसा" → "Bhubaneswar, Odisha").
-                 | Do NOT use the buyer's personal city as business_city unless explicitly
-                 | stated in the context of their business during the call.
-
-If is_business is "False" or "" → set both business_name and business_city to "".
-{_hot_lead_step2c}
-━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 3 — RETURN JSON
-━━━━━━━━━━━━━━━━━━━━━━━━
-
-Return a SINGLE JSON object with EXACTLY these keys — no extra keys, no markdown, no explanation:
-{{
-  "call_outcome": "<one exact string from the valid outcome list>",
-  "call_outcome_description": "<the corresponding description from the list>",
-  "call_summary": "<1-2 sentence English summary of what happened on the call>",
-  "is_business": "<'True' | 'False' | '' — per Step 2B>",
-  "business_name": "<business name in English (transliterated if needed), or ''>",
-  "business_city": "<business city in English, or ''>",{_hot_lead_step3_keys}
-  "qna": [ ...entries per Step 2... ],
-  "product_change": {{"product_name": "<new product name>"}},  // or {{}} if no product switch
-  "rescheduled_to": "<ISO datetime YYYY-MM-DDTHH:MM:SS in IST if rescheduled, else ''>"
-}}
-
-STRICT OUTPUT RULES:
-- call_outcome MUST be one of the exact strings from the valid outcome list. Any deviation is an error.
-- Do NOT guess, hallucinate, or invent values. If unsure, choose the most conservative option.
-- Do NOT include null fields — use "" or {{}} as specified above.
-- Return ONLY the JSON object. No markdown fences, no commentary before or after."""
+    _analysis_prompt_ctx = {
+        "cut_note": cut_note,
+        "_wrong_opener_note": _wrong_opener_note,
+        "_truncated_greeting_note": _truncated_greeting_note,
+        "_phantom_connect_note": _phantom_connect_note,
+        "_identity_q_note": _identity_q_note,
+        "_reask_opening_note": _reask_opening_note,
+        "_user_sparse_note": _user_sparse_note,
+        "_trailing_agent_note": _trailing_agent_note,
+        "_product_confirmed_note": _product_confirmed_note,
+        "_duration_note": _duration_note,
+        "_biz_flag_note": _biz_flag_note,
+        "current_dt_str": current_dt_str,
+        "lines": lines,
+        "_muted_lines": _muted_lines,
+        "q_list": q_list,
+        "_agent_inference_section": _agent_inference_section,
+        "disposition_options": disposition_options,
+        "_hot_lead_step2c": _hot_lead_step2c,
+        "_hot_lead_step3_keys": _hot_lead_step3_keys,
+    }
+    prompt = _render_analysis_prompt(CALL_ANALYSIS_KEY, _analysis_prompt_ctx)
 
     try:
         url = (
@@ -2535,49 +2101,7 @@ async def generate_b2b_score(
 
     lines = "\n".join(f"{t['role'].upper()}: {t['text']}" for t in transcript)
 
-    prompt = f"""You are an expert B2B lead qualification analyst. Your task is to score a sales call transcript and return a structured JSON object. Score only what is explicitly stated — do not infer or assume missing information. If the user is talking about multiple products, consider only the main product in the conversation.
-
-SCORING RUBRIC (max 10 points)
-
-1. Requirement Intent (0–5 pts) — How certain is the prospect about purchasing?
-   → Explicit, confident intent ("we need", "we want to order")          5
-   → Positive but hedged ("probably", "thinking about it", "might")      3–4
-   → Vague or exploratory only ("just checking", "not sure yet")         1–2
-   → No intent, or explicitly not buying                                 0  → triggers final_score override (see rules)
-
-2. Requirement Clarity (0–3.5 pts) — How actionable is the stated requirement?
-   → Quantity + product type + specifications all clearly stated         3–3.5
-   → Quantity or specs stated, but not both                              1.5–2.5
-   → Neither quantity nor specs provided                                 0–1
-
-3. Engagement & Completion (0–1.5 pts) — Did the prospect actively participate?
-   → Answered all or most questions and stayed till the end              1.5
-   → Partial engagement, some questions skipped or deflected             0.5–1
-   → Dropped call or non-cooperative                                     0
-
-DERIVED FIELDS
-- urgency_flag: Set true if the prospect explicitly mentions urgency (e.g. "urgent", "ASAP", "by Friday", specific near deadline). Otherwise false.
-- extracted_quantity: The numeric quantity stated. If a range is given, return the average.
-- estimated_unit_price: Infer a reasonable B2B market price range per unit strictly in the Indian landscape, based on the product type and any constraints mentioned on the call. Return as an object with low and high values in INR.
-- estimated_deal_value: STRICTLY computed as extracted_quantity * ((estimated_unit_price.low + estimated_unit_price.high) / 2). Without fail, use the average of the unit price range, DO NOT use a not a low–high range of the value at any instance.
-- lead_category: Based on final_score — "High" (7–10), "Medium" (4–6.9), "Low" (0–3.9).
-
-HARD RULES
-1. If requirement_intent_score = 0, set final_score = 0 immediately and do not compute other scores.
-2. final_score = requirement_intent_score + clarity_score + engagement_score. No other formula.
-3. Score buying signals only — ignore tone, sentiment, and politeness.
-4. The reason field must follow this structure: [what signals intent] · [what clarity gaps exist, if any] · [engagement observation].
-5. A relevant short or single-word answer ("yes", "correct", "confirmed") given in direct response to a question counts as fully valid for that dimension. Do not penalize brevity — score the signal, not the elaboration.
-
-OUTPUT — strict JSON, no additional keys or commentary:
-{{
-  "deal_value": "<estimated deal value as a plain number string with no currency symbol, e.g. '75000', or '' if cannot be determined>",
-  "lead_intent_score": "<final_score as a string, e.g. '7.5'>",
-  "urgency_flag": "<'yes' if urgency detected, 'no' otherwise>"
-}}
-
-CONVERSATION TO ANALYZE:
-{lines}"""
+    prompt = _render_analysis_prompt(B2B_SCORE_KEY, {"lines": lines})
 
     try:
         url = (

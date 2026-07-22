@@ -3,10 +3,11 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 
+from ..analysis_prompts import list_analysis_prompts, update_analysis_prompt
 from ..audit import log_audit
 from ..auth import require_user
 from ..db import db, language_settings
-from ..models import LanguageSettingsUpsert, LibraryPhraseCreate, OutcomeEntryUpdate
+from ..models import AnalysisPromptUpdate, LanguageSettingsUpsert, LibraryPhraseCreate, OutcomeEntryUpdate
 
 router = APIRouter(prefix="/api/library", tags=["library"])
 
@@ -94,3 +95,20 @@ def delete_language_setting(language_id: str, user: dict = Depends(require_user)
         raise HTTPException(404, "Language setting not found")
     log_audit(user, "delete", "language_setting", language_id)
     return {"ok": True}
+
+
+@router.get("/analysis-prompts")
+def list_analysis_prompts_route(_: dict = Depends(require_user)) -> list[dict]:
+    return list_analysis_prompts()
+
+
+@router.put("/analysis-prompts/{key}")
+def update_analysis_prompt_route(key: str, payload: AnalysisPromptUpdate, user: dict = Depends(require_user)) -> dict:
+    try:
+        doc = update_analysis_prompt(key, payload.prompt_template, user.get("sub", "unknown"))
+    except KeyError:
+        raise HTTPException(404, "Unknown analysis prompt key")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    log_audit(user, "update", "analysis_prompt", key)
+    return doc
