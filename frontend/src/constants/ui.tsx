@@ -8,7 +8,6 @@ import {
   ClipboardList,
   Clock3,
   FileText,
-  Gauge,
   IndianRupee,
   Megaphone,
   Phone,
@@ -105,7 +104,6 @@ export const CMD_VIEWS: CmdKViewResult[] = [
   { kind: 'view', view: 'test',          label: 'Test Call',     icon: <PhoneCall size={15} />,    description: 'Run a browser call' },
   { kind: 'view', view: 'transcripts',   label: 'Transcripts',   icon: <FileText size={15} />,     description: 'Browse call transcripts' },
   { kind: 'view', view: 'analytics',     label: 'Analytics',     icon: <BarChart2 size={15} />,    description: 'Outcomes and quality' },
-  { kind: 'view', view: 'observability', label: 'Observability', icon: <Gauge size={15} />,        description: 'LiveKit and latency' },
   { kind: 'view', view: 'library',       label: 'Library',       icon: <BookOpen size={15} />,     description: 'Phrase library' },
   { kind: 'view', view: 'settings',      label: 'Settings',      icon: <Settings size={15} />,     description: 'Runtime settings' },
   { kind: 'view', view: 'audit_log',     label: 'Audit Log',     icon: <ClipboardList size={15} />, description: 'Admin mutation history' },
@@ -119,5 +117,4 @@ export const SHORTCUT_MAP: Array<{ key: string; view: View; label: string }> = [
   { key: 't', view: 'test',          label: 'Go to Test Call' },
   { key: 'x', view: 'transcripts',   label: 'Go to Transcripts' },
   { key: 'a', view: 'analytics',     label: 'Go to Analytics' },
-  { key: 'o', view: 'observability', label: 'Go to Observability' },
 ];
