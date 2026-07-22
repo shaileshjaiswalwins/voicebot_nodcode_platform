@@ -247,6 +247,37 @@ class SetStatusRequest(BaseModel):
     status: str
 
 
+class CampaignLead(BaseModel):
+    """A single contact/row imported from a campaign's CSV. `vars` holds every CSV
+    column beyond phone_number/name verbatim, so the prompt injector (`{{col}}`) can
+    reference any of them without the schema knowing column names in advance."""
+
+    id: str = Field(alias="_id")
+    campaign_id: str
+    phone_number: str
+    name: str | None = None
+    vars: dict[str, str] = Field(default_factory=dict)
+    status: Literal["pending", "dialing", "completed", "failed"] = "pending"
+    call_id: str | None = None
+    estimated_cost: float | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class CampaignLeadUploadResult(BaseModel):
+    total: int
+    imported: int
+    skipped: int
+
+
+class PromptTemplateRequest(BaseModel):
+    prompt_template: str
+
+
+class PromptValidationResult(BaseModel):
+    unknown_vars: list[str]
+
+
 class LibraryPhraseCreate(BaseModel):
     category: Literal["voicemail", "hold_music", "dnc_trigger"]
     text: str

@@ -24,6 +24,7 @@ def _clean_db():
         db_module.db["tbl_ai_vb_library_phrases"],
         db_module.db["tbl_ai_vb_outcome_catalog"],
         db_module.phone_numbers,
+        db_module.audit_log,
     ):
         coll.delete_many({})
     yield

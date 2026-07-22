@@ -33,3 +33,10 @@ language_settings = db["tbl_ai_vb_language_settings"]
 phone_numbers = db["tbl_ai_vb_phone_numbers"]
 transcripts = db["tbl_ai_vb_call_transcripts"]
 audit_log = db["tbl_ai_vb_audit_log"]
+campaign_leads = db["tbl_ai_vb_campaign_leads"]
+campaign_leads.create_index([("campaign_id", 1), ("phone_number", 1)])
+call_logs = db["tbl_ai_vb_call_logs"]
+call_jobs = db["tbl_ai_vb_call_jobs"]
+# Matches the claim-query predicate in campaign_execution.claim_next_job (campaign_id +
+# status), not just an insertion-order index — see plans/03 Day 2.5 checklist.
+call_jobs.create_index([("campaign_id", 1), ("status", 1)])
