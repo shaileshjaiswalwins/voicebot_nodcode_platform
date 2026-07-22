@@ -34,3 +34,7 @@ DESIGN-IS-*/
 
 # Stray __pycache__-only scratch dir (no source files), not part of the project
 voicebot_platform/
+
+# Local per-machine tool tuning, not shared project config
+.claude/proven-config.json
+.claude/.proven-config-version
