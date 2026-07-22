@@ -7,13 +7,17 @@ function slugify(label: string): string {
   return label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
-function emptyEntry(): PricingModelEntry {
-  return { key: '', label: '', cost_inr_per_min: 0 };
+function emptyEntry(company = ''): PricingModelEntry {
+  return { key: '', label: '', cost_inr_per_min: 0, company };
 }
 
-/** One editable row-list for a pricing category (STT/LLM/TTS/Telephony). `withEstimates`
- * shows the extra latency/token fields — only meaningful for LLM entries, which drive the
- * per-bot Agent details card's Latency/Tokens rows (see utils/agentCost.ts). */
+const UNGROUPED = 'Other';
+
+/** One editable row-list for a pricing category (STT/LLM/TTS/Telephony), grouped by
+ * `company` so it matches the two-level Company → Model picker in the Agent Builder's
+ * LLM tab. `withEstimates` shows the extra latency/token fields — only meaningful for LLM
+ * entries, which drive the per-bot Agent details card's Latency/Tokens rows (see
+ * utils/agentCost.ts). */
 function PricingCategoryEditor({
   title, hint, entries, onChange, withEstimates,
 }: {
@@ -39,6 +43,15 @@ function PricingCategoryEditor({
     onChange(entries.filter((_, i) => i !== index));
   }
 
+  const knownCompanies = Array.from(new Set(entries.map((e) => e.company).filter((c): c is string => Boolean(c)))).sort();
+  const groups = new Map<string, number[]>();
+  entries.forEach((e, i) => {
+    const company = e.company || UNGROUPED;
+    if (!groups.has(company)) groups.set(company, []);
+    groups.get(company)!.push(i);
+  });
+  const groupNames = Array.from(groups.keys()).sort((a, b) => (a === UNGROUPED ? 1 : b === UNGROUPED ? -1 : a.localeCompare(b)));
+
   return (
     <div className="panel compact">
       <div className="panel-header">
@@ -48,10 +61,24 @@ function PricingCategoryEditor({
         </div>
         <button onClick={addRow}><Plus size={14} /> Add {title}</button>
       </div>
-      <div className="pricing-row-list">
-        {entries.length === 0 && <p className="muted">No entries yet.</p>}
-        {entries.map((entry, i) => (
+      {entries.length === 0 && <p className="muted">No entries yet.</p>}
+      {groupNames.map((company) => (
+        <div className="pricing-company-group" key={company}>
+          <h3 className="pricing-company-heading">{company}</h3>
+          <div className="pricing-row-list">
+            {groups.get(company)!.map((i) => {
+              const entry = entries[i];
+              return (
           <div className="pricing-row" key={i}>
+            <label className="pricing-row-field">
+              Company
+              <input
+                list="pricing-company-options"
+                value={entry.company || ''}
+                placeholder="e.g. Google"
+                onChange={(e) => updateRow(i, { company: e.target.value })}
+              />
+            </label>
             <input
               className="pricing-row-label"
               value={entry.label}
@@ -112,8 +139,16 @@ function PricingCategoryEditor({
               <Trash2 size={14} />
             </button>
           </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      <datalist id="pricing-company-options">
+        {Array.from(new Set([...knownCompanies, 'Google', 'OpenAI', 'Anthropic', 'Sarvam', 'Deepgram', 'ElevenLabs', 'Cartesia', 'Plivo', 'Platform'])).map((c) => (
+          <option key={c} value={c} />
         ))}
-      </div>
+      </datalist>
     </div>
   );
 }

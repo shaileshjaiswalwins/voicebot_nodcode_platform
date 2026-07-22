@@ -278,6 +278,7 @@ class PricingModelEntry(BaseModel):
     key: str
     label: str
     cost_inr_per_min: float
+    company: str = ""
     latency_ms_min: int | None = None
     latency_ms_max: int | None = None
     tokens_min: int | None = None

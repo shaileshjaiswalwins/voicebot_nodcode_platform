@@ -481,6 +481,9 @@ kbd.kbd { display: inline-flex; align-items: center; justify-content: center; mi
 .pricing-row-label { flex: 1 1 180px; min-width: 140px; }
 .pricing-row-field { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.72rem; color: var(--muted); min-width: 90px; }
 .pricing-row-field input { width: 100%; }
+.pricing-company-group { margin-top: 0.75rem; }
+.pricing-company-group:first-of-type { margin-top: 0; }
+.pricing-company-heading { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 0.4rem; }
 .skeleton-cell { background: linear-gradient(90deg, var(--surface-2) 25%, #eaeaea 50%, var(--surface-2) 75%); background-size: 200% 100%; animation: skeleton-shimmer 1.4s infinite; border-radius: 4px; height: 1rem; }
 @keyframes skeleton-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 .rotate-180 { transform: rotate(180deg); }

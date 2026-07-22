@@ -158,6 +158,7 @@ export type PricingModelEntry = {
   key: string;
   label: string;
   cost_inr_per_min: number;
+  company?: string;
   latency_ms_min?: number | null;
   latency_ms_max?: number | null;
   tokens_min?: number | null;

@@ -17,9 +17,25 @@ _DOC_ID = "pricing_config"
 _DEFAULT_LLM_LATENCY_TOKENS = {
     "gemini_2_5_flash": {"latency_ms_min": 850, "latency_ms_max": 1300, "tokens_min": 500, "tokens_max": 900},
     "gemini_3_1_flash_lite": {"latency_ms_min": 970, "latency_ms_max": 1450, "tokens_min": 597, "tokens_max": 1000},
+    "gemini_3_1_pro": {"latency_ms_min": 1150, "latency_ms_max": 1800, "tokens_min": 650, "tokens_max": 1150},
     "gpt_4o_mini": {"latency_ms_min": 900, "latency_ms_max": 1350, "tokens_min": 550, "tokens_max": 950},
+    "gpt_4_1": {"latency_ms_min": 950, "latency_ms_max": 1450, "tokens_min": 580, "tokens_max": 980},
     "gpt_4o": {"latency_ms_min": 1100, "latency_ms_max": 1700, "tokens_min": 650, "tokens_max": 1100},
     "claude_3_5_sonnet": {"latency_ms_min": 1100, "latency_ms_max": 1700, "tokens_min": 650, "tokens_max": 1100},
+}
+
+
+# Labels the generic key.replace("_", "-") reconstruction gets wrong (version-number dots,
+# or a provider-prefix that shouldn't be part of the model id) — these entries are the exact
+# strings passed straight through to pipeline_providers.py / the LLM API, so they must match
+# the real provider model name, not just look similar.
+_LABEL_OVERRIDES = {
+    "gpt_4_1": "gpt-4.1",
+    "gemini_2_5_flash": "gemini-2.5-flash",
+    "gemini_3_1_flash_lite": "gemini-3.1-flash-lite",
+    "gemini_3_1_pro": "gemini-3.1-pro",
+    "deepgram_nova2": "nova-2",
+    "deepgram_flux": "flux",
 }
 
 
@@ -27,7 +43,9 @@ def _default_entries(rates: dict[str, float], with_latency_tokens: bool = False)
     entries = []
     for key, cost in rates.items():
         extra = _DEFAULT_LLM_LATENCY_TOKENS.get(key, {}) if with_latency_tokens else {}
-        entries.append(PricingModelEntry(key=key, label=key.replace("_", "-"), cost_inr_per_min=cost, **extra))
+        company = pricing.MODEL_COMPANY.get(key, "")
+        label = _LABEL_OVERRIDES.get(key, key.replace("_", "-"))
+        entries.append(PricingModelEntry(key=key, label=label, cost_inr_per_min=cost, company=company, **extra))
     return entries
 
 

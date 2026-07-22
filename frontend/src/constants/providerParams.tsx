@@ -55,7 +55,7 @@ export const SARVAM_TTS_FIELDS: ParamField[] = [
 
 // ── Gemini LLM ────────────────────────────────────────────────────────────────
 export const GEMINI_LLM_FIELDS: ParamField[] = [
-  { key: 'model', label: 'Model', kind: 'select', options: ['gemini-2.5-flash', 'gemini-3.1-flash-lite'], placeholder: 'gemini-3.1-flash-lite', hint: 'Which Gemini model handles the conversation. Affects both response quality/speed and cost per minute.' },
+  { key: 'model', label: 'Model', kind: 'select', options: ['gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-3.1-pro'], placeholder: 'gemini-3.1-flash-lite', hint: 'Which Gemini model handles the conversation. Affects both response quality/speed and cost per minute.' },
   { key: 'top_p', label: 'Top-p', kind: 'number', min: 0, max: 1, step: 0.05, hint: 'Nucleus sampling (0–1): consider only the most probable tokens summing to this mass. Lower = more focused.' },
   { key: 'top_k', label: 'Top-k', kind: 'number', min: 0, step: 1, hint: 'Sample only from the K most likely tokens. Lower = more focused; 0/blank = disabled.' },
   { key: 'presence_penalty', label: 'Presence penalty', kind: 'number', min: -2, max: 2, step: 0.1, hint: 'Penalise tokens already used, encouraging new topics (-2 to 2).' },
