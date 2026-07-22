@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   Ban, CheckCircle2, ChevronRight, GitBranch, HelpCircle, Layers,
-  Megaphone, Pause, Pencil, PhoneOff, Plus, RefreshCw, Save, Trash2
+  Megaphone, Pause, Pencil, PhoneOff, Plus, RefreshCw, Save, Trash2, Users
 } from 'lucide-react';
 import type {
   AttemptStep, Bot as BotType, CallWindow, Campaign,
@@ -17,6 +17,7 @@ import { Spinner } from '../components/Spinner';
 import { Tooltip } from '../components/Tooltip';
 import { OUTCOME_CATEGORIES, DEFAULT_OUTCOME_RULES } from '../constants/outcomes';
 import { DAY_OPTIONS } from '../constants/dialing';
+import { CampaignLeadsPanel } from './CampaignLeadsPanel';
 
 export function buildDefaultStrategy(): DialingStrategy {
   return {
@@ -515,6 +516,7 @@ export function CampaignsView({
   workspaceMode,
   selectedCampaignKey,
   onSelectCampaign,
+  onSelectCampaignLeads,
   onBackToList,
   onSaveStrategy,
   saveState,
@@ -530,9 +532,10 @@ export function CampaignsView({
   languages: LanguageOption[];
   outcomes: OutcomeEntry[];
   loading?: boolean;
-  workspaceMode: 'list' | 'strategy';
+  workspaceMode: 'list' | 'strategy' | 'leads';
   selectedCampaignKey: string;
   onSelectCampaign: (key: string) => void;
+  onSelectCampaignLeads?: (key: string) => void;
   onBackToList: () => void;
   onSaveStrategy: (key: string, name: string, strategy: DialingStrategy) => Promise<void>;
   saveState?: 'idle' | 'running' | 'failed';
@@ -594,6 +597,10 @@ export function CampaignsView({
         saveState={saveState}
       />
     );
+  }
+
+  if (workspaceMode === 'leads' && selectedCampaign) {
+    return <CampaignLeadsPanel campaign={selectedCampaign} onBack={onBackToList} />;
   }
 
   return (
@@ -683,6 +690,11 @@ export function CampaignsView({
                   <button onClick={() => onSelectCampaign(campaign.campaign_key)}>
                     <Layers size={14} /> Strategy
                   </button>
+                  {onSelectCampaignLeads && (
+                    <button onClick={() => onSelectCampaignLeads(campaign.campaign_key)}>
+                      <Users size={14} /> Leads
+                    </button>
+                  )}
                   <RowActions
                     item={campaign}
                     onEdit={setEditTarget}

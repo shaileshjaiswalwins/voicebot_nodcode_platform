@@ -55,6 +55,24 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+// Like request(), but for multipart/form-data bodies — must not set Content-Type
+// (the browser sets it with the correct boundary).
+async function requestForm<T>(path: string, formData: FormData): Promise<T> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const response = await fetch(apiUrl(path), { method: 'POST', headers, body: formData });
+  if (response.status === 401) {
+    clearToken();
+  }
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new ApiError(response.status, body || response.statusText);
+  }
+  return response.json() as Promise<T>;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -106,6 +124,45 @@ export type Campaign = {
   status?: string;
   dialing_strategy?: DialingStrategy;
   lead_api?: { url?: string; endpoint?: string };
+  prompt_template?: string;
+};
+
+export type CampaignLeadStatus = 'pending' | 'dialing' | 'completed' | 'failed';
+
+export type CampaignLead = {
+  _id: string;
+  campaign_id: string;
+  phone_number: string;
+  name?: string;
+  vars: Record<string, string>;
+  status: CampaignLeadStatus;
+  call_id?: string;
+  estimated_cost?: number;
+};
+
+export type CampaignLeadUploadResult = {
+  total: number;
+  imported: number;
+  skipped: number;
+};
+
+export type CampaignProgress = {
+  queued: number;
+  in_progress: number;
+  completed: number;
+  failed: number;
+  total: number;
+};
+
+export type CallDetail = {
+  call_id: string;
+  status: string | null;
+  cost_inr: Record<string, number>;
+  latency_ms: Record<string, number>;
+  transcript: Array<{ role?: string; text?: string; [key: string]: unknown }>;
+  call_duration_sec?: number | null;
+  recording_url?: string;
+  analysis?: Record<string, unknown>;
 };
 
 export type PhoneNumberEnvironment = 'dev' | 'preprod' | 'prod';
@@ -413,6 +470,36 @@ export const api = {
   deleteCampaign(key: string): Promise<{ ok: boolean }> {
     return request(`/api/campaigns/${key}`, { method: 'DELETE' });
   },
+  uploadCampaignLeads(key: string, file: File): Promise<CampaignLeadUploadResult> {
+    const formData = new FormData();
+    formData.append('file', file);
+    return requestForm(`/api/campaigns/${key}/leads`, formData);
+  },
+  getCampaignLeads(key: string, status?: CampaignLeadStatus): Promise<CampaignLead[]> {
+    const qs = status ? `?status=${status}` : '';
+    return request(`/api/campaigns/${key}/leads${qs}`);
+  },
+  startCampaign(key: string): Promise<CampaignProgress & { enqueued: number }> {
+    return request(`/api/campaigns/${key}/start`, { method: 'POST' });
+  },
+  getCampaignProgress(key: string): Promise<CampaignProgress> {
+    return request(`/api/campaigns/${key}/progress`);
+  },
+  getCallDetail(key: string, callId: string): Promise<CallDetail> {
+    return request(`/api/campaigns/${key}/calls/${callId}`);
+  },
+  saveCampaignPromptTemplate(key: string, promptTemplate: string): Promise<Campaign> {
+    return request(`/api/campaigns/${key}/prompt`, {
+      method: 'PUT',
+      body: JSON.stringify({ prompt_template: promptTemplate }),
+    });
+  },
+  validateCampaignPromptTemplate(key: string, promptTemplate: string): Promise<{ unknown_vars: string[] }> {
+    return request(`/api/campaigns/${key}/prompt/validate`, {
+      method: 'POST',
+      body: JSON.stringify({ prompt_template: promptTemplate }),
+    });
+  },
 
   // phone numbers
   phoneNumbers(): Promise<PhoneNumber[]> {
@@ -479,7 +566,6 @@ export const api = {
   deleteLanguageSetting(id: string): Promise<{ ok: boolean }> {
     return request(`/api/library/languages/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
-
   // audit log
   auditLog(params: { resource_type?: string; action?: string; actor?: string; limit?: number; offset?: number } = {}): Promise<{ items: AuditLogEntry[]; total: number }> {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => [k, String(v)]));
