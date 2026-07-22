@@ -274,6 +274,23 @@ class PromptTemplateRequest(BaseModel):
     prompt_template: str
 
 
+class PricingModelEntry(BaseModel):
+    key: str
+    label: str
+    cost_inr_per_min: float
+    latency_ms_min: int | None = None
+    latency_ms_max: int | None = None
+    tokens_min: int | None = None
+    tokens_max: int | None = None
+
+
+class PricingConfig(BaseModel):
+    stt: list[PricingModelEntry] = Field(default_factory=list)
+    llm: list[PricingModelEntry] = Field(default_factory=list)
+    tts: list[PricingModelEntry] = Field(default_factory=list)
+    telephony: list[PricingModelEntry] = Field(default_factory=list)
+
+
 class PromptValidationResult(BaseModel):
     unknown_vars: list[str]
 

@@ -27,6 +27,7 @@ def _clean_db():
         db_module.db["tbl_ai_vb_analysis_prompts"],
         db_module.phone_numbers,
         db_module.audit_log,
+        db_module.db["tbl_ai_vb_pricing_config"],
     ):
         coll.delete_many({})
     analysis_prompts_module._cache.clear()
