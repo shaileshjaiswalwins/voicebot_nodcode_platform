@@ -168,14 +168,21 @@ def start_campaign(campaign_key: str, user: dict = Depends(require_user)) -> dic
     if not campaigns.find_one({"campaign_key": campaign_key}):
         raise HTTPException(404, "Campaign not found")
     enqueued = campaign_execution.enqueue_pending_leads(campaign_key)
-    campaigns.update_one({"campaign_key": campaign_key}, {"$set": {"status": "active"}})
+    status = campaign_execution.derive_campaign_status(campaign_key, "active")
+    campaigns.update_one({"campaign_key": campaign_key}, {"$set": {"status": status}})
     log_audit(user, "start_campaign", "campaign", campaign_key, {"enqueued": enqueued})
     return {"enqueued": enqueued, **campaign_execution.progress_counts(campaign_key)}
 
 
 @router.get("/{campaign_key}/progress")
 def get_progress(campaign_key: str, _: dict = Depends(require_user)) -> dict:
-    return campaign_execution.progress_counts(campaign_key)
+    counts = campaign_execution.progress_counts(campaign_key)
+    campaign = campaigns.find_one({"campaign_key": campaign_key})
+    if campaign:
+        new_status = campaign_execution.derive_campaign_status(campaign_key, campaign.get("status"))
+        if campaign.get("status") != new_status:
+            campaigns.update_one({"campaign_key": campaign_key}, {"$set": {"status": new_status}})
+    return counts
 
 
 @router.post("/{campaign_key}/claim")
@@ -201,6 +208,10 @@ def complete_job(campaign_key: str, job_id: str, payload: dict, user: dict = Dep
     )
     if not job:
         raise HTTPException(404, "Job not found")
+    campaign = campaigns.find_one({"campaign_key": campaign_key})
+    new_status = campaign_execution.derive_campaign_status(campaign_key, campaign.get("status") if campaign else None)
+    if campaign and campaign.get("status") != new_status:
+        campaigns.update_one({"campaign_key": campaign_key}, {"$set": {"status": new_status}})
     log_audit(user, "complete_call_job", "campaign", campaign_key, {"job_id": job_id, "status": status})
     return _serialize(job)
 

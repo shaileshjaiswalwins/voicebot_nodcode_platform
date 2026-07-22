@@ -141,3 +141,22 @@ def progress_counts(campaign_key: str) -> dict:
         counts["total"] += 1
         counts[job["status"]] = counts.get(job["status"], 0) + 1
     return counts
+
+
+DRAFT_STATUS = "draft"
+COMPLETED_STATUS = "completed"
+
+
+def derive_campaign_status(campaign_key: str, current_status: str | None) -> str:
+    """Auto-derives a campaign's status from its call_jobs queue state, per plans/03's
+    definition: draft = never started (no jobs ever enqueued), completed = every enqueued
+    job has left the queue (nothing queued or in_progress — "in-queue" is zero). Otherwise
+    the operator's own active/paused choice wins unchanged — this only ever moves a
+    campaign INTO draft or completed, never overrides active/paused while dialing is still
+    in flight, so it can't fight with claim_next_job's pause enforcement."""
+    counts = progress_counts(campaign_key)
+    if counts["total"] == 0:
+        return DRAFT_STATUS
+    if counts["queued"] == 0 and counts["in_progress"] == 0:
+        return COMPLETED_STATUS
+    return current_status or "active"

@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+from bson import ObjectId
+
 from backend import campaign_execution
 from backend.db import call_jobs, campaign_leads, campaigns, transcripts
 
@@ -212,3 +214,55 @@ def test_complete_job_endpoint_rejects_bad_status(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 400
+
+
+def test_derive_campaign_status_draft_when_no_jobs_ever_enqueued(client):
+    campaigns.update_one({"campaign_key": "never_started"}, {"$set": {"campaign_key": "never_started"}}, upsert=True)
+    assert campaign_execution.derive_campaign_status("never_started", None) == "draft"
+
+
+def test_derive_campaign_status_completed_when_queue_empty(client):
+    _seed_leads("status_completed_camp", 1)
+    campaign_execution.enqueue_pending_leads("status_completed_camp")
+    job = campaign_execution.claim_next_job("status_completed_camp")
+    campaign_execution.complete_job(job["_id"], "completed")
+    assert campaign_execution.derive_campaign_status("status_completed_camp", "active") == "completed"
+
+
+def test_derive_campaign_status_leaves_active_paused_alone_while_queue_has_work(client):
+    _seed_leads("status_in_progress_camp", 2)
+    campaign_execution.enqueue_pending_leads("status_in_progress_camp")
+    assert campaign_execution.derive_campaign_status("status_in_progress_camp", "active") == "active"
+    assert campaign_execution.derive_campaign_status("status_in_progress_camp", "paused") == "paused"
+
+
+def test_start_campaign_endpoint_persists_draft_status_when_no_leads(client, auth_headers):
+    campaigns.update_one({"campaign_key": "empty_start_camp"}, {"$set": {"campaign_key": "empty_start_camp"}}, upsert=True)
+    client.post("/api/campaigns/empty_start_camp/start", headers=auth_headers)
+    assert campaigns.find_one({"campaign_key": "empty_start_camp"})["status"] == "draft"
+
+
+def test_complete_job_endpoint_flips_campaign_to_completed_once_queue_empties(client, auth_headers):
+    _seed_leads("auto_complete_camp", 1)
+    client.post("/api/campaigns/auto_complete_camp/start", headers=auth_headers)
+    claimed = client.post("/api/campaigns/auto_complete_camp/claim", headers=auth_headers).json()
+    client.post(
+        f"/api/campaigns/auto_complete_camp/jobs/{claimed['_id']}/complete",
+        json={"status": "completed"},
+        headers=auth_headers,
+    )
+    assert campaigns.find_one({"campaign_key": "auto_complete_camp"})["status"] == "completed"
+
+
+def test_get_progress_self_heals_stale_completed_status(client, auth_headers):
+    """A campaign whose queue emptied out before this feature existed (or via direct DB
+    write) should catch up to 'completed' the next time anything polls its progress."""
+    _seed_leads("stale_status_camp", 1)
+    client.post("/api/campaigns/stale_status_camp/start", headers=auth_headers)
+    claimed = client.post("/api/campaigns/stale_status_camp/claim", headers=auth_headers).json()
+    campaign_execution.complete_job(ObjectId(claimed["_id"]), "completed")
+    campaigns.update_one({"campaign_key": "stale_status_camp"}, {"$set": {"status": "active"}})
+
+    client.get("/api/campaigns/stale_status_camp/progress", headers=auth_headers)
+
+    assert campaigns.find_one({"campaign_key": "stale_status_camp"})["status"] == "completed"
