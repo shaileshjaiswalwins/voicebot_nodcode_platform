@@ -1,12 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { BookOpen, Pencil, Plus, Save } from 'lucide-react';
-import type { LanguageSettings, LanguageOption, LibraryPhrase, OutcomeEntry, PhraseCategory } from '../api';
+import type { AnalysisPromptEntry, AnalysisPromptKey, LanguageSettings, LanguageOption, LibraryPhrase, OutcomeEntry, PhraseCategory } from '../api';
 import { TimeAgo } from '../components/TimeAgo';
 import { EmptyState } from '../components/EmptyState';
 import { RowActions } from '../components/RowActions';
 import { PHRASE_CATEGORY_META } from '../constants/phrases';
 
-type LibrarySection = PhraseCategory | 'outcomes' | 'languages';
+type LibrarySection = PhraseCategory | 'outcomes' | 'languages' | 'analysis_prompts';
+
+const ANALYSIS_PROMPT_META: Record<AnalysisPromptKey, { label: string; description: string }> = {
+  call_analysis: {
+    label: 'Call analysis',
+    description: 'Runs once per finished call against the saved transcript to classify the outcome and extract qualification answers. Unrelated to the live system_prompt — this never speaks to the caller, it only reads the transcript afterward.',
+  },
+  b2b_score: {
+    label: 'B2B lead score',
+    description: 'A separate post-call pass that scores B2B lead quality (deal value, intent, urgency) from the same transcript.',
+  },
+};
 
 export function PhraseEditor({
   meta, rows, editingId,
@@ -421,26 +432,117 @@ export function LanguageSettingsCatalog({
   );
 }
 
+export function AnalysisPromptCatalog({
+  prompts,
+  onUpdate
+}: {
+  prompts: AnalysisPromptEntry[];
+  onUpdate: (key: AnalysisPromptKey, promptTemplate: string) => Promise<void> | void;
+}) {
+  const keys = Object.keys(ANALYSIS_PROMPT_META) as AnalysisPromptKey[];
+  const [activeKey, setActiveKey] = useState<AnalysisPromptKey>(keys[0]);
+  const current = prompts.find((p) => p.key === activeKey);
+  const [draft, setDraft] = useState(current?.prompt_template || '');
+  const [saveState, setSaveState] = useState<'idle' | 'running' | 'failed'>('idle');
+  const dirty = draft !== (current?.prompt_template || '');
+
+  useEffect(() => {
+    setDraft(current?.prompt_template || '');
+    setSaveState('idle');
+  }, [activeKey, current?.prompt_template]);
+
+  async function save() {
+    setSaveState('running');
+    try {
+      await onUpdate(activeKey, draft);
+      setSaveState('idle');
+    } catch {
+      setSaveState('failed');
+    }
+  }
+
+  return (
+    <>
+      <div className="callout">
+        <BookOpen size={18} />
+        <div>
+          <strong>Post-call analysis prompts</strong>
+          <p>These prompts run AFTER a call ends, against the saved transcript — separate from the live system_prompt configured per-bot. Keep any doubled curly braces (<code>{'{{'}</code> / <code>{'}}'}</code>) exactly as they are — they represent literal JSON examples in the prompt, not something to edit. Single-brace placeholders like <code>{'{lines}'}</code> are filled in automatically at call time and must not be deleted.</p>
+          <p className="muted">Edits go live within a minute. Calls already mid-flight finish analysis on the prompt version they started with.</p>
+        </div>
+      </div>
+
+      <div className="library-tabs" style={{ marginBottom: '0.75rem' }}>
+        {keys.map((key) => (
+          <button
+            key={key}
+            className={key === activeKey ? 'library-tab active' : 'library-tab'}
+            onClick={() => setActiveKey(key)}
+          >
+            <strong>{ANALYSIS_PROMPT_META[key].label}</strong>
+          </button>
+        ))}
+      </div>
+
+      <div className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>{ANALYSIS_PROMPT_META[activeKey].label}</h2>
+            <p>{ANALYSIS_PROMPT_META[activeKey].description}</p>
+          </div>
+        </div>
+        <label className="full">
+          Prompt template
+          <textarea
+            className="json-editor"
+            rows={24}
+            spellCheck={false}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+        </label>
+        {current?.updated_at && (
+          <p className="muted">Last updated <TimeAgo value={current.updated_at} /> {current.updated_by ? `by ${current.updated_by}` : ''}</p>
+        )}
+        <div className="button-row">
+          <button
+            className={saveState === 'failed' ? 'fallback-button' : 'primary'}
+            onClick={save}
+            disabled={saveState === 'running' || !dirty || !draft.trim()}
+          >
+            <Save size={16} />
+            {saveState === 'running' ? 'Saving...' : saveState === 'failed' ? 'Retry save' : dirty ? 'Save prompt' : 'Saved'}
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export function LibraryView({
   phrases,
   outcomes,
   languageSettings,
+  analysisPrompts,
   onCreate,
   onUpdate,
   onDelete,
   onUpdateOutcome,
   onUpsertLanguageSettings,
-  onDeleteLanguageSettings
+  onDeleteLanguageSettings,
+  onUpdateAnalysisPrompt
 }: {
   phrases: LibraryPhrase[];
   outcomes: OutcomeEntry[];
   languageSettings: LanguageSettings[];
+  analysisPrompts: AnalysisPromptEntry[];
   onCreate: (payload: Partial<LibraryPhrase>) => Promise<void> | void;
   onUpdate: (id: string, payload: Partial<LibraryPhrase>) => Promise<void> | void;
   onDelete: (id: string) => Promise<void> | void;
   onUpdateOutcome: (key: string, payload: Partial<OutcomeEntry>) => Promise<void> | void;
   onUpsertLanguageSettings: (payload: Partial<LanguageSettings>) => Promise<void> | void;
   onDeleteLanguageSettings?: (id: string) => Promise<void> | void;
+  onUpdateAnalysisPrompt: (key: AnalysisPromptKey, promptTemplate: string) => Promise<void> | void;
 }) {
   const [activeSection, setActiveSection] = useState<LibrarySection>('voicemail');
   const [draftText, setDraftText] = useState('');
@@ -519,6 +621,13 @@ export function LibraryView({
           <strong>Language settings</strong>
           <small>{languageSettings.length} languages</small>
         </button>
+        <button
+          className={activeSection === 'analysis_prompts' ? 'library-tab active' : 'library-tab'}
+          onClick={() => { setActiveSection('analysis_prompts'); cancelEdit(); }}
+        >
+          <strong>Analysis prompts</strong>
+          <small>{analysisPrompts.length} prompts</small>
+        </button>
       </div>
 
       {activeSection === 'outcomes' ? (
@@ -529,6 +638,8 @@ export function LibraryView({
           onUpsert={onUpsertLanguageSettings}
           onDelete={onDeleteLanguageSettings}
         />
+      ) : activeSection === 'analysis_prompts' ? (
+        <AnalysisPromptCatalog prompts={analysisPrompts} onUpdate={onUpdateAnalysisPrompt} />
       ) : (
         <PhraseEditor
           meta={meta!}

@@ -314,6 +314,16 @@ export type LibraryPhrase = {
 
 export type OutcomeEntry = { key: string; display_label?: string; description: string; updated_at?: string };
 
+export type AnalysisPromptKey = 'call_analysis' | 'b2b_score';
+
+export type AnalysisPromptEntry = {
+  _id: string;
+  key: AnalysisPromptKey;
+  prompt_template: string;
+  updated_by?: string;
+  updated_at?: string;
+};
+
 export type EvalScenario = {
   name: string;
   caller_persona: string;
@@ -566,6 +576,16 @@ export const api = {
   deleteLanguageSetting(id: string): Promise<{ ok: boolean }> {
     return request(`/api/library/languages/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
+  analysisPrompts(): Promise<AnalysisPromptEntry[]> {
+    return request('/api/library/analysis-prompts');
+  },
+  updateAnalysisPrompt(key: AnalysisPromptKey, promptTemplate: string): Promise<AnalysisPromptEntry> {
+    return request(`/api/library/analysis-prompts/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ prompt_template: promptTemplate }),
+    });
+  },
+
   // audit log
   auditLog(params: { resource_type?: string; action?: string; actor?: string; limit?: number; offset?: number } = {}): Promise<{ items: AuditLogEntry[]; total: number }> {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => [k, String(v)]));
