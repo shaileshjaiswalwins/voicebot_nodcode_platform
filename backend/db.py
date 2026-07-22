@@ -40,3 +40,5 @@ call_jobs = db["tbl_ai_vb_call_jobs"]
 # Matches the claim-query predicate in campaign_execution.claim_next_job (campaign_id +
 # status), not just an insertion-order index — see plans/03 Day 2.5 checklist.
 call_jobs.create_index([("campaign_id", 1), ("status", 1)])
+call_jobs.create_index([("phone_number", 1), ("status", 1)])
+dialer_webhook_secrets = db["tbl_ai_vb_dialer_webhook_secrets"]

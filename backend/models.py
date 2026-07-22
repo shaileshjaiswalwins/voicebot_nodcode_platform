@@ -408,3 +408,23 @@ class PhoneNumberUpdate(BaseModel):
     sip_trunk: str = ""
     sip_username: str = ""
     sip_password: str = ""
+
+
+class DialerCallStatusWebhook(BaseModel):
+    """PLACEHOLDER shape for TSPL's per-Service-ID call-completion webhook (see
+    plans/03-outbound-campaign-platform.md). Field names/mapping are our best guess pending
+    TSPL's actual sample payload — job_id/call_id/phone_number/status are the fields we
+    actually need to resolve which call_job this is about and what happened to it; `raw`
+    keeps everything else TSPL sends so nothing is silently dropped before we've mapped it."""
+
+    job_id: str | None = None
+    call_id: str | None = None
+    phone_number: str | None = None
+    status: str
+    recording_url: str | None = None
+    duration_sec: int | None = None
+    raw: dict = Field(default_factory=dict)
+
+
+class DialerWebhookSecretUpdate(BaseModel):
+    secret: str

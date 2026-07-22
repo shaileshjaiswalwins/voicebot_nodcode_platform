@@ -75,11 +75,13 @@ def complete_job(
     call_id: str | None = None,
     cost_inr: dict | None = None,
     latency_ms: dict | None = None,
+    recording_url: str | None = None,
 ) -> dict | None:
     """Record a job's outcome (called by the dialer once a call finishes). `status` must be
     a terminal status — in_progress/queued transitions only ever happen via claim_next_job.
-    When a call_id is given, also upserts a call_logs doc (cost/latency breakdown) so the
-    call detail drawer has something to join against the existing `transcripts` collection."""
+    When a call_id is given, also upserts a call_logs doc (cost/latency breakdown, plus the
+    recording path once the dialer webhook starts sending one) so the call detail drawer has
+    something to join against the existing `transcripts` collection."""
     if status not in TERMINAL_STATUSES:
         raise ValueError(f"complete_job status must be one of {TERMINAL_STATUSES}, got {status!r}")
     update: dict = {"status": status, "completed_at": datetime.now(timezone.utc)}
@@ -97,22 +99,27 @@ def complete_job(
             lead_update["call_id"] = call_id
         campaign_leads.update_one({"_id": job["lead_id"]}, {"$set": lead_update})
     if job and call_id:
-        call_logs.update_one(
-            {"call_id": call_id},
-            {
-                "$set": {
-                    "call_id": call_id,
-                    "campaign_id": job["campaign_id"],
-                    "job_id": job["_id"],
-                    "status": status,
-                    "cost_inr": cost_inr or {},
-                    "latency_ms": latency_ms or {},
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
-            upsert=True,
-        )
+        log_set: dict = {
+            "call_id": call_id,
+            "campaign_id": job["campaign_id"],
+            "job_id": job["_id"],
+            "status": status,
+            "cost_inr": cost_inr or {},
+            "latency_ms": latency_ms or {},
+            "updated_at": datetime.now(timezone.utc),
+        }
+        if recording_url:
+            log_set["recording_url"] = recording_url
+        call_logs.update_one({"call_id": call_id}, {"$set": log_set}, upsert=True)
     return job
+
+
+def find_in_progress_job_by_phone(phone_number: str) -> dict | None:
+    """Best-effort job lookup for the dialer webhook when the payload doesn't (yet) echo
+    back our own job_id/call_id — assumes at most one call in flight per phone number at a
+    time, which holds as long as claim_next_job's lease/atomicity guarantees do. Prefer
+    job_id/call_id once TSPL's real payload confirms which one they round-trip."""
+    return call_jobs.find_one({"phone_number": phone_number, "status": "in_progress"})
 
 
 def get_call_detail(call_id: str) -> dict | None:
