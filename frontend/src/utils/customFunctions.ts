@@ -46,24 +46,45 @@ export function validateFunction(fn: CustomFunction, existingNames: string[] = [
   if (existingNames.filter((n) => n === name).length > 0) {
     errors.push(`Another function is already named "${name}".`);
   }
-  if (!(fn.url || '').trim()) {
+  const url = (fn.url || '').trim();
+  if (!url) {
     errors.push('API endpoint URL is required.');
+  } else if (!/^https?:\/\/.+/i.test(url)) {
+    errors.push('API endpoint URL must be an absolute http(s):// URL.');
   }
   if (!Number.isFinite(fn.timeout_ms) || fn.timeout_ms <= 0) {
     errors.push('Timeout must be a positive number of milliseconds.');
+  } else if (fn.timeout_ms > 600000) {
+    errors.push('Timeout is unusually large (> 600000 ms / 10 min) — most calls should finish far sooner.');
   }
+  const seenParams = new Set<string>();
   for (const p of fn.parameters) {
-    if (!(p.name || '').trim()) {
+    const pname = (p.name || '').trim();
+    if (!pname) {
       errors.push('Every parameter needs a name.');
-      break;
+      continue;
     }
+    if (seenParams.has(pname)) {
+      errors.push(`Duplicate parameter name "${pname}" — parameter names must be unique.`);
+    }
+    seenParams.add(pname);
   }
+  const seenVars = new Set<string>();
   for (const sv of fn.store_variables) {
-    if ((sv.variable || '').trim() && !(sv.json_path || '').trim()) {
-      errors.push(`Store-variable "${sv.variable}" needs a response path.`);
+    const vname = (sv.variable || '').trim();
+    if (vname && !(sv.json_path || '').trim()) {
+      errors.push(`Store-variable "${vname}" needs a response path.`);
+    }
+    if (vname) {
+      if (seenVars.has(vname)) {
+        errors.push(`Duplicate store-variable name "${vname}" — variable names must be unique.`);
+      }
+      seenVars.add(vname);
     }
   }
-  return errors;
+  // De-duplicate: multiple blank params/vars can push identical messages, and the UI keys
+  // its error list by the message string.
+  return Array.from(new Set(errors));
 }
 
 /** Build the sample args object a Test run should send, from the declared parameters. */

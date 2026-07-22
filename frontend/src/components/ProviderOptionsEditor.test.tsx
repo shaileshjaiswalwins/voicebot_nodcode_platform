@@ -49,6 +49,19 @@ describe('ProviderOptionsEditor', () => {
     expect(JSON.parse(screen.getByTestId('out').textContent!)).toEqual({});
   });
 
+  it('warns when a numeric value is outside the spec min/max but still stores it', () => {
+    render(<Harness fields={SARVAM_TTS_FIELDS} />);
+    fireEvent.change(screen.getByLabelText('Pace'), { target: { value: '9' } }); // max is 3.0
+    expect(JSON.parse(screen.getByTestId('out').textContent!)).toEqual({ pace: 9 });
+    expect(screen.getByRole('alert')).toHaveTextContent(/Above recommended maximum/);
+  });
+
+  it('shows no range warning for an in-range value', () => {
+    render(<Harness fields={SARVAM_TTS_FIELDS} />);
+    fireEvent.change(screen.getByLabelText('Pace'), { target: { value: '1.2' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('supports Gemini fields too', () => {
     render(<Harness fields={GEMINI_LLM_FIELDS} />);
     fireEvent.change(screen.getByLabelText('Max output tokens'), { target: { value: '512' } });

@@ -70,6 +70,48 @@ describe('validateFunction', () => {
     const errs = validateFunction({ ...base(), store_variables: [{ ...newStoreVariable(), variable: 'v', json_path: '' }] });
     expect(errs.some((e) => /needs a response path/.test(e))).toBe(true);
   });
+
+  it('rejects a URL that is not an absolute http(s) URL', () => {
+    const errs = validateFunction({ ...base(), url: 'api.example.com/x' });
+    expect(errs.some((e) => /absolute http\(s\):\/\/ URL/.test(e))).toBe(true);
+  });
+
+  it('accepts https URLs', () => {
+    expect(validateFunction({ ...base(), url: 'https://api.example.com/lead' })).toEqual([]);
+  });
+
+  it('flags an unusually large timeout', () => {
+    const errs = validateFunction({ ...base(), timeout_ms: 700000 });
+    expect(errs.some((e) => /unusually large/.test(e))).toBe(true);
+  });
+
+  it('rejects duplicate parameter names', () => {
+    const errs = validateFunction({
+      ...base(),
+      parameters: [{ ...newParam(), name: 'mobile' }, { ...newParam(), name: 'mobile' }],
+    });
+    expect(errs.some((e) => /Duplicate parameter name "mobile"/.test(e))).toBe(true);
+  });
+
+  it('rejects duplicate store-variable names', () => {
+    const errs = validateFunction({
+      ...base(),
+      store_variables: [
+        { variable: 'name', json_path: 'a' },
+        { variable: 'name', json_path: 'b' },
+      ],
+    });
+    expect(errs.some((e) => /Duplicate store-variable name "name"/.test(e))).toBe(true);
+  });
+
+  it('de-duplicates identical messages (multiple blank params)', () => {
+    const errs = validateFunction({
+      ...base(),
+      parameters: [{ ...newParam(), name: '' }, { ...newParam(), name: '' }],
+    });
+    const blanks = errs.filter((e) => /parameter needs a name/.test(e));
+    expect(blanks).toHaveLength(1);
+  });
 });
 
 describe('sampleArgsFromParams', () => {
