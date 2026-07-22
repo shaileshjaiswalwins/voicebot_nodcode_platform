@@ -55,6 +55,21 @@ def authenticate(email: str, password: str) -> str | None:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
 
 
+def issue_token_for_sso_profile(profile: dict) -> str:
+    """Mint this platform's own JWT for an SSO-authenticated employee. Deliberately does
+    NOT port search_mis's hardcoded department/section role table (doc section 6 says not
+    to) — every SSO login gets 'admin' for now, same as the single local admin account.
+    Refine this once the platform has more than one role to actually assign."""
+    email = profile.get("email") or f"{profile.get('empcode')}@justdial.com"
+    users.update_one(
+        {"email": email},
+        {"$set": {"email": email, "role": "admin", "sso_empcode": profile.get("empcode"), "sso_empname": profile.get("empname")}},
+        upsert=True,
+    )
+    payload = {"sub": email, "role": "admin", "exp": int(time.time()) + TOKEN_TTL_SEC}
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
+
+
 def require_user(creds: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> dict:
     if creds is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
