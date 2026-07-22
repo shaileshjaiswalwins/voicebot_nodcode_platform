@@ -239,6 +239,9 @@ def test_saving_a_draft_persists_every_field_the_pipeline_actually_reads(client,
         "tts_language": "hi-IN",
         "llm_provider": "openai",
         "llm_model": "gpt-4o-mini",
+        "stt_options": {"mode": "translate", "sample_rate": 16000},
+        "tts_options": {"pace": 1.2, "output_audio_codec": "mp3"},
+        "llm_options": {"top_p": 0.9, "max_output_tokens": 512},
     }
     resp = client.put(f"/api/bots/{bot['_id']}/draft", json={"config": full_config}, headers=auth_headers)
     assert resp.status_code == 200, resp.text
