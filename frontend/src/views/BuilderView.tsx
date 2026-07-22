@@ -399,6 +399,7 @@ export function BuilderView({
               configOk={config.ok}
               configError={config.ok ? undefined : config.error}
               costEstimate={costEstimate}
+              pricing={pricingConfig}
               botId={selectedBot?._id}
               onTestFunction={
                 selectedBot?._id

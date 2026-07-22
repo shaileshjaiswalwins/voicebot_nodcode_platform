@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { AlertTriangle, Database } from 'lucide-react';
 import type { RuntimeConfig, CustomFunction, FunctionTestResult } from '../types';
-import type { LanguageOption } from '../api';
+import type { LanguageOption, PricingConfig, PricingModelEntry } from '../api';
 import { SARVAM_TTS_VOICES, SARVAM_TTS_LANGUAGES } from '../constants/ui';
 import { CustomFunctionsEditor } from './CustomFunctionsEditor';
 import { CloseMarkersEditor } from './CloseMarkersEditor';
 import { ProviderOptionsEditor } from './ProviderOptionsEditor';
 import { CostEstimateStrip } from './CostEstimateStrip';
 import { SARVAM_STT_FIELDS, SARVAM_TTS_FIELDS, GEMINI_LLM_FIELDS } from '../constants/providerParams';
+import type { ParamField } from '../constants/providerParams';
 import type { AgentCostEstimate } from '../utils/agentCost';
 
 export type BuilderTab = 'agent' | 'speed' | 'stt' | 'tts' | 'llm' | 'functions' | 'advanced';
@@ -36,6 +37,7 @@ export function BotConfigTabs({
   botId,
   onTestFunction,
   costEstimate,
+  pricing,
 }: {
   value: RuntimeConfig;
   onUpdateConfig: (key: keyof RuntimeConfig, value: unknown) => void;
@@ -48,8 +50,22 @@ export function BotConfigTabs({
   botId?: string;
   onTestFunction?: (fn: CustomFunction, args: Record<string, unknown>) => Promise<FunctionTestResult>;
   costEstimate?: AgentCostEstimate | null;
+  pricing?: PricingConfig | null;
 }) {
   const [tab, setTab] = useState<BuilderTab>('agent');
+  // Only companies whose provider is actually wired into pipeline_providers.py may surface
+  // as selectable models here — the pricing catalog also carries catalog-only companies
+  // (Google TTS/STT, Cartesia, Anthropic, ...) that would silently no-op on a real call.
+  const byCompany = (entries: PricingModelEntry[] | undefined, company: string): PricingModelEntry[] =>
+    (entries || []).filter((e) => e.company === company);
+  const openAiModels = byCompany(pricing?.llm, 'OpenAI');
+  const geminiModels = byCompany(pricing?.llm, 'Google').filter((e) => e.key.startsWith('gemini'));
+  const deepgramSttModels = byCompany(pricing?.stt, 'Deepgram');
+  const geminiLlmFields: ParamField[] = GEMINI_LLM_FIELDS.map((f) =>
+    f.key === 'model' && geminiModels.length
+      ? { ...f, options: geminiModels.map((e) => e.label) }
+      : f
+  );
   const recording = (typeof value.recording === 'object' && value.recording ? value.recording : {}) as RuntimeConfig['recording'];
   const apiUrls = (typeof value.api_urls === 'object' && value.api_urls ? value.api_urls : {}) as Record<string, string>;
   const optsFor = (key: 'stt_options' | 'tts_options' | 'llm_options'): Record<string, unknown> =>
@@ -222,7 +238,10 @@ export function BotConfigTabs({
             <>
               <label>
                 STT model
-                <input value={String(value.stt_model || '')} placeholder="nova-3 (default)" onChange={(e) => onUpdateConfig('stt_model', e.target.value)} />
+                <select value={String(value.stt_model || '')} onChange={(e) => onUpdateConfig('stt_model', e.target.value)}>
+                  <option value="">nova-3 (default)</option>
+                  {deepgramSttModels.map((e) => <option key={e.key} value={e.label}>{e.label}</option>)}
+                </select>
               </label>
               <label>
                 STT language
@@ -298,9 +317,12 @@ export function BotConfigTabs({
             </select>
           </label>
           {value.llm_provider === 'openai' && (
-            <label>
-              LLM model
-              <input value={String(value.llm_model || '')} placeholder="gpt-4.1 (default)" onChange={(e) => onUpdateConfig('llm_model', e.target.value)} />
+            <label title="Which OpenAI model handles the conversation. Affects both response quality/speed and cost per minute.">
+              OpenAI model
+              <select value={String(value.llm_model || '')} onChange={(e) => onUpdateConfig('llm_model', e.target.value)}>
+                <option value="">gpt-4.1 (default)</option>
+                {openAiModels.map((e) => <option key={e.key} value={e.label}>{e.label}</option>)}
+              </select>
             </label>
           )}
           <label title="LLM randomness (0–2). Lower = more consistent and on-script; higher = more varied and creative.">
@@ -314,7 +336,7 @@ export function BotConfigTabs({
               <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
                 Gemini parameters
               </div>
-              <ProviderOptionsEditor fields={GEMINI_LLM_FIELDS} value={optsFor('llm_options')} onChange={(next) => onUpdateConfig('llm_options', next)} />
+              <ProviderOptionsEditor fields={geminiLlmFields} value={optsFor('llm_options')} onChange={(next) => onUpdateConfig('llm_options', next)} />
             </div>
           )}
         </div>

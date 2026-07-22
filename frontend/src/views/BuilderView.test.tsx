@@ -95,7 +95,7 @@ describe('BuilderView — per-agent STT/TTS/LLM provider selection', () => {
     gotoTab('TTS');
     expect(screen.queryByLabelText('ElevenLabs voice ID')).not.toBeInTheDocument();
     gotoTab('LLM');
-    expect(screen.queryByLabelText('LLM model')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('OpenAI model')).not.toBeInTheDocument();
   });
 
   it('reveals Deepgram STT sub-fields (model, language) when selected', async () => {
@@ -129,7 +129,7 @@ describe('BuilderView — per-agent STT/TTS/LLM provider selection', () => {
     const config = { ...defaultConfig, llm_provider: 'openai' as const };
     render(<BuilderView {...baseProps} config={{ ok: true, value: config }} />);
     gotoTab('LLM');
-    expect(screen.getByLabelText('LLM model')).toBeInTheDocument();
+    expect(screen.getByLabelText('OpenAI model')).toBeInTheDocument();
   });
 });
 
