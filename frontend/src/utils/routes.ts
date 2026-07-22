@@ -11,7 +11,8 @@ export type RouteState =
   | { view: 'observability' }
   | { view: 'library' }
   | { view: 'settings' }
-  | { view: 'audit_log' };
+  | { view: 'audit_log' }
+  | { view: 'admin' };
 
 const VIEW_TO_SEGMENT: Record<View, string> = {
   bots: 'agents',
@@ -26,6 +27,7 @@ const VIEW_TO_SEGMENT: Record<View, string> = {
   library: 'library',
   settings: 'settings',
   audit_log: 'audit-log',
+  admin: 'admin',
 };
 
 const SEGMENT_TO_VIEW: Record<string, View> = {
@@ -40,6 +42,7 @@ const SEGMENT_TO_VIEW: Record<string, View> = {
   library: 'library',
   settings: 'settings',
   'audit-log': 'audit_log',
+  admin: 'admin',
 };
 
 export function buildPath(route: RouteState): string {

@@ -9,6 +9,7 @@ import {
   Clock3,
   FileText,
   Gauge,
+  IndianRupee,
   Megaphone,
   Phone,
   PhoneCall,
@@ -108,6 +109,7 @@ export const CMD_VIEWS: CmdKViewResult[] = [
   { kind: 'view', view: 'library',       label: 'Library',       icon: <BookOpen size={15} />,     description: 'Phrase library' },
   { kind: 'view', view: 'settings',      label: 'Settings',      icon: <Settings size={15} />,     description: 'Runtime settings' },
   { kind: 'view', view: 'audit_log',     label: 'Audit Log',     icon: <ClipboardList size={15} />, description: 'Admin mutation history' },
+  { kind: 'view', view: 'admin',         label: 'Admin',         icon: <IndianRupee size={15} />,  description: 'Model pricing (₹/min)' },
 ];
 
 export const SHORTCUT_MAP: Array<{ key: string; view: View; label: string }> = [

@@ -6,7 +6,9 @@ import { SARVAM_TTS_VOICES, SARVAM_TTS_LANGUAGES } from '../constants/ui';
 import { CustomFunctionsEditor } from './CustomFunctionsEditor';
 import { CloseMarkersEditor } from './CloseMarkersEditor';
 import { ProviderOptionsEditor } from './ProviderOptionsEditor';
+import { CostEstimateStrip } from './CostEstimateStrip';
 import { SARVAM_STT_FIELDS, SARVAM_TTS_FIELDS, GEMINI_LLM_FIELDS } from '../constants/providerParams';
+import type { AgentCostEstimate } from '../utils/agentCost';
 
 export type BuilderTab = 'agent' | 'speed' | 'stt' | 'tts' | 'llm' | 'functions' | 'advanced';
 
@@ -33,6 +35,7 @@ export function BotConfigTabs({
   configError,
   botId,
   onTestFunction,
+  costEstimate,
 }: {
   value: RuntimeConfig;
   onUpdateConfig: (key: keyof RuntimeConfig, value: unknown) => void;
@@ -44,12 +47,25 @@ export function BotConfigTabs({
   configError?: string;
   botId?: string;
   onTestFunction?: (fn: CustomFunction, args: Record<string, unknown>) => Promise<FunctionTestResult>;
+  costEstimate?: AgentCostEstimate | null;
 }) {
   const [tab, setTab] = useState<BuilderTab>('agent');
   const recording = (typeof value.recording === 'object' && value.recording ? value.recording : {}) as RuntimeConfig['recording'];
   const apiUrls = (typeof value.api_urls === 'object' && value.api_urls ? value.api_urls : {}) as Record<string, string>;
   const optsFor = (key: 'stt_options' | 'tts_options' | 'llm_options'): Record<string, unknown> =>
     (typeof value[key] === 'object' && value[key] ? value[key] : {}) as Record<string, unknown>;
+
+  // Soft numeric range check: returns a warning string when `n` violates min/max, else null.
+  // We warn rather than block so an operator can still push an edge value if they mean to.
+  const numWarn = (n: number, opts: { min?: number; max?: number; integer?: boolean } = {}): string | null => {
+    if (!Number.isFinite(n)) return 'Enter a number.';
+    if (opts.integer && !Number.isInteger(n)) return 'Must be a whole number.';
+    if (opts.min !== undefined && n < opts.min) return `Must be at least ${opts.min}.`;
+    if (opts.max !== undefined && n > opts.max) return `Must be at most ${opts.max}.`;
+    return null;
+  };
+  const Warn = ({ msg }: { msg: string | null }) =>
+    msg ? <small role="alert" style={{ color: 'var(--warning, #b45309)' }}>{msg}</small> : null;
 
   return (
     <div className="bot-config-tabs">
@@ -76,14 +92,15 @@ export function BotConfigTabs({
       {tab === 'agent' && (
         <div role="tabpanel">
           <div className="form-grid">
-            <label>
+            <label title="The name the bot introduces itself with. Used in the opening line and system prompt.">
               Persona name
               <input value={String(value.agent_name || '')} placeholder="e.g. Tarun, Priya, Aman" onChange={(e) => onUpdateConfig('agent_name', e.target.value)} />
-              <small>Used in opening line and system prompt.</small>
+              <small>The name the bot introduces itself with — appears in the opening line and system prompt.</small>
             </label>
-            <label>
+            <label title="The company the bot says it is calling on behalf of.">
               Organization name
               <input value={String(value.organization_name || '')} placeholder="e.g. JustDial" onChange={(e) => onUpdateConfig('organization_name', e.target.value)} />
+              <small>The company the bot says it represents on the call.</small>
             </label>
             <label>
               AI partner key
@@ -96,13 +113,15 @@ export function BotConfigTabs({
             <textarea className="prompt-editor" value={String(value.system_prompt || '')} onChange={(e) => onUpdateConfig('system_prompt', e.target.value)} />
           </label>
           <div className="form-grid">
-            <label>
+            <label title="The first thing the bot says when the call connects.">
               Opening line
-              <input value={String(value.initial_message || '')} onChange={(e) => onUpdateConfig('initial_message', e.target.value)} />
+              <input value={String(value.initial_message || '')} placeholder="e.g. Hello, this is Priya from JustDial…" onChange={(e) => onUpdateConfig('initial_message', e.target.value)} />
+              <small>The first sentence spoken when the call connects.</small>
             </label>
-            <label>
+            <label title="The bot says this right before hanging up normally.">
               Closing line
-              <input value={String(value.call_end_text || '')} onChange={(e) => onUpdateConfig('call_end_text', e.target.value)} />
+              <input value={String(value.call_end_text || '')} placeholder="e.g. Thank you, have a great day!" onChange={(e) => onUpdateConfig('call_end_text', e.target.value)} />
+              <small>Spoken just before the bot ends the call normally.</small>
             </label>
             <label>
               Inactivity end phrase
@@ -125,35 +144,47 @@ export function BotConfigTabs({
 
       {tab === 'speed' && (
         <div role="tabpanel" className="form-grid">
-          <label>
-            Post-speech hold ms
-            <input type="number" value={Number(value.post_speech_hold_ms ?? 400)} onChange={(e) => onUpdateConfig('post_speech_hold_ms', Number(e.target.value))} />
-            <small>How long to hold after the caller stops speaking before the bot responds.</small>
+          <label title="Silence (ms) the bot waits after the caller stops before replying. Lower feels snappier but risks cutting the caller off.">
+            Post-speech hold (ms)
+            <input type="number" min={0} max={5000} step={50} value={Number(value.post_speech_hold_ms ?? 400)} onChange={(e) => onUpdateConfig('post_speech_hold_ms', Number(e.target.value))} />
+            <small>Pause after the caller stops speaking before the bot responds. Typical 200–800 ms.</small>
+            <Warn msg={numWarn(Number(value.post_speech_hold_ms ?? 400), { min: 0, max: 5000, integer: true })} />
           </label>
-          <label>
+          <label title="Speech-detection sensitivity (0–1). Higher = stricter, ignores more background noise but may miss soft speech.">
             Voice-activity threshold
             <input type="number" min="0" max="1" step="0.05" value={Number(value.silero_threshold ?? 0.6)} onChange={(e) => onUpdateConfig('silero_threshold', Number(e.target.value))} />
-            <small>Sensitivity for detecting real speech vs. background noise.</small>
+            <small>Sensitivity for real speech vs. background noise (0–1). Default 0.6.</small>
+            <Warn msg={numWarn(Number(value.silero_threshold ?? 0.6), { min: 0, max: 1 })} />
           </label>
-          <label>
-            Min speech duration ms
-            <input type="number" value={Number(value.silero_min_speech_ms ?? 1000)} onChange={(e) => onUpdateConfig('silero_min_speech_ms', Number(e.target.value))} />
+          <label title="Minimum length (ms) of sound before it counts as speech. Filters out coughs and clicks.">
+            Min speech duration (ms)
+            <input type="number" min={0} max={10000} step={50} value={Number(value.silero_min_speech_ms ?? 1000)} onChange={(e) => onUpdateConfig('silero_min_speech_ms', Number(e.target.value))} />
+            <small>Shortest utterance treated as real speech. Raise to ignore brief noises.</small>
+            <Warn msg={numWarn(Number(value.silero_min_speech_ms ?? 1000), { min: 0, max: 10000, integer: true })} />
           </label>
-          <label>
+          <label title="Seconds of silence at the start of a turn before the bot gently re-engages the caller.">
             First rescue (s)
-            <input type="number" step="0.5" value={Number(value.inactivity_first_rescue_secs ?? 4)} onChange={(e) => onUpdateConfig('inactivity_first_rescue_secs', Number(e.target.value))} />
+            <input type="number" min={0.5} max={60} step="0.5" value={Number(value.inactivity_first_rescue_secs ?? 4)} onChange={(e) => onUpdateConfig('inactivity_first_rescue_secs', Number(e.target.value))} />
+            <small>Silence before the first re-engagement prompt.</small>
+            <Warn msg={numWarn(Number(value.inactivity_first_rescue_secs ?? 4), { min: 0.5, max: 60 })} />
           </label>
-          <label>
+          <label title="Seconds to wait after the first rescue before starting the repeating nudge cycle.">
             First nudge gap (s)
-            <input type="number" step="0.5" value={Number(value.inactivity_first_nudge_gap_secs ?? 4)} onChange={(e) => onUpdateConfig('inactivity_first_nudge_gap_secs', Number(e.target.value))} />
+            <input type="number" min={0.5} max={60} step="0.5" value={Number(value.inactivity_first_nudge_gap_secs ?? 4)} onChange={(e) => onUpdateConfig('inactivity_first_nudge_gap_secs', Number(e.target.value))} />
+            <small>Delay between the first rescue and the recurring nudges.</small>
+            <Warn msg={numWarn(Number(value.inactivity_first_nudge_gap_secs ?? 4), { min: 0.5, max: 60 })} />
           </label>
-          <label>
+          <label title="Seconds between each repeating nudge while the caller stays silent.">
             Nudge interval (s)
-            <input type="number" step="0.5" value={Number(value.inactivity_nudge_secs ?? 10)} onChange={(e) => onUpdateConfig('inactivity_nudge_secs', Number(e.target.value))} />
+            <input type="number" min={0.5} max={120} step="0.5" value={Number(value.inactivity_nudge_secs ?? 10)} onChange={(e) => onUpdateConfig('inactivity_nudge_secs', Number(e.target.value))} />
+            <small>Gap between repeated “are you still there?” prompts.</small>
+            <Warn msg={numWarn(Number(value.inactivity_nudge_secs ?? 10), { min: 0.5, max: 120 })} />
           </label>
-          <label>
+          <label title="Seconds of continued silence after the nudges before the bot ends the call.">
             Auto-close (s)
-            <input type="number" step="0.5" value={Number(value.inactivity_close_secs ?? 5)} onChange={(e) => onUpdateConfig('inactivity_close_secs', Number(e.target.value))} />
+            <input type="number" min={0.5} max={120} step="0.5" value={Number(value.inactivity_close_secs ?? 5)} onChange={(e) => onUpdateConfig('inactivity_close_secs', Number(e.target.value))} />
+            <small>Final silence window before the call is hung up.</small>
+            <Warn msg={numWarn(Number(value.inactivity_close_secs ?? 5), { min: 0.5, max: 120 })} />
           </label>
           <label>
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -171,6 +202,10 @@ export function BotConfigTabs({
             </select>
           </label>
         </div>
+      )}
+
+      {(tab === 'stt' || tab === 'tts' || tab === 'llm') && costEstimate && (
+        <CostEstimateStrip estimate={costEstimate} />
       )}
 
       {tab === 'stt' && (
@@ -268,10 +303,11 @@ export function BotConfigTabs({
               <input value={String(value.llm_model || '')} placeholder="gpt-4.1 (default)" onChange={(e) => onUpdateConfig('llm_model', e.target.value)} />
             </label>
           )}
-          <label>
+          <label title="LLM randomness (0–2). Lower = more consistent and on-script; higher = more varied and creative.">
             Temperature
             <input type="number" min="0" max="2" step="0.1" value={Number(value.temperature ?? 0.4)} onChange={(e) => onUpdateConfig('temperature', Number(e.target.value))} />
-            <small>LLM sampling temperature.</small>
+            <small>Sampling randomness (0–2). Default 0.4 — keep low for predictable scripted calls.</small>
+            <Warn msg={numWarn(Number(value.temperature ?? 0.4), { min: 0, max: 2 })} />
           </label>
           {(value.llm_provider === 'gemini' || !value.llm_provider) && (
             <div style={{ gridColumn: '1 / -1' }}>
@@ -286,16 +322,12 @@ export function BotConfigTabs({
 
       {tab === 'functions' && (
         <div role="tabpanel">
-          <label style={{ display: 'block', marginBottom: '0.75rem' }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <input type="checkbox" checked={Boolean(value.function_calling)} onChange={(e) => onUpdateConfig('function_calling', e.target.checked)} style={{ width: 'auto' }} />
-              <span>Enable function calling (during-call tools)</span>
-            </span>
-            <small>Required for the bot to call during-call functions. Pre/post-call functions run regardless.</small>
-          </label>
           <CustomFunctionsEditor
             functions={Array.isArray(value.functions) ? (value.functions as CustomFunction[]) : []}
-            onChange={(next) => onUpdateConfig('functions', next)}
+            onChange={(next) => {
+              onUpdateConfig('functions', next);
+              onUpdateConfig('function_calling', next.some((fn) => fn.trigger === 'during_call'));
+            }}
             onTest={botId ? onTestFunction : undefined}
           />
         </div>
@@ -304,13 +336,16 @@ export function BotConfigTabs({
       {tab === 'advanced' && (
         <div role="tabpanel">
           <div className="form-grid">
-            <label>
+            <label title="Numeric dialer/recording service ID this bot's calls are attributed to. Change only if telephony ops tells you to.">
               Dialer service ID
-              <input type="number" value={Number(recording?.service_id || 293)} onChange={(e) => onUpdateConfig('recording', { ...recording, service_id: Number(e.target.value) })} />
+              <input type="number" min={0} step={1} value={Number(recording?.service_id || 293)} onChange={(e) => onUpdateConfig('recording', { ...recording, service_id: Number(e.target.value) })} />
+              <small>Recording/telephony service this bot dials through. Default 293.</small>
+              <Warn msg={numWarn(Number(recording?.service_id || 293), { min: 0, integer: true })} />
             </label>
-            <label>
+            <label title="City the dialer routes this bot's outbound calls from.">
               Dialer city
-              <input value={String(recording?.dialer_city || 'bangalore')} onChange={(e) => onUpdateConfig('recording', { ...recording, dialer_city: e.target.value })} />
+              <input value={String(recording?.dialer_city || 'bangalore')} placeholder="e.g. bangalore" onChange={(e) => onUpdateConfig('recording', { ...recording, dialer_city: e.target.value })} />
+              <small>City the dialer places calls from.</small>
             </label>
             <label>
               MIS API base URL

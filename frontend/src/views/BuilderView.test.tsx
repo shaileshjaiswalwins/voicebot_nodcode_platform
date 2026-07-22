@@ -1,7 +1,8 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BuilderView } from './BuilderView';
+import { api } from '../api';
 
 /** Settings now live under tabs (Agent · Speed · STT · TTS · LLM · Functions · Advanced).
  * Click into a tab before asserting on its fields. */
@@ -63,7 +64,7 @@ describe('BuilderView — speech-to-speech field cleanup', () => {
     render(<BuilderView {...baseProps} />);
     gotoTab('Speed');
     expect(screen.getByText('Voice-activity threshold')).toBeInTheDocument();
-    expect(screen.getByText('Min speech duration ms')).toBeInTheDocument();
+    expect(screen.getByText('Min speech duration (ms)')).toBeInTheDocument();
     expect(screen.getByText('First rescue (s)')).toBeInTheDocument();
     expect(screen.getByText('First nudge gap (s)')).toBeInTheDocument();
     expect(screen.getByText('Nudge interval (s)')).toBeInTheDocument();
@@ -129,6 +130,25 @@ describe('BuilderView — per-agent STT/TTS/LLM provider selection', () => {
     render(<BuilderView {...baseProps} config={{ ok: true, value: config }} />);
     gotoTab('LLM');
     expect(screen.getByLabelText('LLM model')).toBeInTheDocument();
+  });
+});
+
+describe('BuilderView — Agent details cost card', () => {
+  it('renders Cost/Latency/Tokens once pricing config loads, in INR', async () => {
+    vi.spyOn(api, 'getPricingAdminConfig').mockResolvedValue({
+      stt: [{ key: 'sarvam_saras_v3', label: 'sarvam-saras-v3', cost_inr_per_min: 0.25 }],
+      llm: [{ key: 'gemini_3_1_flash_lite', label: 'gemini-3.1-flash-lite', cost_inr_per_min: 0.87, latency_ms_min: 970, latency_ms_max: 1450, tokens_min: 597, tokens_max: 1000 }],
+      tts: [{ key: 'sarvam_bulbul_v3', label: 'sarvam-bulbul-v3', cost_inr_per_min: 1.60 }],
+      telephony: [{ key: 'sip_direct', label: 'sip-direct', cost_inr_per_min: 0 }],
+    });
+
+    render(<BuilderView {...baseProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('₹2.72/min')).toBeInTheDocument();
+    });
+    expect(screen.getByText('970-1450ms')).toBeInTheDocument();
+    expect(screen.getByText('597 - 1k')).toBeInTheDocument();
   });
 });
 

@@ -154,6 +154,32 @@ export type CampaignProgress = {
   total: number;
 };
 
+export type PricingModelEntry = {
+  key: string;
+  label: string;
+  cost_inr_per_min: number;
+  latency_ms_min?: number | null;
+  latency_ms_max?: number | null;
+  tokens_min?: number | null;
+  tokens_max?: number | null;
+};
+
+export type PricingConfig = {
+  stt: PricingModelEntry[];
+  llm: PricingModelEntry[];
+  tts: PricingModelEntry[];
+  telephony: PricingModelEntry[];
+};
+
+export type PricingTier = {
+  name: string;
+  stt: string;
+  llm: string;
+  tts: string;
+  telephony: string;
+  cost_per_min: number;
+};
+
 export type CallDetail = {
   call_id: string;
   status: string | null;
@@ -509,6 +535,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ prompt_template: promptTemplate }),
     });
+  },
+
+  pricingMatrix(): Promise<{ stt: Record<string, number>; llm: Record<string, number>; tts: Record<string, number>; telephony: Record<string, number> }> {
+    return request('/api/pricing/matrix');
+  },
+  pricingTiers(): Promise<PricingTier[]> {
+    return request('/api/pricing/tiers');
+  },
+  pricingBudgetRoute(maxInrPerMin: number): Promise<{ stt: string; llm: string; tts: string; telephony: string; estimated_cost_per_min: number }> {
+    return request(`/api/pricing/budget-route?max_inr_per_min=${maxInrPerMin}`);
+  },
+  getPricingAdminConfig(): Promise<PricingConfig> {
+    return request('/api/pricing/admin-config');
+  },
+  updatePricingAdminConfig(config: PricingConfig): Promise<PricingConfig> {
+    return request('/api/pricing/admin-config', { method: 'PUT', body: JSON.stringify(config) });
   },
 
   // phone numbers

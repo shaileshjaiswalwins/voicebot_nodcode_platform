@@ -33,7 +33,8 @@ export function titleFor(view: import('../types').View) {
     observability: 'Observability',
     library: 'Phrase Library',
     settings: 'Settings',
-    audit_log: 'Audit Log'
+    audit_log: 'Audit Log',
+    admin: 'Admin'
   }[view];
 }
 
@@ -50,7 +51,8 @@ export function subtitleFor(view: import('../types').View) {
     observability: 'Track LiveKit health, Gemini latency, TTFW, and callback failures.',
     library: 'Edit voicemail, hold-music, and DNC trigger phrases without a code deploy.',
     settings: 'Control LiveKit routing and dashboard runtime options.',
-    audit_log: 'Every admin mutation, recorded with who did it and when.'
+    audit_log: 'Every admin mutation, recorded with who did it and when.',
+    admin: 'Configure LLM/STT/TTS model pricing (₹/min), reflected across the platform.'
   }[view];
 }
 

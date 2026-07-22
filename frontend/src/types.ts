@@ -1,6 +1,6 @@
 import type { CallEvent, Transcript, Bot, Campaign, PhraseCategory, Flow } from './api';
 
-export type View = 'bots' | 'builder' | 'flow' | 'campaigns' | 'phone_numbers' | 'test' | 'transcripts' | 'analytics' | 'observability' | 'library' | 'settings' | 'audit_log';
+export type View = 'bots' | 'builder' | 'flow' | 'campaigns' | 'phone_numbers' | 'test' | 'transcripts' | 'analytics' | 'observability' | 'library' | 'settings' | 'audit_log' | 'admin';
 export type AgentWorkspaceMode = 'list' | 'builder';
 export type BuilderMode = 'pm' | 'advanced';
 export type DiagnosticSeverity = 'info' | 'warning' | 'error';

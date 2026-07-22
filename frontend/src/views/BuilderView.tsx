@@ -3,13 +3,16 @@ import {
   AlertTriangle, ChevronRight, Database, GitBranch, Pencil, Plus,
   Rocket, Save, ShieldCheck, SlidersHorizontal, Wand2
 } from 'lucide-react';
-import type { Bot as BotType, BotVersion, LanguageOption } from '../api';
+import type { Bot as BotType, BotVersion, LanguageOption, PricingConfig } from '../api';
 import type { RuntimeConfig, BuilderMode } from '../types';
 import { defaultConfig, SARVAM_TTS_VOICES, SARVAM_TTS_LANGUAGES } from '../constants/ui';
 import { StatusPill } from '../components/StatusPill';
 import { TimeAgo } from '../components/TimeAgo';
 import { Detail } from '../components/Detail';
+import { CopyableId } from '../components/CopyableId';
 import { BotConfigTabs } from '../components/BotConfigTabs';
+import { CostBreakdownPopover } from '../components/CostBreakdownPopover';
+import { estimateAgentCost } from '../utils/agentCost';
 import { api } from '../api';
 import type { CustomFunction } from '../types';
 
@@ -142,6 +145,14 @@ export function BuilderView({
 }) {
   const value = config.ok ? config.value : defaultConfig;
   const isAdvanced = builderMode === 'advanced';
+
+  // Self-fetched, same pattern as BudgetCostWidget.tsx's own pricing fetch — the "Agent
+  // details" cost card doesn't need this wired through App.tsx.
+  const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
+  useEffect(() => {
+    api.getPricingAdminConfig().then(setPricingConfig).catch(() => setPricingConfig(null));
+  }, []);
+  const costEstimate = pricingConfig ? estimateAgentCost(value, pricingConfig) : null;
 
   const [draftName, setDraftName] = useState(selectedBot?.name || '');
   const [draftDescription, setDraftDescription] = useState(selectedBot?.description || '');
@@ -387,6 +398,7 @@ export function BuilderView({
               onConfigTextChange={onConfigTextChange}
               configOk={config.ok}
               configError={config.ok ? undefined : config.error}
+              costEstimate={costEstimate}
               botId={selectedBot?._id}
               onTestFunction={
                 selectedBot?._id
@@ -396,72 +408,110 @@ export function BuilderView({
             />
           </div>
         </div>
+        <aside className="right-rail">
+          {selectedBot && (
+            <div className="panel compact">
+              <div className="panel-header-inline">
+                <h2>Agent details</h2>
+                <CopyableId value={selectedBot._id} label="ID" />
+              </div>
+              <div className="detail-list">
+                {costEstimate ? (
+                  <>
+                    <CostBreakdownPopover estimate={costEstimate}>
+                      <div className="detail dotted-underline-row">
+                        <span>Cost</span>
+                        <strong className="dotted-underline">₹{costEstimate.totalCostInrPerMin.toFixed(2)}/min</strong>
+                      </div>
+                    </CostBreakdownPopover>
+                    <Detail
+                      label="Latency"
+                      value={
+                        costEstimate.latencyMinMs != null && costEstimate.latencyMaxMs != null
+                          ? `${costEstimate.latencyMinMs}-${costEstimate.latencyMaxMs}ms`
+                          : '-'
+                      }
+                    />
+                    <Detail
+                      label="Tokens"
+                      value={
+                        costEstimate.tokensMin != null && costEstimate.tokensMax != null
+                          ? `${costEstimate.tokensMin} - ${costEstimate.tokensMax >= 1000 ? `${(costEstimate.tokensMax / 1000).toFixed(costEstimate.tokensMax % 1000 === 0 ? 0 : 1)}k` : costEstimate.tokensMax}`
+                          : '-'
+                      }
+                    />
+                  </>
+                ) : (
+                  <Detail label="Cost" value="Loading…" />
+                )}
+              </div>
+            </div>
+          )}
+          <div className="panel compact">
+            <h2>Publishing</h2>
+            <div className="detail-list">
+              <Detail label="Published versions" value={publishedCount.toString()} />
+              <Detail label="Active version" value={activeVersion ? `v${activeVersion.version}` : '-'} />
+              <Detail label="Latest draft" value={latestDraft ? `v${latestDraft.version}` : 'None'} />
+            </div>
+          </div>
+          <div className="panel compact right-rail-versions">
+            <h2>Version history</h2>
+            <div className="version-list">
+              {versions.map((version, i) => {
+                const isActive = version._id === selectedBot?.active_version_id;
+                const rollbackKey = `rollback-${version._id}`;
+                const rolling = rollbackState?.[rollbackKey] === 'running';
+                const liveCalls = liveCallsByVersion?.[version._id] || 0;
+                return (
+                  <div
+                    className={`version-row${version._id === editingVersionId ? ' active' : ''}`}
+                    key={version._id}
+                    onClick={() => onSelectVersion?.(version)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                      <span>v{version.version}</span>
+                      <StatusPill value={version.state} />
+                      {isActive && <span style={{ fontSize: '0.68rem', background: 'var(--primary-bg)', color: 'var(--primary)', borderRadius: '4px', padding: '1px 5px', fontWeight: 600 }}>LIVE</span>}
+                      {liveCalls > 0 && (
+                        <span style={{ fontSize: '0.68rem', background: '#dcfce7', color: '#15803d', borderRadius: '4px', padding: '1px 5px', fontWeight: 600 }}>
+                          {liveCalls} live
+                        </span>
+                      )}
+                    </div>
+                    <small>{version.published_at ? <>Published <TimeAgo value={version.published_at} /></> : <>Created <TimeAgo value={version.created_at} /></>}</small>
+                    {version.notes && <small style={{ color: 'var(--muted)', fontStyle: 'italic' }}>{version.notes}</small>}
+                    <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', marginTop: '0.2rem' }}>
+                      {version.state === 'published' && !isActive && onRollback && (
+                        <button
+                          style={{ fontSize: '0.72rem', padding: '2px 8px' }}
+                          disabled={rolling}
+                          onClick={(e) => { e.stopPropagation(); onRollback(version._id); }}
+                        >
+                          {rolling ? 'Rolling back…' : '↩ Rollback to this'}
+                        </button>
+                      )}
+                      {i > 0 && onShowDiff && (
+                        <button
+                          style={{ fontSize: '0.72rem', padding: '2px 8px' }}
+                          onClick={(e) => { e.stopPropagation(); onShowDiff(versions[i - 1]._id, version._id); }}
+                        >
+                          <GitBranch size={11} /> vs prev
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div className="callout">
+            <Wand2 size={18} />
+            V1 is prompt and settings only. Visual node routing can come later through Dograh.
+          </div>
+        </aside>
       </div>
-      <aside className="right-rail">
-        <div className="panel compact">
-          <h2>Publishing</h2>
-          <div className="detail-list">
-            <Detail label="Published versions" value={publishedCount.toString()} />
-            <Detail label="Active version" value={activeVersion ? `v${activeVersion.version}` : '-'} />
-            <Detail label="Latest draft" value={latestDraft ? `v${latestDraft.version}` : 'None'} />
-          </div>
-        </div>
-        <div className="panel compact">
-          <h2>Version history</h2>
-          <div className="version-list">
-            {versions.map((version, i) => {
-              const isActive = version._id === selectedBot?.active_version_id;
-              const rollbackKey = `rollback-${version._id}`;
-              const rolling = rollbackState?.[rollbackKey] === 'running';
-              const liveCalls = liveCallsByVersion?.[version._id] || 0;
-              return (
-                <div
-                  className={`version-row${version._id === editingVersionId ? ' active' : ''}`}
-                  key={version._id}
-                  onClick={() => onSelectVersion?.(version)}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-                    <span>v{version.version}</span>
-                    <StatusPill value={version.state} />
-                    {isActive && <span style={{ fontSize: '0.68rem', background: 'var(--primary-bg)', color: 'var(--primary)', borderRadius: '4px', padding: '1px 5px', fontWeight: 600 }}>LIVE</span>}
-                    {liveCalls > 0 && (
-                      <span style={{ fontSize: '0.68rem', background: '#dcfce7', color: '#15803d', borderRadius: '4px', padding: '1px 5px', fontWeight: 600 }}>
-                        {liveCalls} live
-                      </span>
-                    )}
-                  </div>
-                  <small>{version.published_at ? <>Published <TimeAgo value={version.published_at} /></> : <>Created <TimeAgo value={version.created_at} /></>}</small>
-                  {version.notes && <small style={{ color: 'var(--muted)', fontStyle: 'italic' }}>{version.notes}</small>}
-                  <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', marginTop: '0.2rem' }}>
-                    {version.state === 'published' && !isActive && onRollback && (
-                      <button
-                        style={{ fontSize: '0.72rem', padding: '2px 8px' }}
-                        disabled={rolling}
-                        onClick={(e) => { e.stopPropagation(); onRollback(version._id); }}
-                      >
-                        {rolling ? 'Rolling back…' : '↩ Rollback to this'}
-                      </button>
-                    )}
-                    {i > 0 && onShowDiff && (
-                      <button
-                        style={{ fontSize: '0.72rem', padding: '2px 8px' }}
-                        onClick={(e) => { e.stopPropagation(); onShowDiff(versions[i - 1]._id, version._id); }}
-                      >
-                        <GitBranch size={11} /> vs prev
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-        <div className="callout">
-          <Wand2 size={18} />
-          V1 is prompt and settings only. Visual node routing can come later through Dograh.
-        </div>
-      </aside>
     </section>
   );
 }
