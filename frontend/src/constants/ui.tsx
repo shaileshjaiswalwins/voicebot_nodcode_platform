@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   ClipboardList,
   Clock3,
-  FileSpreadsheet,
   FileText,
   IndianRupee,
   Link2,
@@ -110,7 +109,6 @@ export type CmdKViewResult = { kind: 'view'; view: View; label: string; icon: Re
 export const CMD_VIEWS: CmdKViewResult[] = [
   { kind: 'view', view: 'bots',          label: 'Agents',        icon: <Bot size={15} />,          description: 'Manage voice agents' },
   { kind: 'view', view: 'campaigns',     label: 'Campaigns',     icon: <Megaphone size={15} />,    description: 'Campaign mappings' },
-  { kind: 'view', view: 'campaigns_v2',  label: 'Campaigns v2',  icon: <FileSpreadsheet size={15} />, description: 'Upload a lead CSV' },
   { kind: 'view', view: 'phone_numbers', label: 'Phone Numbers', icon: <Phone size={15} />,        description: 'Number-to-bot routing' },
   { kind: 'view', view: 'number_mapping', label: 'Number Mapping', icon: <Link2 size={15} />,      description: 'Map agents to numbers' },
   { kind: 'view', view: 'test',          label: 'Test Call',     icon: <PhoneCall size={15} />,    description: 'Run a browser call' },

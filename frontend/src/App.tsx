@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
 import {
-  Activity, BarChart2, BookOpen, Bot as BotIcon, ClipboardList, FileSpreadsheet, FileText, Gauge, GitBranch,
+  Activity, BarChart2, BookOpen, Bot as BotIcon, ClipboardList, FileText, Gauge, GitBranch,
   IndianRupee, Keyboard, Link2, Megaphone, Menu, Phone, PhoneCall, Settings as SettingsIcon, X
 } from 'lucide-react';
 
@@ -35,7 +35,6 @@ import { VersionDiffModal } from './components/VersionDiffModal';
 import { BotsView, NewAgentWizard, DeleteAgentDialog } from './views/BotsView';
 import { BuilderView } from './views/BuilderView';
 import { FlowBuilderView } from './views/FlowBuilderView';
-import { CampaignsV2View } from './views/CampaignsV2View';
 import { CampaignsView, buildDefaultStrategy } from './views/CampaignsView';
 import { PhoneNumbersView } from './views/PhoneNumbersView';
 import { NumberMappingView } from './views/NumberMappingView';
@@ -58,7 +57,6 @@ const NAV_ICONS: Record<View, React.ReactNode> = {
   builder: <BotIcon size={17} />,
   flow: <GitBranch size={17} />,
   campaigns: <Megaphone size={17} />,
-  campaigns_v2: <FileSpreadsheet size={17} />,
   phone_numbers: <Phone size={17} />,
   number_mapping: <Link2 size={17} />,
   test: <PhoneCall size={17} />,
@@ -628,9 +626,19 @@ function AppShell() {
   const parsedConfig = parseConfig(configText);
 
   function updateConfig(key: keyof RuntimeConfig, value: unknown) {
-    if (!parsedConfig.ok) return;
-    const next = { ...parsedConfig.value, [key]: value };
-    setConfigText(JSON.stringify(next, null, 2));
+    // Functional update so multiple updateConfig calls in the same tick compose instead of
+    // clobbering each other. The Functions tab, for instance, sets `functions` and
+    // `function_calling` back-to-back; deriving each from the pre-update config (parsedConfig)
+    // made the second overwrite the first, silently dropping the functions edit.
+    setConfigText((prev) => {
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(prev);
+      } catch {
+        return prev;
+      }
+      return JSON.stringify({ ...parsed, [key]: value }, null, 2);
+    });
   }
 
   function updateLanguage(value: string) {
@@ -1307,7 +1315,6 @@ function AppShell() {
             />
           )}
 
-          {view === 'campaigns_v2' && <CampaignsV2View />}
 
           {view === 'phone_numbers' && (
             <PhoneNumbersView
