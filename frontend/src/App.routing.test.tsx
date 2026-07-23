@@ -119,7 +119,7 @@ describe('App routing', () => {
     const user = userEvent.setup();
     await login(user);
 
-    await user.click(screen.getByRole('button', { name: /campaigns/i }));
+    await user.click(screen.getByRole('button', { name: /^campaigns$/i }));
     await waitFor(() => expect(window.location.pathname).toBe('/campaigns'));
     expect(document.title).toMatch(/Campaigns/);
 
@@ -131,7 +131,7 @@ describe('App routing', () => {
     const user = userEvent.setup();
     await login(user);
 
-    await user.click(screen.getByRole('button', { name: /campaigns/i }));
+    await user.click(screen.getByRole('button', { name: /^campaigns$/i }));
     await waitFor(() => expect(window.location.pathname).toBe('/campaigns'));
 
     window.history.back();

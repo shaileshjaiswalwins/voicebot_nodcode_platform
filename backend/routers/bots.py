@@ -59,9 +59,28 @@ def _serialize_version(doc: dict) -> dict:
     return doc
 
 
+def _persona_name(bot: dict) -> str:
+    """The agent's spoken name (config.agent_name). Prefers the published version, falls
+    back to the draft so a just-created (draft-only) bot still shows its name."""
+    version_id = bot.get("active_version_id") or bot.get("draft_version_id")
+    if not version_id:
+        return ""
+    try:
+        version = bot_versions.find_one({"_id": ObjectId(version_id)})
+    except Exception:
+        return ""
+    return ((version or {}).get("config") or {}).get("agent_name", "")
+
+
 @router.get("")
 def list_bots(_: dict = Depends(require_user)) -> list[dict]:
-    return [_serialize_bot(b) for b in bots.find({"status": {"$ne": "deleted"}})]
+    out = []
+    for b in bots.find({"status": {"$ne": "deleted"}}):
+        agent_name = _persona_name(b)
+        b = _serialize_bot(b)
+        b["agent_name"] = agent_name  # spoken persona, distinct from the display name above
+        out.append(b)
+    return out
 
 
 @router.post("")

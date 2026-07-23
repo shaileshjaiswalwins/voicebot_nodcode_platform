@@ -1,14 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
 import {
-  Activity, BarChart2, BookOpen, Bot as BotIcon, ClipboardList, FileText, Gauge, GitBranch,
-  IndianRupee, Keyboard, Megaphone, Menu, Phone, PhoneCall, Settings as SettingsIcon, X
+  Activity, BarChart2, BookOpen, Bot as BotIcon, ClipboardList, FileSpreadsheet, FileText, Gauge, GitBranch,
+  IndianRupee, Keyboard, Link2, Megaphone, Menu, Phone, PhoneCall, Settings as SettingsIcon, X
 } from 'lucide-react';
 
 import { api, ApiError, getToken, setToken, API_BASE } from './api';
 import type {
   AnalysisPromptEntry, AnalysisPromptKey, Bot, BotVersion, Campaign, CallEvent, EvalRun, LangfuseSettings, LanguageOption,
-  LanguageSettings, LibraryPhrase, OutcomeEntry, PhoneNumber, PhoneNumberEnvironment,
+  LanguageSettings, LibraryPhrase, NumberMapping, OutcomeEntry, PhoneNumber, PhoneNumberEnvironment,
   PlatformSettings, RuntimeSettings, Transcript, TestRecordingLookup, DialingStrategy, PricingConfig
 } from './api';
 import type { AgentWorkspaceMode, BuilderMode, CmdKExtra, Diagnostic, RuntimeConfig, TestForm, View } from './types';
@@ -35,8 +35,10 @@ import { VersionDiffModal } from './components/VersionDiffModal';
 import { BotsView, NewAgentWizard, DeleteAgentDialog } from './views/BotsView';
 import { BuilderView } from './views/BuilderView';
 import { FlowBuilderView } from './views/FlowBuilderView';
+import { CampaignsV2View } from './views/CampaignsV2View';
 import { CampaignsView, buildDefaultStrategy } from './views/CampaignsView';
 import { PhoneNumbersView } from './views/PhoneNumbersView';
+import { NumberMappingView } from './views/NumberMappingView';
 import { LibraryView } from './views/LibraryView';
 import { TranscriptsView } from './views/TranscriptsView';
 import { AnalyticsView } from './views/AnalyticsView';
@@ -56,7 +58,9 @@ const NAV_ICONS: Record<View, React.ReactNode> = {
   builder: <BotIcon size={17} />,
   flow: <GitBranch size={17} />,
   campaigns: <Megaphone size={17} />,
+  campaigns_v2: <FileSpreadsheet size={17} />,
   phone_numbers: <Phone size={17} />,
+  number_mapping: <Link2 size={17} />,
   test: <PhoneCall size={17} />,
   transcripts: <FileText size={17} />,
   analytics: <BarChart2 size={17} />,
@@ -80,15 +84,11 @@ const EMPTY_TEST_FORM: TestForm = {
   custom_lead_json: '',
 };
 
+// Hindi only — the runtime (bot_dev_param.py) hardcodes HINDI_LANG_CONFIG and Sarvam
+// hi-IN STT/TTS, so any other option here would save to Mongo and then be ignored on the
+// call. Add a language back only once the runtime can actually speak it.
 const DEFAULT_LANGUAGES: LanguageOption[] = [
   { id: 'hindi', label: 'Hindi' },
-  { id: 'english', label: 'English' },
-  { id: 'tamil', label: 'Tamil' },
-  { id: 'telugu', label: 'Telugu' },
-  { id: 'kannada', label: 'Kannada' },
-  { id: 'gujarati', label: 'Gujarati' },
-  { id: 'marathi', label: 'Marathi' },
-  { id: 'bengali', label: 'Bengali' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -201,6 +201,7 @@ function AppShell() {
   const [bots, setBots] = useState<Bot[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumber[]>([]);
+  const [numberMappings, setNumberMappings] = useState<NumberMapping[]>([]);
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [platformSettings, setPlatformSettings] = useState<PlatformSettings | null>(null);
   const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings | null>(null);
@@ -215,6 +216,8 @@ function AppShell() {
   const [loadingCampaigns, setLoadingCampaigns] = useState(false);
   const [loadingTranscripts, setLoadingTranscripts] = useState(false);
   const [loadingPhoneNumbers, setLoadingPhoneNumbers] = useState(false);
+  const [loadingNumberMappings, setLoadingNumberMappings] = useState(false);
+  const [mapAgentState, setMapAgentState] = useState<Record<string, AsyncState>>({});
 
   const languages = DEFAULT_LANGUAGES;
 
@@ -241,9 +244,12 @@ function AppShell() {
 
   const [showNewAgent, setShowNewAgent] = useState(false);
   const [newAgentBusy, setNewAgentBusy] = useState(false);
-  const [newAgentForm, setNewAgentForm] = useState({
+  const [newAgentForm, setNewAgentForm] = useState<{
+    name: string; description: string; agent_name: string; organization_name: string;
+    persona_gender: 'female' | 'male'; language: string; initial_message: string;
+  }>({
     name: '', description: '', agent_name: '', organization_name: '',
-    language: 'hindi', initial_message: defaultConfig.initial_message || ''
+    persona_gender: 'female', language: 'hindi', initial_message: defaultConfig.initial_message || ''
   });
   const [deleteTarget, setDeleteTarget] = useState<Bot | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -391,6 +397,17 @@ function AppShell() {
     }
   }, []);
 
+  const loadNumberMappings = useCallback(async () => {
+    setLoadingNumberMappings(true);
+    try {
+      setNumberMappings(await api.numberMapping());
+    } catch (err) {
+      pushDiagnostic('Number Mapping', err, 'Retry loading number mapping', 'warning');
+    } finally {
+      setLoadingNumberMappings(false);
+    }
+  }, []);
+
   const loadTranscripts = useCallback(async () => {
     setLoadingTranscripts(true);
     try {
@@ -449,6 +466,7 @@ function AppShell() {
     loadBots();
     loadCampaigns();
     loadPhoneNumbers();
+    loadNumberMappings();
     loadTranscripts();
     loadSettings();
     loadLibrary();
@@ -559,7 +577,7 @@ function AppShell() {
   function handleNewAgent() {
     setNewAgentForm({
       name: '', description: '', agent_name: '', organization_name: '',
-      language: 'hindi', initial_message: defaultConfig.initial_message || ''
+      persona_gender: 'female', language: 'hindi', initial_message: defaultConfig.initial_message || ''
     });
     setShowNewAgent(true);
   }
@@ -571,6 +589,7 @@ function AppShell() {
         ...defaultConfig,
         agent_name: newAgentForm.agent_name,
         organization_name: newAgentForm.organization_name,
+        persona_gender: newAgentForm.persona_gender,
         language: newAgentForm.language,
         initial_message: newAgentForm.initial_message,
       };
@@ -896,6 +915,19 @@ function AppShell() {
     }
   }
 
+  async function handleMapNumberToAgent(botId: string, phoneNumber: string | null) {
+    setMapAgentState((s) => ({ ...s, [botId]: 'running' }));
+    try {
+      await api.mapNumberToAgent(botId, phoneNumber);
+      await loadNumberMappings();
+      setMapAgentState((s) => ({ ...s, [botId]: 'idle' }));
+      showToast(phoneNumber ? 'Number mapped to agent' : 'Number cleared');
+    } catch (err) {
+      setMapAgentState((s) => ({ ...s, [botId]: 'failed' }));
+      pushDiagnostic('Map number to agent', err, 'Retry mapping', 'error');
+    }
+  }
+
   // ── Library: callbacks ────────────────────────────────────────────────
   async function handleCreatePhrase(payload: Partial<LibraryPhrase>) {
     try {
@@ -1067,7 +1099,7 @@ function AppShell() {
     setDiagnostics((prev) => (scope ? prev.filter((d) => d.scope !== scope) : []));
   }
   function handleRetryDiagnostics() {
-    loadBots(); loadCampaigns(); loadPhoneNumbers(); loadTranscripts(); loadSettings(); loadLibrary();
+    loadBots(); loadCampaigns(); loadPhoneNumbers(); loadNumberMappings(); loadTranscripts(); loadSettings(); loadLibrary();
   }
   function handleUseCachedDiagnostics() {
     setDiagnostics([]);
@@ -1275,6 +1307,8 @@ function AppShell() {
             />
           )}
 
+          {view === 'campaigns_v2' && <CampaignsV2View />}
+
           {view === 'phone_numbers' && (
             <PhoneNumbersView
               phoneNumbers={phoneNumbers}
@@ -1287,6 +1321,16 @@ function AppShell() {
               onReassign={handleReassignPhoneNumber}
               reassignState={reassignPhoneNumberState}
               onDelete={handleDeletePhoneNumber}
+            />
+          )}
+
+          {view === 'number_mapping' && (
+            <NumberMappingView
+              mappings={numberMappings}
+              bots={bots}
+              loading={loadingNumberMappings}
+              onMap={handleMapNumberToAgent}
+              mapState={mapAgentState}
             />
           )}
 

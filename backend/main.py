@@ -8,7 +8,7 @@ from pymongo.errors import PyMongoError
 
 from .analysis_prompts import seed_default_analysis_prompts
 from .auth import ensure_default_admin
-from .routers import analytics, audit, auth, bots, campaigns, dialer_webhooks, evals, library, phone_numbers, pricing, runtime, settings, testcall, transcripts
+from .routers import analytics, audit, auth, bots, campaigns, custom_functions, dialer_webhooks, evals, library, number_mapping, phone_numbers, pricing, runtime, settings, testcall, transcripts
 
 _log = logging.getLogger("voicebot_admin")
 
@@ -25,6 +25,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(bots.router)
+app.include_router(custom_functions.router)
 app.include_router(settings.router)
 app.include_router(runtime.router)
 app.include_router(campaigns.router)
@@ -34,6 +35,7 @@ app.include_router(analytics.router)
 app.include_router(testcall.router)
 app.include_router(evals.router)
 app.include_router(phone_numbers.router)
+app.include_router(number_mapping.router)
 app.include_router(audit.router)
 app.include_router(pricing.router)
 app.include_router(dialer_webhooks.router)

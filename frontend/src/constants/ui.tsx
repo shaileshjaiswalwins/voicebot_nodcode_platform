@@ -7,8 +7,10 @@ import {
   CheckCircle2,
   ClipboardList,
   Clock3,
+  FileSpreadsheet,
   FileText,
   IndianRupee,
+  Link2,
   Megaphone,
   Phone,
   PhoneCall,
@@ -17,15 +19,23 @@ import {
 } from 'lucide-react';
 import type { RuntimeConfig, View } from '../types';
 
+// Hindi conjugates the speaker's verb by gender, so the opening line has to match the
+// persona. Keyed so the New-agent form can swap the default when gender changes.
+export const OPENING_LINE_BY_GENDER: Record<'female' | 'male', string> = {
+  female: 'हेलो, मैं {agent_name} बोल रही हूँ {organization_name} से — आपको {product} की requirement है ना?',
+  male: 'हेलो, मैं {agent_name} बोल रहा हूँ {organization_name} से — आपको {product} की requirement है ना?',
+};
+
 export const defaultConfig: RuntimeConfig = {
   agent_name: '',
   organization_name: '',
+  persona_gender: 'female',
   ai_partner: '',
   language: 'hindi',
   temperature: 0.4,
   max_call_duration: 300,
   system_prompt: 'You are a warm and professional call center agent. Greet the caller, understand their requirement, and collect key details.',
-  initial_message: 'हेलो, मैं {agent_name} बोल रही हूँ {organization_name} से — आपको {product} की requirement है ना?',
+  initial_message: OPENING_LINE_BY_GENDER.female,
   call_end_text: 'ठीक है जी, सारी details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए शुक्रिया.',
   inactivity_end_text: '',
   function_calling: false,
@@ -100,7 +110,9 @@ export type CmdKViewResult = { kind: 'view'; view: View; label: string; icon: Re
 export const CMD_VIEWS: CmdKViewResult[] = [
   { kind: 'view', view: 'bots',          label: 'Agents',        icon: <Bot size={15} />,          description: 'Manage voice agents' },
   { kind: 'view', view: 'campaigns',     label: 'Campaigns',     icon: <Megaphone size={15} />,    description: 'Campaign mappings' },
+  { kind: 'view', view: 'campaigns_v2',  label: 'Campaigns v2',  icon: <FileSpreadsheet size={15} />, description: 'Upload a lead CSV' },
   { kind: 'view', view: 'phone_numbers', label: 'Phone Numbers', icon: <Phone size={15} />,        description: 'Number-to-bot routing' },
+  { kind: 'view', view: 'number_mapping', label: 'Number Mapping', icon: <Link2 size={15} />,      description: 'Map agents to numbers' },
   { kind: 'view', view: 'test',          label: 'Test Call',     icon: <PhoneCall size={15} />,    description: 'Run a browser call' },
   { kind: 'view', view: 'transcripts',   label: 'Transcripts',   icon: <FileText size={15} />,     description: 'Browse call transcripts' },
   { kind: 'view', view: 'analytics',     label: 'Analytics',     icon: <BarChart2 size={15} />,    description: 'Outcomes and quality' },

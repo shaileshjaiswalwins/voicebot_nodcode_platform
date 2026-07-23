@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { AlertTriangle, Bot, FileText, Headphones, Pencil, Plus, Rocket, ShieldCheck, Trash2 } from 'lucide-react';
 import type { Bot as BotType, Campaign, LanguageOption } from '../api';
 import type { Transcript } from '../api';
+import { OPENING_LINE_BY_GENDER } from '../constants/ui';
 import { StatusPill } from '../components/StatusPill';
 import { CopyableId } from '../components/CopyableId';
 import { TimeAgo } from '../components/TimeAgo';
@@ -112,6 +113,7 @@ export function NewAgentWizard({
     description: string;
     agent_name: string;
     organization_name: string;
+    persona_gender: 'female' | 'male';
     language: string;
     initial_message: string;
   };
@@ -125,10 +127,22 @@ export function NewAgentWizard({
   const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     onChange({ ...form, [key]: e.target.value });
 
+  // Switching gender rewrites the opening line's verb, but only while the line is still
+  // one of the two defaults — never clobber a line the user has typed themselves.
+  function setGender(e: React.ChangeEvent<HTMLSelectElement>) {
+    const persona_gender = e.target.value as 'female' | 'male';
+    const untouched = Object.values(OPENING_LINE_BY_GENDER).includes(form.initial_message);
+    onChange({
+      ...form,
+      persona_gender,
+      initial_message: untouched ? OPENING_LINE_BY_GENDER[persona_gender] : form.initial_message,
+    });
+  }
+
   const previewOpening = form.initial_message
     .replace('{agent_name}', form.agent_name || '<agent_name>')
     .replace('{organization_name}', form.organization_name || '<org_name>')
-    .replace('{product}', 'air conditioner');
+    .replace('{product}', '<product>');
 
   return (
     <Dialog
@@ -150,25 +164,30 @@ export function NewAgentWizard({
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div className="form-grid">
             <label>
-              Display name <span style={{ color: 'var(--danger)' }}>*</span>
+              <span>Bot name <span style={{ color: 'var(--danger)' }}>*</span></span>
               <input value={form.name} onChange={set('name')} placeholder="e.g. JD Outbound — Hindi" autoFocus />
-            </label>
-            <label>
-              Description
-              <input value={form.description} onChange={set('description')} placeholder="Short note (optional)" />
+              <small>A label for the agent</small>
             </label>
           </div>
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
             <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Persona</div>
             <div className="form-grid">
               <label>
-                Agent persona name <span style={{ color: 'var(--danger)' }}>*</span>
+                <span>Agent name <span style={{ color: 'var(--danger)' }}>*</span></span>
                 <input value={form.agent_name} onChange={set('agent_name')} placeholder="e.g. Tarun, Priya, Aman" />
-                <small>Used in the opening line and system prompt.</small>
+                <small>Name of the agent</small>
               </label>
               <label>
                 Organization name
                 <input value={form.organization_name} onChange={set('organization_name')} placeholder="e.g. JustDial" />
+              </label>
+              <label>
+                Gender
+                <select value={form.persona_gender} onChange={setGender}>
+                  <option value="female">Female</option>
+                  <option value="male">Male</option>
+                </select>
+                <small>Hindi conjugates the speaker's verb — this sets बोल रही हूँ vs बोल रहा हूँ.</small>
               </label>
             </div>
           </div>
@@ -180,7 +199,7 @@ export function NewAgentWizard({
                 <select value={form.language} onChange={set('language')}>
                   {languages.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
                 </select>
-                <small>Runtime currently always uses Sarvam STT/TTS in Hindi regardless of this setting.</small>
+                <small>Hindi only for now — the runtime speaks Hindi (Sarvam STT/TTS).</small>
               </label>
             </div>
           </div>

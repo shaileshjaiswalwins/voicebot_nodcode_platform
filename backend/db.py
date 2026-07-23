@@ -31,6 +31,11 @@ platform_settings = db["tbl_ai_vb_platform_settings"]
 campaigns = db["tbl_ai_vb_campaigns"]
 language_settings = db["tbl_ai_vb_language_settings"]
 phone_numbers = db["tbl_ai_vb_phone_numbers"]
+# The inbound numbers available to map, seeded from the SIP trunk sheet. Deliberately
+# separate from phone_numbers above.
+sip_dispatch_rules = db["tbl_ai_vb_sip_dispatch_rules"]
+# number -> agent mapping. Unique index on phone_number enforces one-number-one-agent.
+agent_number_mapping = db["tbl_ai_vb_agent_number_mapping"]
 transcripts = db["tbl_ai_vb_call_transcripts"]
 audit_log = db["tbl_ai_vb_audit_log"]
 campaign_leads = db["tbl_ai_vb_campaign_leads"]
@@ -42,3 +47,6 @@ call_jobs = db["tbl_ai_vb_call_jobs"]
 call_jobs.create_index([("campaign_id", 1), ("status", 1)])
 call_jobs.create_index([("phone_number", 1), ("status", 1)])
 dialer_webhook_secrets = db["tbl_ai_vb_dialer_webhook_secrets"]
+# Per-bot user-configured API calls (pre-call data fetches + in-call LLM tools). Read at
+# call time by the runtime (agent_resolver.py) directly from this collection.
+custom_functions = db["tbl_ai_vb_custom_functions"]

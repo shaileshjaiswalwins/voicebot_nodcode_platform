@@ -124,6 +124,9 @@ class BotConfig(BaseModel):
 
     organization_name: str = ""
     agent_name: str = ""
+    # Persona gender. Hindi conjugates first-person verbs by speaker gender, so this drives
+    # both the opening line's verb (बोल रही हूँ / बोल रहा हूँ) and the prompt's gender rule.
+    persona_gender: Literal["female", "male"] = "female"
     ai_partner: str = ""
     language: str = "hi"
     voice: str = ""
@@ -200,6 +203,61 @@ class FunctionTestRequest(BaseModel):
 
     function: CustomFunction
     args: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResponseMapping(BaseModel):
+    """Extracts one value from a function's JSON response into a {{variable}}.
+
+    `path` is a dotted path with numeric indices, e.g. "results.data.0.buyer_details.buyer_name".
+    Allowed for any HTTP method — a POST search can produce variables just like a GET.
+    """
+
+    variable: str
+    path: str
+
+
+class CustomFunctionBase(BaseModel):
+    """A user-configured API call attached to a bot.
+
+    timing="pre_call": runs automatically before the call connects (while ringing); its
+    response_mappings populate {{variables}} substituted anywhere in the system prompt.
+    timing="in_call": registered as an LLM tool the bot may invoke mid-conversation;
+    name/description/parameters are what the model sees.
+    """
+
+    name: str
+    description: str = ""
+    timing: Literal["pre_call", "in_call"]  # required — a deliberate authoring choice
+    enabled: bool = True
+
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
+    url: str
+    headers: dict[str, str] = Field(default_factory=dict)
+    query_params: dict[str, str] = Field(default_factory=dict)
+    # Raw request-body template stored as a string so {{tokens}} survive verbatim; parsed
+    # per body_format at execution time. None means no body.
+    body: str | None = None
+    body_format: Literal["json", "form"] = "json"
+    timeout_ms: int = 8000
+
+    # in_call only: JSON schema of the arguments the LLM supplies when calling the tool.
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    response_mappings: list[ResponseMapping] = Field(default_factory=list)
+
+
+class CustomFunctionCreate(CustomFunctionBase):
+    pass
+
+
+class CustomFunctionUpdate(CustomFunctionBase):
+    pass
+
+
+class CustomFunctionTestRequest(CustomFunctionBase):
+    """A function definition plus sample context values, used by the Test button to execute
+    the request server-side and show the raw response + which variables it resolved."""
+
+    sample_context: dict[str, str] = Field(default_factory=dict)
 
 
 class AttemptStep(BaseModel):
@@ -429,3 +487,13 @@ class DialerCallStatusWebhook(BaseModel):
 
 class DialerWebhookSecretUpdate(BaseModel):
     secret: str
+
+
+class MapNumberToAgentRequest(BaseModel):
+    """Maps one agent to one inbound number. phone_number=None clears the agent's mapping.
+
+    A number belongs to at most one agent (unique index on phone_number), and this endpoint
+    also drops any number the agent already held — so the relationship is 1:1 both ways.
+    """
+
+    phone_number: str | None = None

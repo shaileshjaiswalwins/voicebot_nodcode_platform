@@ -1,6 +1,6 @@
 import type { CallEvent, Transcript, Bot, Campaign, PhraseCategory, Flow } from './api';
 
-export type View = 'bots' | 'builder' | 'flow' | 'campaigns' | 'phone_numbers' | 'test' | 'transcripts' | 'analytics' | 'observability' | 'library' | 'settings' | 'audit_log' | 'admin';
+export type View = 'bots' | 'builder' | 'flow' | 'campaigns' | 'campaigns_v2' | 'phone_numbers' | 'number_mapping' | 'test' | 'transcripts' | 'analytics' | 'observability' | 'library' | 'settings' | 'audit_log' | 'admin';
 export type AgentWorkspaceMode = 'list' | 'builder';
 export type BuilderMode = 'pm' | 'advanced';
 export type DiagnosticSeverity = 'info' | 'warning' | 'error';
@@ -66,6 +66,9 @@ export type RuntimeConfig = {
   assistant_id?: string;
   agent_name?: string;
   organization_name?: string;
+  /** Hindi conjugates first-person verbs by speaker gender — drives the opening line's
+   * verb (बोल रही हूँ / बोल रहा हूँ) and the prompt's gender rule. */
+  persona_gender?: 'female' | 'male';
   ai_partner?: string;
   /** This field is used by other language-scoped features (phrase library, campaign
    * attempt-sequence overrides) but has no effect on this bot's own STT/TTS — use

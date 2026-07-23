@@ -47,13 +47,11 @@ export function PageSummary({
     const total = bots.length;
     const active = bots.filter((b) => b.status === 'active').length;
     const draft = bots.filter((b) => b.status === 'paused').length;
-    const botCalls = transcripts.filter((t) => t.bot_id === selectedBot?._id).length;
     return (
       <div className="page-summary">
         <SummaryCard icon={<Bot size={17} />} color="blue" label="Total agents" value={L ?? total.toString()} sub="All configured bots" />
         <SummaryCard icon={<CheckCircle2 size={17} />} color="green" label="Active" value={L ?? active.toString()} sub="Published & running" />
         <SummaryCard icon={<Braces size={17} />} color="amber" label="Draft" value={L ?? draft.toString()} sub="Awaiting publish" />
-        <SummaryCard icon={<PhoneCall size={17} />} color="slate" label="Calls (selected)" value={L ?? botCalls.toString()} sub={selectedBot?.name || 'Select a bot'} />
       </div>
     );
   }
@@ -148,7 +146,6 @@ export function PageSummary({
   return (
     <div className="page-summary">
       <SummaryCard icon={<Bot size={17} />} color="blue" label="Active agents" value={L ?? activeBots.toString()} sub={`${bots.length} total`} />
-      <SummaryCard icon={<Megaphone size={17} />} color="green" label="Campaigns" value={L ?? campaigns.length.toString()} sub="Mongo mappings" />
       <SummaryCard icon={<PhoneCall size={17} />} color="amber" label="Completed calls" value={L ?? completedCalls.toString()} sub={`${transcripts.length} transcripts`} />
       <SummaryCard icon={<Clock3 size={17} />} color="slate" label="Avg duration" value={avgDuration ? `${avgDuration}s` : '—'} sub="Saved transcripts" />
     </div>

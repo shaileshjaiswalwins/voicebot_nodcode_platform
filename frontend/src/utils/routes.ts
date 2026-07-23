@@ -4,7 +4,9 @@ export type RouteState =
   | { view: 'bots'; botId: string }
   | { view: 'flow' }
   | { view: 'campaigns'; campaignKey: string }
+  | { view: 'campaigns_v2' }
   | { view: 'phone_numbers' }
+  | { view: 'number_mapping' }
   | { view: 'test' }
   | { view: 'transcripts'; transcriptId: string }
   | { view: 'analytics' }
@@ -19,7 +21,9 @@ const VIEW_TO_SEGMENT: Record<View, string> = {
   builder: 'agents',
   flow: 'flow',
   campaigns: 'campaigns',
+  campaigns_v2: 'campaigns-v2',
   phone_numbers: 'phone-numbers',
+  number_mapping: 'number-mapping',
   test: 'test',
   transcripts: 'transcripts',
   analytics: 'analytics',
@@ -34,7 +38,9 @@ const SEGMENT_TO_VIEW: Record<string, View> = {
   agents: 'bots',
   flow: 'flow',
   campaigns: 'campaigns',
+  'campaigns-v2': 'campaigns_v2',
   'phone-numbers': 'phone_numbers',
+  'number-mapping': 'number_mapping',
   test: 'test',
   transcripts: 'transcripts',
   analytics: 'analytics',

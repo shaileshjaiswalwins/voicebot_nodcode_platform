@@ -82,6 +82,9 @@ export type BotStatus = 'active' | 'paused' | 'deleted';
 export type Bot = {
   _id: string;
   name: string;
+  /** The agent's spoken persona name (config.agent_name), resolved from the published or
+   * draft version — distinct from `name`, which is the internal display label. */
+  agent_name?: string;
   description?: string;
   assistant_id?: string;
   status: BotStatus;
@@ -210,6 +213,18 @@ export type PhoneNumber = {
   // sip_password is write-only — never present on anything the API returns
   created_at: string;
   updated_at: string;
+};
+
+export type NumberMapping = {
+  phone_number: string;
+  /** LiveKit worker pool the number's calls arrive on — NOT the persona name. */
+  livekit_agent_name: string;
+  environment: string;
+  bot_id?: string | null;
+  /** The agent's display name. */
+  bot_name?: string | null;
+  /** The name the caller actually hears (config.agent_name on the published version). */
+  persona_name?: string | null;
 };
 
 export type CallEvent = {
@@ -589,6 +604,14 @@ export const api = {
   },
   deletePhoneNumber(id: string): Promise<{ ok: boolean }> {
     return request(`/api/phone-numbers/${id}`, { method: 'DELETE' });
+  },
+
+  // number → agent mapping
+  numberMapping(): Promise<NumberMapping[]> {
+    return request('/api/number-mapping');
+  },
+  mapNumberToAgent(botId: string, phoneNumber: string | null): Promise<{ bot_id: string; phone_number: string | null }> {
+    return request(`/api/number-mapping/agent/${botId}`, { method: 'PUT', body: JSON.stringify({ phone_number: phoneNumber }) });
   },
 
   // library — phrases, outcomes, language settings

@@ -38,3 +38,9 @@ voicebot_platform/
 # Local per-machine tool tuning, not shared project config
 .claude/proven-config.json
 .claude/.proven-config-version
+
+# Shell scripts
+start_param.sh
+
+# Backend generated files
+backend/requirements.txt
