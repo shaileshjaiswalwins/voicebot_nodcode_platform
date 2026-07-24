@@ -96,7 +96,7 @@ def test_progress_counts_reflects_job_statuses(client):
     campaign_execution.complete_job(job["_id"], "completed")
 
     counts = campaign_execution.progress_counts("progress_camp")
-    assert counts == {"queued": 1, "in_progress": 0, "completed": 1, "failed": 0, "total": 2}
+    assert counts == {"queued": 1, "in_progress": 0, "dialing": 0, "completed": 1, "failed": 0, "total": 2}
 
 
 def test_start_progress_claim_complete_endpoints(client, auth_headers):
@@ -254,6 +254,102 @@ def test_complete_job_endpoint_flips_campaign_to_completed_once_queue_empties(cl
     assert campaigns.find_one({"campaign_key": "auto_complete_camp"})["status"] == "completed"
 
 
+def test_mark_job_dialing_sets_status_and_syncs_lead(client):
+    _seed_leads("dialing_camp", 1)
+    campaigns.update_one({"campaign_key": "dialing_camp"}, {"$set": {"status": "active"}})
+    campaign_execution.enqueue_pending_leads("dialing_camp")
+    job = campaign_execution.claim_next_job("dialing_camp")
+
+    updated = campaign_execution.mark_job_dialing(job["_id"], {"status": "queued"})
+    assert updated["status"] == "dialing"
+    assert updated["dialer_response"] == {"status": "queued"}
+    assert campaign_leads.find_one({"_id": job["lead_id"]})["status"] == "dialing"
+
+
+def test_dialing_is_not_terminal_and_not_reclaimed_by_claim_next_job(client):
+    """A job pushed to TSPL and awaiting their async callback must not be picked up again
+    by claim_next_job — that's what reclaim_stale_dialing (a much longer, separate timeout)
+    is for, not the ordinary in_progress lease."""
+    _seed_leads("no_reclaim_camp", 1)
+    campaigns.update_one({"campaign_key": "no_reclaim_camp"}, {"$set": {"status": "active"}})
+    campaign_execution.enqueue_pending_leads("no_reclaim_camp")
+    job = campaign_execution.claim_next_job("no_reclaim_camp")
+    campaign_execution.mark_job_dialing(job["_id"])
+    assert campaign_execution.claim_next_job("no_reclaim_camp") is None
+
+
+def test_revert_to_queued_makes_job_claimable_again(client):
+    _seed_leads("revert_camp", 1)
+    campaigns.update_one({"campaign_key": "revert_camp"}, {"$set": {"status": "active"}})
+    campaign_execution.enqueue_pending_leads("revert_camp")
+    job = campaign_execution.claim_next_job("revert_camp")
+    assert job is not None
+
+    campaign_execution.revert_to_queued(job["_id"])
+    reclaimed = campaign_execution.claim_next_job("revert_camp")
+    assert reclaimed is not None
+    assert reclaimed["_id"] == job["_id"]
+    assert reclaimed["status"] == "in_progress"
+
+
+def test_reclaim_stale_dialing_marks_failed_after_timeout(client):
+    _seed_leads("stale_dialing_camp", 1)
+    campaigns.update_one({"campaign_key": "stale_dialing_camp"}, {"$set": {"status": "active"}})
+    campaign_execution.enqueue_pending_leads("stale_dialing_camp")
+    job = campaign_execution.claim_next_job("stale_dialing_camp")
+    campaign_execution.mark_job_dialing(job["_id"])
+
+    # Simulate TSPL never calling back: push dialed_at into the past.
+    call_jobs.update_one(
+        {"_id": job["_id"]},
+        {"$set": {"dialed_at": datetime.now(timezone.utc) - timedelta(minutes=100)}},
+    )
+    reclaimed_count = campaign_execution.reclaim_stale_dialing("stale_dialing_camp", timedelta(minutes=45))
+    assert reclaimed_count == 1
+    assert call_jobs.find_one({"_id": job["_id"]})["status"] == "failed"
+
+
+def test_reclaim_stale_dialing_leaves_recent_dialing_jobs_alone(client):
+    _seed_leads("fresh_dialing_camp", 1)
+    campaigns.update_one({"campaign_key": "fresh_dialing_camp"}, {"$set": {"status": "active"}})
+    campaign_execution.enqueue_pending_leads("fresh_dialing_camp")
+    job = campaign_execution.claim_next_job("fresh_dialing_camp")
+    campaign_execution.mark_job_dialing(job["_id"])
+
+    reclaimed_count = campaign_execution.reclaim_stale_dialing("fresh_dialing_camp", timedelta(minutes=45))
+    assert reclaimed_count == 0
+    assert call_jobs.find_one({"_id": job["_id"]})["status"] == "dialing"
+
+
+def test_derive_campaign_status_not_completed_while_jobs_are_dialing(client):
+    """A regression guard for the exact bug this plan's model change could introduce:
+    derive_campaign_status must treat 'dialing' as in-flight, same as queued/in_progress,
+    or a campaign with real calls awaiting TSPL's callback would be wrongly marked done."""
+    _seed_leads("dialing_not_done_camp", 1)
+    campaign_execution.enqueue_pending_leads("dialing_not_done_camp")
+    job = campaign_execution.claim_next_job("dialing_not_done_camp")
+    campaign_execution.mark_job_dialing(job["_id"])
+    assert campaign_execution.derive_campaign_status("dialing_not_done_camp", "active") == "active"
+
+
+def test_find_in_progress_job_by_phone_matches_dialing_status(client):
+    # A dedicated, unlikely-to-collide number — find_in_progress_job_by_phone has no
+    # campaign filter by design (it mirrors TSPL's webhook, which doesn't know our
+    # campaign_key either), so it must not share a number with any other test's lead.
+    unique_phone = "+919999900001"
+    campaigns.update_one({"campaign_key": "phone_lookup_camp"}, {"$set": {"campaign_key": "phone_lookup_camp"}}, upsert=True)
+    campaign_leads.insert_one(
+        {"campaign_id": "phone_lookup_camp", "phone_number": unique_phone, "name": "x", "vars": {}, "status": "pending"}
+    )
+    campaign_execution.enqueue_pending_leads("phone_lookup_camp")
+    job = campaign_execution.claim_next_job("phone_lookup_camp")
+    campaign_execution.mark_job_dialing(job["_id"])
+
+    found = campaign_execution.find_in_progress_job_by_phone(unique_phone)
+    assert found is not None
+    assert found["_id"] == job["_id"]
+
+
 def test_get_progress_self_heals_stale_completed_status(client, auth_headers):
     """A campaign whose queue emptied out before this feature existed (or via direct DB
     write) should catch up to 'completed' the next time anything polls its progress."""
@@ -266,3 +362,113 @@ def test_get_progress_self_heals_stale_completed_status(client, auth_headers):
     client.get("/api/campaigns/stale_status_camp/progress", headers=auth_headers)
 
     assert campaigns.find_one({"campaign_key": "stale_status_camp"})["status"] == "completed"
+
+
+def test_campaign_outcomes_empty_when_no_calls_yet(client, auth_headers):
+    _seed_leads("outcomes_empty_camp", 2)
+    resp = client.get("/api/campaigns/outcomes_empty_camp/outcomes", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json() == {"counts": {}, "total_analyzed": 0, "total_with_calls": 0}
+
+
+def test_campaign_outcomes_groups_by_call_outcome_and_counts_pending_analysis(client, auth_headers):
+    _seed_leads("outcomes_camp", 3)
+    client.post("/api/campaigns/outcomes_camp/start", headers=auth_headers)
+
+    for i, outcome in enumerate(["Approved", "Approved", None]):
+        claimed = client.post("/api/campaigns/outcomes_camp/claim", headers=auth_headers).json()
+        call_id = f"outcome_call_{i}"
+        client.post(
+            f"/api/campaigns/outcomes_camp/jobs/{claimed['_id']}/complete",
+            json={"status": "completed", "call_id": call_id},
+            headers=auth_headers,
+        )
+        if outcome:
+            transcripts.insert_one({"call_id": call_id, "analysis": {"call_outcome": outcome}})
+
+    resp = client.get("/api/campaigns/outcomes_camp/outcomes", headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["counts"] == {"Approved": 2, "Pending analysis": 1}
+    assert body["total_analyzed"] == 2
+    assert body["total_with_calls"] == 3
+
+
+def test_revert_to_queued_or_fail_retries_then_gives_up(client, auth_headers):
+    """A push that keeps failing (bad dialer_config, TSPL rejecting the payload) must not
+    retry forever silently — after max_attempts it should land in push_failed with the
+    actual reason visible on both the job and the lead."""
+    _seed_leads("push_fail_camp", 1)
+    client.post("/api/campaigns/push_fail_camp/start", headers=auth_headers)
+    job = campaign_execution.claim_next_job("push_fail_camp")
+
+    for _ in range(2):
+        status = campaign_execution.revert_to_queued_or_fail(job["_id"], "TSPL 400: bad channel_id", 3)
+        assert status == "queued"
+        assert call_jobs.find_one({"_id": job["_id"]})["status"] == "queued"
+
+    status = campaign_execution.revert_to_queued_or_fail(job["_id"], "TSPL 400: bad channel_id", 3)
+    assert status == "push_failed"
+    final_job = call_jobs.find_one({"_id": job["_id"]})
+    assert final_job["status"] == "push_failed"
+    assert final_job["attempts"] == 3
+    assert final_job["last_failure_reason"] == "TSPL 400: bad channel_id"
+
+    lead = campaign_leads.find_one({"_id": job["lead_id"]})
+    assert lead["status"] == "push_failed"
+    assert lead["failure_reason"] == "TSPL 400: bad channel_id"
+
+
+def test_leads_csv_export_covers_rejected_pushfailed_and_completed_rows(client, auth_headers):
+    campaigns.update_one(
+        {"campaign_key": "results_camp"},
+        {"$set": {"campaign_key": "results_camp", "name": "t", "status": "active"}},
+        upsert=True,
+    )
+    campaign_leads.insert_one({
+        "campaign_id": "results_camp", "phone_number": "not-a-phone", "jduid": None,
+        "name": "Bad Row", "vars": {}, "status": "rejected", "failure_reason": "invalid phone_number format",
+    })
+    campaign_leads.insert_one({
+        "campaign_id": "results_camp", "phone_number": None, "jduid": "jd_push_failed",
+        "name": "Stuck", "vars": {}, "status": "push_failed", "failure_reason": "TSPL 400: bad channel_id",
+    })
+    campaign_leads.insert_one({
+        "campaign_id": "results_camp", "phone_number": "+919876500000", "jduid": None,
+        "name": "Answered", "vars": {}, "status": "completed", "call_id": "results_call_1",
+    })
+    transcripts.insert_one({"call_id": "results_call_1", "analysis": {"call_outcome": "Approved"}})
+
+    resp = client.get("/api/campaigns/results_camp/leads.csv", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    rows = resp.text.strip().splitlines()
+    assert rows[0] == "jduid,phone_number,name,stage,status,detail"
+    body = "\n".join(rows[1:])
+    assert "upload,rejected,invalid phone_number format" in body
+    assert "dialing,push_failed,TSPL 400: bad channel_id" in body
+    assert "called,completed,Approved" in body
+
+
+def test_mint_push_ref_is_unique_each_call_and_resolvable_by_the_webhook(client, auth_headers):
+    """TSPL rejects a push as a Duplicate Lead if ref_obj._id repeats — mint_push_ref must
+    hand out a fresh id every call, and dialer_webhooks.resolve_job must be able to find the
+    job again via that id once TSPL echoes it back as job_id on the completion webhook."""
+    from backend import dialer_webhooks
+
+    _seed_leads("push_ref_camp", 1)
+    client.post("/api/campaigns/push_ref_camp/start", headers=auth_headers)
+    job = campaign_execution.claim_next_job("push_ref_camp")
+
+    ref1 = campaign_execution.mint_push_ref(job["_id"])
+    ref2 = campaign_execution.mint_push_ref(job["_id"])
+    assert ref1 != ref2
+
+    class _Payload:
+        job_id = ref2
+        call_id = None
+        phone_number = None
+
+    resolved = dialer_webhooks.resolve_job(_Payload())
+    assert resolved is not None
+    assert resolved["_id"] == job["_id"]

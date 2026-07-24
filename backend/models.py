@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -34,7 +35,7 @@ class PlatformSettings(BaseModel):
 
 class FlowNode(BaseModel):
     id: str
-    type: Literal["message", "condition", "tool_call", "transfer", "end"] = "message"
+    type: Literal["start", "message", "condition", "tool_call", "transfer", "global", "end"] = "message"
     position: dict[str, float] = Field(default_factory=lambda: {"x": 0, "y": 0})
     data: dict[str, Any] = Field(default_factory=dict)
 
@@ -45,6 +46,11 @@ class FlowEdge(BaseModel):
     target: str
     label: str = ""
     condition: str = ""
+    # Which of the source node's named outcomes (message transition, condition rule, etc.)
+    # this edge is attached to — lets a node render one connector dot per outcome instead of
+    # a single generic handle. Purely a rendering/authoring detail; flow_compiler.py only
+    # ever reads label/condition, never this.
+    source_handle: str = ""
 
 
 class Flow(BaseModel):
@@ -305,21 +311,58 @@ class SetStatusRequest(BaseModel):
     status: str
 
 
+class ScheduleCampaignRequest(BaseModel):
+    """Body for POST /{campaign_key}/schedule. `scheduled_at`, when given, is a naive
+    Asia/Kolkata wall-clock datetime (no timezone field) — this platform is India-only
+    today (DialerConfig.country defaults to "IN"), so a timezone picker would just be
+    a control that always has to be set the same way."""
+
+    send_now: bool
+    scheduled_at: datetime | None = None
+
+
 class CampaignLead(BaseModel):
     """A single contact/row imported from a campaign's CSV. `vars` holds every CSV
-    column beyond phone_number/name verbatim, so the prompt injector (`{{col}}`) can
-    reference any of them without the schema knowing column names in advance."""
+    column beyond phone_number/name/jduid verbatim, so the prompt injector (`{{col}}`)
+    can reference any of them without the schema knowing column names in advance.
+
+    `jduid` (Justdial's internal per-user ID, which TSPL's dialer resolves to a real
+    phone number on their side) is the primary identifier for TSPL-pushed campaigns —
+    we never see the real number. `phone_number` is kept for direct-dial leads and is
+    now optional; a row needs at least one of the two (enforced at CSV-upload time,
+    not here, so existing direct-dial flows are unaffected)."""
 
     id: str = Field(alias="_id")
     campaign_id: str
-    phone_number: str
+    phone_number: str | None = None
+    jduid: str | None = None
     name: str | None = None
     vars: dict[str, str] = Field(default_factory=dict)
-    status: Literal["pending", "dialing", "completed", "failed"] = "pending"
+    status: Literal["pending", "dialing", "completed", "failed", "rejected", "push_failed"] = "pending"
+    failure_reason: str | None = None
     call_id: str | None = None
     estimated_cost: float | None = None
 
     model_config = {"populate_by_name": True}
+
+
+class DialerConfig(BaseModel):
+    """Campaign-level fields for TSPL's outbound-dialer push payload that don't vary
+    per lead (unlike jduid/buyer_city/searched_keyword, which live on CampaignLead).
+    Set once per campaign via PUT /{campaign_key}/dialer-config."""
+
+    channel_name: str = ""
+    channel_id: int | None = None
+    bd: int | None = None
+    service_id: str = ""
+    service_source: str = ""
+    page_type: str = "gallery_image"
+    country: str = "IN"
+    language: str = "en"
+
+
+class SaveDialerConfigRequest(BaseModel):
+    dialer_config: DialerConfig
 
 
 class CampaignLeadUploadResult(BaseModel):

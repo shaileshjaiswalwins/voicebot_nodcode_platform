@@ -24,10 +24,19 @@ def resolve_job(payload) -> dict | None:
     """Finds the call_job this webhook is about. Prefers job_id/call_id (the correct,
     correlation-ID-based way — TSPL should echo back whatever ID we hand them when the call
     is placed), falls back to a best-effort phone-number match. See
-    campaign_execution.find_in_progress_job_by_phone for the fallback's caveat."""
+    campaign_execution.find_in_progress_job_by_phone for the fallback's caveat.
+
+    `job_id` is matched against `push_ref_id` first — the value actually sent as
+    `ref_obj._id` on the push (see campaign_execution.mint_push_ref; TSPL requires this to
+    be unique per push attempt, so it's minted fresh each retry and is distinct from the
+    job's own _id). Falls back to the job's own _id for any older in-flight job pushed
+    before push_ref_id existed."""
     from bson import ObjectId
 
     if payload.job_id:
+        job = campaign_execution.call_jobs.find_one({"push_ref_id": payload.job_id})
+        if job:
+            return job
         try:
             job = campaign_execution.call_jobs.find_one({"_id": ObjectId(payload.job_id)})
             if job:
