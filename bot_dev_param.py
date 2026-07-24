@@ -357,7 +357,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # ── 2. Resolve bot config and settings ──
     _assistant_id = _room_meta_raw.get("assistant_id", "")
-    _bot_id_meta = _room_meta_raw.get("bot_id", "")
+    _bot_id_meta = _room_meta_raw.get("bot_id", "") or _assistant_id
     _test_version_meta = _room_meta_raw.get("test_bot_version_id", "")
     # fetch_bot_config(bot_id, test_version) loads a specific version's config — used by the
     # dashboard test flow, which passes both in room metadata. Live number-attached calls
