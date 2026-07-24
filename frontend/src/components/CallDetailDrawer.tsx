@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Dialog } from './Dialog';
 import { api, type CallDetail } from '../api';
+import { StatusPill } from './StatusPill';
 
 /** Call detail drawer for a campaign lead: transcript, cost breakdown, latency breakdown.
  * Fetches from GET /api/campaigns/{key}/calls/{call_id}, which merges the campaign's own
@@ -26,6 +27,18 @@ export function CallDetailDrawer({ campaignKey, callId, onClose }: { campaignKey
       {!error && !detail && <p>Loading...</p>}
       {detail && (
         <div className="call-detail-drawer">
+          <div className="call-detail-section">
+            <strong>Outcome</strong>
+            {detail.analysis?.call_outcome ? (
+              <>
+                <p><StatusPill value={detail.analysis.call_outcome} /></p>
+                {detail.analysis.call_outcome_description && <p className="muted">{detail.analysis.call_outcome_description}</p>}
+                {detail.analysis.call_summary && <p>{detail.analysis.call_summary}</p>}
+              </>
+            ) : (
+              <p className="muted">Not analyzed yet — the callback worker hasn't processed this call.</p>
+            )}
+          </div>
           <div className="call-detail-section">
             <strong>Cost breakdown</strong>
             <ul>

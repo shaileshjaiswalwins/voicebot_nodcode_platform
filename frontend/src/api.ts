@@ -119,6 +119,19 @@ export type DialingStrategy = {
   priority: 'low' | 'normal' | 'high' | 'urgent';
 };
 
+/** Campaign-level fields for TSPL's outbound-dialer push payload that don't vary per
+ * lead (unlike jduid/buyer_city/searched_keyword, which live on CampaignLead.vars). */
+export type DialerConfig = {
+  channel_name: string;
+  channel_id: number | null;
+  bd: number | null;
+  service_id: string;
+  service_source: string;
+  page_type: string;
+  country: string;
+  language: string;
+};
+
 export type Campaign = {
   _id: string;
   campaign_key: string;
@@ -126,19 +139,25 @@ export type Campaign = {
   bot_id?: string;
   status?: string;
   dialing_strategy?: DialingStrategy;
+  dialer_config?: DialerConfig;
   lead_api?: { url?: string; endpoint?: string };
   prompt_template?: string;
 };
 
-export type CampaignLeadStatus = 'pending' | 'dialing' | 'completed' | 'failed';
+export type CampaignLeadStatus = 'pending' | 'dialing' | 'completed' | 'failed' | 'rejected' | 'push_failed';
 
 export type CampaignLead = {
   _id: string;
   campaign_id: string;
-  phone_number: string;
+  /** Direct-dial leads only. TSPL-pushed leads use jduid instead — a row has one or the other. */
+  phone_number?: string | null;
+  /** Justdial's internal per-user ID — the primary identifier for TSPL-pushed campaigns,
+   * which never see the real phone number. */
+  jduid?: string | null;
   name?: string;
   vars: Record<string, string>;
   status: CampaignLeadStatus;
+  failure_reason?: string | null;
   call_id?: string;
   estimated_cost?: number;
 };
@@ -152,6 +171,8 @@ export type CampaignLeadUploadResult = {
 export type CampaignProgress = {
   queued: number;
   in_progress: number;
+  /** Pushed to TSPL's outbound-dialer API, awaiting their async completion callback. */
+  dialing: number;
   completed: number;
   failed: number;
   total: number;
@@ -192,7 +213,18 @@ export type CallDetail = {
   transcript: Array<{ role?: string; text?: string; [key: string]: unknown }>;
   call_duration_sec?: number | null;
   recording_url?: string;
-  analysis?: Record<string, unknown>;
+  analysis?: {
+    call_outcome?: string;
+    call_outcome_description?: string;
+    call_summary?: string;
+    [key: string]: unknown;
+  };
+};
+
+export type CampaignOutcomes = {
+  counts: Record<string, number>;
+  total_analyzed: number;
+  total_with_calls: number;
 };
 
 export type PhoneNumberEnvironment = 'dev' | 'preprod' | 'prod';
@@ -319,6 +351,10 @@ export type RuntimeSettings = {
   livekit_api_url?: string;
   livekit_browser_url?: string;
   livekit_agent_name?: string;
+  /** Raw LIVEKIT_AGENT_NAME from the backend's env — the name the real worker process
+   * (bot_dev_param.py) actually registers under. Never shadowed by a saved override, so the
+   * UI can detect/offer to reset a stale livekit_agent_name that no longer matches it. */
+  livekit_agent_name_env_default?: string;
   livekit_credentials_configured?: boolean;
 };
 
@@ -331,14 +367,21 @@ export type LanguageSettings = {
   updated_at?: string;
 };
 
-export type FlowNodeType = 'message' | 'condition' | 'tool_call' | 'transfer' | 'end';
+export type FlowNodeType = 'start' | 'message' | 'condition' | 'tool_call' | 'transfer' | 'global' | 'end';
 export type FlowNode = {
   id: string;
   type: FlowNodeType;
   position: { x: number; y: number };
   data: Record<string, unknown>;
 };
-export type FlowEdge = { id: string; source: string; target: string; label?: string; condition?: string };
+export type FlowEdge = {
+  id: string;
+  source: string;
+  target: string;
+  label?: string;
+  condition?: string;
+  source_handle?: string;
+};
 export type Flow = { nodes: FlowNode[]; edges: FlowEdge[] };
 
 export type LanguageOption = { id: string; label: string };
@@ -516,6 +559,9 @@ export const api = {
   assignCampaignBot(key: string, botId: string): Promise<Campaign> {
     return request(`/api/campaigns/${key}/bot`, { method: 'PUT', body: JSON.stringify({ bot_id: botId }) });
   },
+  saveDialerConfig(key: string, dialerConfig: DialerConfig): Promise<Campaign> {
+    return request(`/api/campaigns/${key}/dialer-config`, { method: 'PUT', body: JSON.stringify({ dialer_config: dialerConfig }) });
+  },
   setCampaignStatus(key: string, status: string): Promise<Campaign> {
     return request(`/api/campaigns/${key}/status`, { method: 'PUT', body: JSON.stringify({ status }) });
   },
@@ -534,11 +580,56 @@ export const api = {
   startCampaign(key: string): Promise<CampaignProgress & { enqueued: number }> {
     return request(`/api/campaigns/${key}/start`, { method: 'POST' });
   },
+  scheduleCampaign(
+    key: string,
+    schedule: { send_now: true } | { send_now: false; scheduled_at: string },
+  ): Promise<CampaignProgress & { enqueued: number }> {
+    return request(`/api/campaigns/${key}/schedule`, { method: 'POST', body: JSON.stringify(schedule) });
+  },
+  // GET /leads-template.csv requires auth (Depends(require_user)) — a plain <a href> can't
+  // carry the bearer token, so fetch it with the token and trigger the download via a blob.
+  async downloadLeadsTemplate(): Promise<void> {
+    const token = getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(apiUrl('/api/campaigns/leads-template.csv'), { headers });
+    if (!response.ok) throw new ApiError(response.status, await response.text().catch(() => ''));
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'leads-template.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+  // Same auth-carrying blob-download pattern as downloadLeadsTemplate above — combines
+  // upload rejections, TSPL push failures, and completed-call outcomes into one CSV.
+  async downloadCampaignResults(key: string): Promise<void> {
+    const token = getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(apiUrl(`/api/campaigns/${key}/leads.csv`), { headers });
+    if (!response.ok) throw new ApiError(response.status, await response.text().catch(() => ''));
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${key}-results.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
   getCampaignProgress(key: string): Promise<CampaignProgress> {
     return request(`/api/campaigns/${key}/progress`);
   },
   getCallDetail(key: string, callId: string): Promise<CallDetail> {
     return request(`/api/campaigns/${key}/calls/${callId}`);
+  },
+  getCampaignOutcomes(key: string): Promise<CampaignOutcomes> {
+    return request(`/api/campaigns/${key}/outcomes`);
   },
   saveCampaignPromptTemplate(key: string, promptTemplate: string): Promise<Campaign> {
     return request(`/api/campaigns/${key}/prompt`, {
