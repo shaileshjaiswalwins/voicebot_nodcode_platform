@@ -146,7 +146,7 @@ himself as a woman and stays feminine for the entire call.
 **Principle: LiveKit routes a call to a *pool*. Mongo decides *which bot* answers.**
 
 One agent name per **environment**, not per bot. The two existing dispatch rules become two
-pools (`voice-bot-justdial-dashboard`, `voice-bot-justdial-fallback`). No rule, trunk, or
+pools (`voice-bot-justdial-live-1`, `voice-bot-justdial-fallback`). No rule, trunk, or
 process is ever created when a PM makes a bot. The per-bot decision happens in Mongo, at
 call time, keyed on the dialed number.
 
@@ -158,7 +158,7 @@ already built (`PUT /api/phone-numbers/{id}/reassign`).
 ### Target call flow
 
 1. Call hits a number on trunk `ST_LDzA29BwCipF`.
-2. The dispatch rule fires; LiveKit hands the job to any free `voice-bot-justdial-dashboard`
+2. The dispatch rule fires; LiveKit hands the job to any free `voice-bot-justdial-live-1`
    worker.
 3. The worker reads the dialed number from the participant's `sip.trunkPhoneNumber`.
 4. The worker looks that number up in `phone_numbers` → resolves the bot → loads that
@@ -235,7 +235,7 @@ again, hear Priya — no restart, no LiveKit change.
 
 10. **Decide on `bot_dev.py`** — the `fallback` pool on trunk `ST_9yF7oqF4WQHU` is a separate
     file and inherits none of this. Either point both dispatch rules at
-    `voice-bot-justdial-dashboard`, or port the resolution across.
+    `voice-bot-justdial-live-1`, or port the resolution across.
 
 11. **The Language dropdown** is decorative (`bot_dev_param.py:359`). Either wire it or
     remove it; the form's own helper text already admits it does nothing.

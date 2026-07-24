@@ -28,7 +28,7 @@ async def start_test_call(payload: TestCallStartRequest, user: dict = Depends(re
     audit: test_bot_version_id lets you test any draft/historical version without publishing.
     """
     room_name = f"test-{uuid.uuid4().hex[:12]}"
-    agent_name = payload.test_worker_agent_name or os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial-dashboard")
+    agent_name = payload.test_worker_agent_name or os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial-live-2")
 
     metadata = json.dumps(
         {

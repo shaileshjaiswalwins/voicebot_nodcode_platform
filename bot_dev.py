@@ -2402,7 +2402,7 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm_fnc,
-            agent_name=os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial-dashboard"),
+            agent_name=os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial-live-2"),
             port=8082,
             num_idle_processes=3,
         )
