@@ -134,7 +134,7 @@ export function PhoneNumbersView({
   }
 
   return (
-    <section className="content-grid two-col">
+    <section className="content-grid">
       <div className="table-panel">
         <div className="panel-header">
           <div>
@@ -224,15 +224,6 @@ export function PhoneNumbersView({
             ))}
           </tbody>
         </table></div>
-      </div>
-
-      <div className="panel">
-        <h2>Routing</h2>
-        <div className="callout">
-          <Phone size={18} />
-          Each number always routes calls using the mapping stored here, read fresh at call time —
-          reassigning a number takes effect on the very next inbound call for it.
-        </div>
       </div>
 
       {showAddModal && (

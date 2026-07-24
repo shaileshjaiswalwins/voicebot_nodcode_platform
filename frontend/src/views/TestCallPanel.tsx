@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   AlertTriangle, Bot, ChevronRight, Database, Mic, PhoneCall,
-  Play, Rocket, Square, Volume2, Wifi
+  Play, Rocket, Settings2, Square, Volume2, Wifi
 } from 'lucide-react';
 import type { Bot as BotType, BotVersion, RuntimeSettings } from '../api';
 import { api } from '../api';
@@ -140,7 +140,9 @@ export function TestCallPanel({
     setForm((current) => ({ ...current, [key]: value }));
   }
 
-  const defaultWorker = runtimeSettings?.livekit_agent_name || 'voice-bot-justdial';
+  // Prefer the saved runtime setting; fall back to the backend's actual env var
+  // (LIVEKIT_AGENT_NAME — what the real worker process registers under) before any placeholder.
+  const defaultWorker = runtimeSettings?.livekit_agent_name || runtimeSettings?.livekit_agent_name_env_default || 'voice-bot-justdial';
   const effectiveWorker = form.test_worker_agent_name || defaultWorker;
   const agentState = deriveAgentState(status, remoteAudioReady, Boolean(roomName));
   const connected = Boolean(roomName) && status !== 'Idle' && !status.toLowerCase().includes('failed');
@@ -200,33 +202,53 @@ export function TestCallPanel({
             <small>Override below if needed.</small>
           </div>
         </div>
+        <div className="test-section-label">Test parameters</div>
         <div className="form-grid">
-          <label>Campaign ID<input value={form.campaign_id} onChange={(event) => updateField('campaign_id', event.target.value)} /></label>
-          <label>Lead ID<input value={form.lead_id} onChange={(event) => updateField('lead_id', event.target.value)} placeholder="optional for local test" /></label>
-          <label>Call ID<input value={form.call_id} onChange={(event) => updateField('call_id', event.target.value)} /></label>
           <label>Mobile<input value={form.mobile} onChange={(event) => updateField('mobile', event.target.value)} placeholder="test number" /></label>
-          <label>Product / Search Term<input value={form.srchterm} onChange={(event) => updateField('srchterm', event.target.value)} /></label>
           <label>Buyer Name<input value={form.buyer_name} onChange={(event) => updateField('buyer_name', event.target.value)} /></label>
           <label>City<input value={form.city} onChange={(event) => updateField('city', event.target.value)} /></label>
-          <label>
-            Worker agent name for this test
-            <input
-              value={form.test_worker_agent_name}
-              onChange={(event) => updateField('test_worker_agent_name', event.target.value)}
-              placeholder={defaultWorker}
-            />
-          </label>
+          <label>Product / Search Term<input value={form.srchterm} onChange={(event) => updateField('srchterm', event.target.value)} /></label>
+          <label className="full">Lead ID<input value={form.lead_id} onChange={(event) => updateField('lead_id', event.target.value)} placeholder="optional for local test — fetches real lead data when set" /></label>
         </div>
-        <div className="quick-actions">
-          <button onClick={() => updateField('test_worker_agent_name', 'voice-bot-justdial-dashboard')}>Use safe test worker</button>
-          <button onClick={() => updateField('test_worker_agent_name', defaultWorker)}>Use saved default</button>
-          <button onClick={() => setForm((current) => ({ ...current, call_id: `TEST-${Date.now()}` }))}>New call ID</button>
-        </div>
-        <details style={{ marginTop: '0.5rem' }}>
-          <summary style={{ fontSize: '0.83rem', fontWeight: 600, cursor: 'pointer', padding: '0.3rem 0', userSelect: 'none' }}>
-            Custom lead data (advanced)
+
+        <details className="advanced-settings">
+          <summary>
+            <Settings2 size={14} />
+            Advanced settings
+            <small>Campaign tagging, worker override, raw lead JSON</small>
           </summary>
-          <div style={{ marginTop: '0.5rem' }}>
+          <div className="advanced-settings-body">
+            <div className="form-grid">
+              <label>
+                Campaign ID
+                <input value={form.campaign_id} onChange={(event) => updateField('campaign_id', event.target.value)} />
+                <small>Only used to tag this test's transcript for later filtering — doesn't affect bot behavior.</small>
+              </label>
+              <label>
+                Call ID
+                <input value={form.call_id} onChange={(event) => updateField('call_id', event.target.value)} />
+              </label>
+              <label className="full">
+                Worker agent name for this test
+                <input
+                  value={form.test_worker_agent_name}
+                  onChange={(event) => updateField('test_worker_agent_name', event.target.value)}
+                  placeholder={defaultWorker}
+                />
+              </label>
+            </div>
+            <div className="quick-actions">
+              <button onClick={() => updateField('test_worker_agent_name', defaultWorker)}>Use saved default</button>
+              {runtimeSettings?.livekit_agent_name_env_default && runtimeSettings.livekit_agent_name_env_default !== defaultWorker && (
+                <button onClick={() => updateField('test_worker_agent_name', runtimeSettings.livekit_agent_name_env_default!)}>
+                  Use environment default ({runtimeSettings.livekit_agent_name_env_default})
+                </button>
+              )}
+              <button onClick={() => setForm((current) => ({ ...current, call_id: `TEST-${Date.now()}` }))}>New call ID</button>
+            </div>
+
+            <div className="advanced-settings-divider" />
+
             <label>
               Lead JSON override
               <textarea
@@ -239,8 +261,8 @@ export function TestCallPanel({
               <small>Merged into the lead record sent to the bot. Use for edge-case testing (is_business, specific qualification fields, etc.).</small>
             </label>
             {form.custom_lead_json && (() => {
-              try { JSON.parse(form.custom_lead_json); return <div style={{ fontSize: '0.78rem', color: '#15803d', marginTop: '2px' }}>✓ Valid JSON</div>; }
-              catch { return <div style={{ fontSize: '0.78rem', color: '#b91c1c', marginTop: '2px' }}>✗ Invalid JSON — fix before starting</div>; }
+              try { JSON.parse(form.custom_lead_json); return <div className="json-status valid">✓ Valid JSON</div>; }
+              catch { return <div className="json-status invalid">✗ Invalid JSON — fix before starting</div>; }
             })()}
           </div>
         </details>

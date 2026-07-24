@@ -112,6 +112,24 @@ export function SettingsView({
             <label>
               Test call worker agent name
               <input value={draft.livekit_agent_name} onChange={(event) => setDraft({ ...draft, livekit_agent_name: event.target.value })} />
+              {runtimeSettings?.livekit_agent_name_env_default ? (
+                draft.livekit_agent_name !== runtimeSettings.livekit_agent_name_env_default ? (
+                  <small style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                    Environment default: <code>{runtimeSettings.livekit_agent_name_env_default}</code>
+                    <button
+                      type="button"
+                      style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem', minHeight: 0 }}
+                      onClick={() => setDraft({ ...draft, livekit_agent_name: runtimeSettings.livekit_agent_name_env_default! })}
+                    >
+                      Use it
+                    </button>
+                  </small>
+                ) : (
+                  <small>Matches the backend's environment (<code>LIVEKIT_AGENT_NAME</code>).</small>
+                )
+              ) : (
+                <small>No <code>LIVEKIT_AGENT_NAME</code> set in the backend environment — this value is only what's saved here.</small>
+              )}
             </label>
             <label>
               Secret keys
@@ -132,7 +150,14 @@ export function SettingsView({
           <div className="timeline">
             <Step title="Dashboard agent" text="The bot you create in the UI: prompt, voice, language and settings stored in Mongo." />
             <Step title="LiveKit worker" text="A Python process connected to LiveKit. It receives rooms for a specific agent name and runs bot.py." />
-            <Step title="Safe testing" text="Use a separate worker name such as voice-bot-justdial-dashboard so test calls do not route to live workers." />
+            <Step
+              title="Safe testing"
+              text={
+                runtimeSettings?.livekit_agent_name_env_default
+                  ? `Test calls dispatch to whatever worker name is set above — currently "${draft.livekit_agent_name || runtimeSettings.livekit_agent_name_env_default}". Use a name with no live worker registered under it if you don't want test calls competing with real traffic.`
+                  : "Use a separate worker name so test calls do not route to live workers."
+              }
+            />
           </div>
         </div>
       </div>
