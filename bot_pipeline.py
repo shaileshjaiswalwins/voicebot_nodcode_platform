@@ -100,7 +100,7 @@ from bot import (
     IST,
     INACTIVITY_PHRASE,
     INACTIVITY_END_PHRASE,
-    _get_mongo_collection,
+    _save_transcript_to_dashboard_db,
 )
 from custom_function_tools import build_during_call_tools
 from pipeline_providers import build_llm, build_stt, build_tts
@@ -532,8 +532,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "created_at": datetime.now(timezone.utc),
         }
         try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, lambda: _get_mongo_collection().insert_one(_mongo_doc))
+            await _save_transcript_to_dashboard_db(_mongo_doc, _bot_id_meta, "")
             _log.info(
                 f"[MONGO] Transcript saved | lead_id={lead_id!r} | call_id={call_state.get('call_id')!r}"
             )

@@ -266,7 +266,12 @@ _mongo_client: _MongoClient | None = None
 def _get_mongo_collection():
     global _mongo_client
     if _mongo_client is None:
-        _mongo_client = _MongoClient(MONGO_URI)
+        # Bounded timeouts matter here specifically: this client is used from calls made
+        # directly on the LiveKit job's asyncio event loop (no run_in_executor), so an
+        # unreachable/slow Mongo would otherwise block the loop for pymongo's 30s default —
+        # long enough for LiveKit to consider the worker unresponsive and stop dispatching
+        # jobs to it. Fail fast instead.
+        _mongo_client = _MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
     return _mongo_client[MONGO_DB][MONGO_COLLECTION]
 
 
@@ -286,8 +291,28 @@ _platform_mongo_client: _MongoClient | None = None
 def _get_platform_db():
     global _platform_mongo_client
     if _platform_mongo_client is None:
-        _platform_mongo_client = _MongoClient(PLATFORM_MONGO_URI)
+        # See _get_mongo_collection above — same reasoning for bounding the timeout.
+        _platform_mongo_client = _MongoClient(PLATFORM_MONGO_URI, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
     return _platform_mongo_client[PLATFORM_DB_NAME]
+
+
+def _get_platform_transcripts_collection():
+    return _get_platform_db()["tbl_ai_vb_call_transcripts"]
+
+
+async def _save_transcript_to_dashboard_db(mongo_doc: dict, bot_id: str, campaign_id: str = "") -> None:
+    """Save a call transcript into the dashboard's own collection
+    (ai_voice_bot_management.tbl_ai_vb_call_transcripts), which is what
+    backend/routers/transcripts.py reads (backend/db.py:39). This is the transcript
+    store for dashboard-driven calls (Test Call / campaigns, i.e. bot_dev.py and
+    bot_pipeline.py) — ai_lead_qualify is a separate, legacy production DB those
+    entrypoints must not write to. Raises on failure; callers log via their own
+    room-bound logger, matching the existing save-call-data pattern."""
+    _doc = dict(mongo_doc)
+    _doc["bot_id"] = bot_id
+    _doc["campaign_id"] = campaign_id
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, lambda: _get_platform_transcripts_collection().insert_one(_doc))
 
 
 # ---------------------------------------------------------------------------

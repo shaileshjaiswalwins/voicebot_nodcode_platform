@@ -22,6 +22,10 @@ def get_runtime_settings(_: dict = Depends(require_user)) -> dict:
         "livekit_api_url": doc.get("livekit_api_url", os.getenv("LIVEKIT_API_URL", "")),
         "livekit_browser_url": doc.get("livekit_browser_url", os.getenv("LIVEKIT_BROWSER_URL", "")),
         "livekit_agent_name": doc.get("livekit_agent_name", os.getenv("LIVEKIT_AGENT_NAME", "")),
+        # The real worker process (bot_dev_param.py) registers under LIVEKIT_AGENT_NAME too —
+        # surfaced separately (never shadowed by a saved override) so the UI can show what the
+        # environment actually provides, e.g. to detect/reset a stale saved override.
+        "livekit_agent_name_env_default": os.getenv("LIVEKIT_AGENT_NAME", ""),
         "livekit_credentials_configured": bool(os.getenv("LIVEKIT_API_KEY") and os.getenv("LIVEKIT_API_SECRET")),
     }
 
