@@ -18,6 +18,7 @@ import { Tooltip } from '../components/Tooltip';
 import { OUTCOME_CATEGORIES, DEFAULT_OUTCOME_RULES } from '../constants/outcomes';
 import { DAY_OPTIONS } from '../constants/dialing';
 import { CampaignLeadsPanel } from './CampaignLeadsPanel';
+import { BatchCallModal } from './BatchCallModal';
 
 export function buildDefaultStrategy(): DialingStrategy {
   return {
@@ -523,8 +524,7 @@ export function CampaignsView({
   onAssignBot,
   assignBotState,
   onSetStatus,
-  onCreateCampaign,
-  createState,
+  onBatchCallCreated,
   onDelete,
 }: {
   campaigns: Campaign[];
@@ -542,17 +542,15 @@ export function CampaignsView({
   onAssignBot?: (campaignKey: string, botId: string) => void;
   assignBotState?: Record<string, 'idle' | 'running' | 'failed'>;
   onSetStatus?: (campaignKey: string, status: string) => void;
-  onCreateCampaign?: (campaignKey: string, name: string, botId?: string) => Promise<void>;
-  createState?: 'idle' | 'running' | 'failed';
+  /** Called after the "Create a batch call" modal successfully persists a campaign (draft
+   * or sent), so the parent can refresh the campaigns list. */
+  onBatchCallCreated?: () => void;
   onDelete?: (campaignKey: string) => void;
 }) {
   const selectedCampaign = campaigns.find((c) => c.campaign_key === selectedCampaignKey) || campaigns[0];
   const botById = useMemo(() => new Map(bots.map((b) => [b._id, b])), [bots]);
   const [pendingStatusChange, setPendingStatusChange] = useState<{ campaign: Campaign; status: string } | null>(null);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [newCampaignKey, setNewCampaignKey] = useState('');
-  const [newCampaignName, setNewCampaignName] = useState('');
-  const [newCampaignBotId, setNewCampaignBotId] = useState('');
+  const [showBatchCallModal, setShowBatchCallModal] = useState(false);
   const [editTarget, setEditTarget] = useState<Campaign | null>(null);
   const [editName, setEditName] = useState('');
   const [editBotId, setEditBotId] = useState('');
@@ -567,13 +565,6 @@ export function CampaignsView({
     if (!pendingStatusChange || !onSetStatus) return;
     onSetStatus(pendingStatusChange.campaign.campaign_key, pendingStatusChange.status);
     setPendingStatusChange(null);
-  }
-
-  async function handleCreate() {
-    if (!onCreateCampaign || !newCampaignKey.trim() || !newCampaignName.trim()) return;
-    await onCreateCampaign(newCampaignKey.trim(), newCampaignName.trim(), newCampaignBotId || undefined);
-    setNewCampaignKey(''); setNewCampaignName(''); setNewCampaignBotId('');
-    setShowCreateModal(false);
   }
 
   async function handleSaveEdit() {
@@ -604,35 +595,26 @@ export function CampaignsView({
   }
 
   return (
-    <section className="content-grid two-col">
+    <section className="content-grid">
       <div className="table-panel">
         <div className="panel-header">
           <div>
             <h2>Campaign mappings</h2>
             <p>One bot belongs to one campaign, with lead API and callback mapping owned in Mongo.</p>
           </div>
-          {onCreateCampaign && (
-            <button className="primary" onClick={() => setShowCreateModal(true)}>
-              <Plus size={14} /> New campaign
-            </button>
-          )}
+          <button className="primary" onClick={() => setShowBatchCallModal(true)}>
+            <Plus size={14} /> Create a batch call
+          </button>
         </div>
         <div className="table-scroll"><table>
           <thead>
-            <tr><th>Campaign</th><th>Bot</th><th>Status</th><th>Strategy</th><th>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
-                Lead API
-                <Tooltip label="The endpoint this campaign pulls leads from.">
-                  <HelpCircle size={12} style={{ color: 'var(--muted)', cursor: 'help' }} />
-                </Tooltip>
-              </span>
-            </th><th>Actions</th></tr>
+            <tr><th>Campaign</th><th>Bot</th><th>Status</th><th>Actions</th></tr>
           </thead>
           <tbody>
             {loading && !campaigns.length ? (
-              <SkeletonTableBody cols={6} rows={3} />
+              <SkeletonTableBody cols={4} rows={3} />
             ) : !campaigns.length ? (
-              <tr><td colSpan={6}>
+              <tr><td colSpan={4}>
                 <EmptyState
                   icon={<Megaphone size={32} />}
                   heading="No campaigns yet"
@@ -661,13 +643,6 @@ export function CampaignsView({
                   )}
                 </td>
                 <td><StatusPill value={campaign.status || 'draft'} /></td>
-                <td>
-                  {campaign.dialing_strategy
-                    ? <span className={`pill ${campaign.dialing_strategy.enabled ? 'active' : 'draft'}`}>{campaign.dialing_strategy.enabled ? 'Active' : 'Paused'}</span>
-                    : <span className="pill draft">Default</span>
-                  }
-                </td>
-                <td><code>{String(campaign.lead_api?.url || campaign.lead_api?.endpoint || '-')}</code></td>
                 <td style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                   {onSetStatus && campaign.status !== 'active' && (
                     <button
@@ -687,9 +662,6 @@ export function CampaignsView({
                       <Pause size={13} /> Pause
                     </button>
                   )}
-                  <button onClick={() => onSelectCampaign(campaign.campaign_key)}>
-                    <Layers size={14} /> Strategy
-                  </button>
                   {onSelectCampaignLeads && (
                     <button onClick={() => onSelectCampaignLeads(campaign.campaign_key)}>
                       <Users size={14} /> Leads
@@ -709,13 +681,6 @@ export function CampaignsView({
           </tbody>
         </table></div>
       </div>
-      <div className="panel">
-        <h2>Strategy</h2>
-        <div className="callout">
-          <Layers size={18} />
-          Click "Edit Strategy" on any campaign to configure retry rules, time windows, and attempt sequencing.
-        </div>
-      </div>
 
       {pendingStatusChange && (
         <ConfirmDialog
@@ -732,44 +697,11 @@ export function CampaignsView({
         />
       )}
 
-      {showCreateModal && (
-        <Dialog
-          title="New campaign"
-          icon={<Megaphone size={17} />}
-          onClose={() => setShowCreateModal(false)}
-          closeOnBackdrop={createState !== 'running'}
-          closeOnEscape={createState !== 'running'}
-          footer={
-            <>
-              <button onClick={() => setShowCreateModal(false)} disabled={createState === 'running'}>Cancel</button>
-              <button
-                className={createState === 'failed' ? 'fallback-button' : 'primary'}
-                onClick={handleCreate}
-                disabled={createState === 'running' || !newCampaignKey.trim() || !newCampaignName.trim()}
-              >
-                {createState === 'running' ? 'Creating...' : createState === 'failed' ? 'Retry create' : 'Create'}
-              </button>
-            </>
-          }
-        >
-          <div className="form-grid">
-            <label>
-              Campaign key
-              <input value={newCampaignKey} onChange={(e) => setNewCampaignKey(e.target.value)} placeholder="justdial_leads_bangalore" />
-            </label>
-            <label>
-              Name
-              <input value={newCampaignName} onChange={(e) => setNewCampaignName(e.target.value)} placeholder="Bangalore Leads" />
-            </label>
-            <label className="full">
-              Assigned bot (optional)
-              <select value={newCampaignBotId} onChange={(e) => setNewCampaignBotId(e.target.value)}>
-                <option value="">— unassigned —</option>
-                {bots.map((b) => <option key={b._id} value={b._id}>{b.name}</option>)}
-              </select>
-            </label>
-          </div>
-        </Dialog>
+      {showBatchCallModal && (
+        <BatchCallModal
+          onClose={() => setShowBatchCallModal(false)}
+          onCreated={() => onBatchCallCreated?.()}
+        />
       )}
 
       {editTarget && (

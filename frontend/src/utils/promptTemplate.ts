@@ -14,7 +14,7 @@ export function extractTemplateVars(template: string): string[] {
  * obvious in the live preview instead of disappearing. */
 export function interpolateTemplate(
   template: string,
-  row: { name?: string; phone_number?: string; vars?: Record<string, string> },
+  row: { name?: string; phone_number?: string | null; vars?: Record<string, string> },
 ): string {
   const values: Record<string, string> = {
     name: row.name || 'Customer',

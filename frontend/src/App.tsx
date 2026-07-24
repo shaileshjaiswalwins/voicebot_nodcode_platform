@@ -35,7 +35,7 @@ import { VersionDiffModal } from './components/VersionDiffModal';
 import { BotsView, NewAgentWizard, DeleteAgentDialog } from './views/BotsView';
 import { BuilderView } from './views/BuilderView';
 import { FlowBuilderView } from './views/FlowBuilderView';
-import { CampaignsView, buildDefaultStrategy } from './views/CampaignsView';
+import { CampaignsView } from './views/CampaignsView';
 import { PhoneNumbersView } from './views/PhoneNumbersView';
 import { NumberMappingView } from './views/NumberMappingView';
 import { LibraryView } from './views/LibraryView';
@@ -259,7 +259,6 @@ function AppShell() {
   const [campaignWorkspaceMode, setCampaignWorkspaceMode] = useState<'list' | 'strategy' | 'leads'>('list');
   const [campaignSaveState, setCampaignSaveState] = useState<AsyncState>('idle');
   const [assignBotState, setAssignBotState] = useState<Record<string, AsyncState>>({});
-  const [campaignCreateState, setCampaignCreateState] = useState<AsyncState>('idle');
 
   // ── Phone numbers ───────────────────────────────────────────────────
   const [createPhoneNumberState, setCreatePhoneNumberState] = useState<AsyncState>('idle');
@@ -800,18 +799,9 @@ function AppShell() {
     }
   }
 
-  async function handleCreateCampaign(campaignKey: string, name: string, botId?: string) {
-    setCampaignCreateState('running');
-    try {
-      await api.saveCampaignStrategy(campaignKey, name, buildDefaultStrategy());
-      if (botId) await api.assignCampaignBot(campaignKey, botId);
-      await loadCampaigns();
-      setCampaignCreateState('idle');
-      showToast('Campaign created');
-    } catch (err) {
-      setCampaignCreateState('failed');
-      pushDiagnostic('Create campaign', err, 'Retry create', 'error');
-    }
+  async function handleBatchCallCreated() {
+    await loadCampaigns();
+    showToast('Batch call created');
   }
 
   async function handleAssignBot(campaignKey: string, botId: string) {
@@ -1124,8 +1114,8 @@ function AppShell() {
           <Menu size={18} />
         </button>
         <div className="sidebar-brand" style={{ padding: 0 }}>
-          <BotIcon size={18} />
-          <span>Voice AI Platform</span>
+          <img src="/justdial-logo.png" alt="Justdial" className="sidebar-logo" />
+          <span className="sidebar-brand-subtitle">Voice AI Platform</span>
         </div>
       </div>
 
@@ -1133,8 +1123,8 @@ function AppShell() {
 
       <aside className={mobileNavOpen ? 'sidebar open' : 'sidebar'}>
         <div className="sidebar-brand">
-          <BotIcon size={20} />
-          <span>Voice AI Platform</span>
+          <img src="/justdial-logo.png" alt="Justdial" className="sidebar-logo" />
+          <span className="sidebar-brand-subtitle">Voice AI Platform</span>
           <button
             onClick={() => setMobileNavOpen(false)}
             aria-label="Close navigation"
@@ -1283,6 +1273,7 @@ function AppShell() {
                   onChange={(flow) => updateConfig('flow', flow)}
                   onSave={handleSaveFlow}
                   saveState={saveState === 'running' || updateVersionState === 'running' ? 'running' : saveState === 'failed' || updateVersionState === 'failed' ? 'failed' : 'idle'}
+                  onNavigateTest={() => setView('test')}
                 />
               )}
 
@@ -1309,12 +1300,10 @@ function AppShell() {
               onAssignBot={handleAssignBot}
               assignBotState={assignBotState}
               onSetStatus={handleSetCampaignStatus}
-              onCreateCampaign={handleCreateCampaign}
-              createState={campaignCreateState}
+              onBatchCallCreated={handleBatchCallCreated}
               onDelete={handleDeleteCampaign}
             />
           )}
-
 
           {view === 'phone_numbers' && (
             <PhoneNumbersView

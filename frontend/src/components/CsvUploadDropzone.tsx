@@ -19,12 +19,16 @@ function parseCsv(text: string): { columns: string[]; rows: string[][] } {
 
 export function CsvUploadDropzone({ onParsed, requiredColumn = 'phone_number' }: {
   onParsed: (result: CsvParseResult | null) => void;
-  requiredColumn?: string;
+  /** A single required column name, or an array meaning "at least one of these must be
+   * present" (e.g. ['phone_number', 'jduid'] — TSPL-pushed leads never have a real number). */
+  requiredColumn?: string | string[];
 }) {
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [parsed, setParsed] = useState<CsvParseResult | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const requiredColumns = Array.isArray(requiredColumn) ? requiredColumn : [requiredColumn];
 
   const handleFile = useCallback((file: File | undefined) => {
     if (!file) return;
@@ -42,8 +46,12 @@ export function CsvUploadDropzone({ onParsed, requiredColumn = 'phone_number' }:
         onParsed(null);
         return;
       }
-      if (!columns.includes(requiredColumn)) {
-        setError(`Missing required column "${requiredColumn}".`);
+      if (!requiredColumns.some((col) => columns.includes(col))) {
+        setError(
+          requiredColumns.length > 1
+            ? `Missing required column — need at least one of: ${requiredColumns.join(', ')}.`
+            : `Missing required column "${requiredColumns[0]}".`
+        );
         onParsed(null);
         return;
       }
@@ -75,7 +83,9 @@ export function CsvUploadDropzone({ onParsed, requiredColumn = 'phone_number' }:
         <UploadCloud size={28} className="csv-dropzone-icon" aria-hidden />
         <strong>{parsed ? parsed.file.name : 'Drag & drop a CSV, or click to browse'}</strong>
         <span className="csv-dropzone-hint">
-          Must include a <code>{requiredColumn}</code> column. Extra columns become call variables.
+          {requiredColumns.length > 1
+            ? <>Must include at least one of: {requiredColumns.map((c, i) => <React.Fragment key={c}>{i > 0 && ', '}<code>{c}</code></React.Fragment>)}. Extra columns become call variables.</>
+            : <>Must include a <code>{requiredColumns[0]}</code> column. Extra columns become call variables.</>}
         </span>
         <input
           ref={inputRef}
@@ -92,7 +102,7 @@ export function CsvUploadDropzone({ onParsed, requiredColumn = 'phone_number' }:
         <div style={{ marginTop: '0.75rem' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginBottom: '0.6rem' }}>
             {parsed.columns.map((col) => (
-              <span key={col} className={`csv-column-tag${col === requiredColumn ? ' required' : ''}`}>
+              <span key={col} className={`csv-column-tag${requiredColumns.includes(col) ? ' required' : ''}`}>
                 {col}
               </span>
             ))}
