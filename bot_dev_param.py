@@ -506,7 +506,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # ── 2. Resolve bot config and settings ──
     _assistant_id = _room_meta_raw.get("assistant_id", "")
-    _bc = await fetch_bot_config(_assistant_id) if _assistant_id else None
+    _test_version_meta = _room_meta_raw.get("test_bot_version_id", "")
+    _bc = await fetch_bot_config(_assistant_id, _test_version_meta) if (_assistant_id and _test_version_meta) else None
     _bot_config: dict = _bc or _HARDCODED_BOT_CONFIG
 
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
