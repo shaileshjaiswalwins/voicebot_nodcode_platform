@@ -17,10 +17,19 @@ export function useKeyboardShortcuts(
   closeRef.current = closeModal;
 
   useEffect(() => {
+    // A bare-key nav shortcut must never fire while the user is interacting with a control —
+    // a stray key (e.g. 'c') would navigate away mid-edit and lose in-progress work. Guard
+    // both the event target AND the actually-focused element, and include BUTTON/A/OPTION
+    // (e.g. right after clicking "Add function"/"New key value pair", focus is on the button,
+    // so typing the field value would otherwise hit the button and trigger navigation).
+    const INTERACTIVE = ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A', 'OPTION'];
+    const isInteractive = (el: HTMLElement | null) =>
+      !!el && (INTERACTIVE.includes(el.tagName) || el.isContentEditable);
+
     function handleKey(e: KeyboardEvent) {
-      const target = e.target as HTMLElement;
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
-      if (target.isContentEditable) return;
+      const target = e.target as HTMLElement | null;
+      const active = document.activeElement as HTMLElement | null;
+      if (isInteractive(target) || isInteractive(active)) return;
 
       if (e.key === 'Escape') { closeRef.current(); return; }
       if (e.key === '?') { toggleRef.current(); return; }

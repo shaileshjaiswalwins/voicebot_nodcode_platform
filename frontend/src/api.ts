@@ -479,6 +479,14 @@ export const api = {
   bot(id: string): Promise<{ bot: Bot; versions: BotVersion[] }> {
     return request(`/api/bots/${id}`);
   },
+  /** Custom functions saved against a bot (read from the live version's config.functions,
+   * or a specific version if versionId is given). */
+  listBotFunctions(id: string, versionId?: string): Promise<{
+    bot_id: string; version_id: string; version: number; state: string;
+    count: number; functions: CustomFunction[];
+  }> {
+    return request(`/api/bots/${id}/functions${versionId ? `?version_id=${versionId}` : ''}`);
+  },
   saveDraft(id: string, config: Record<string, unknown>): Promise<{ draft_version_id: string }> {
     return request(`/api/bots/${id}/draft`, { method: 'PUT', body: JSON.stringify({ config }) });
   },

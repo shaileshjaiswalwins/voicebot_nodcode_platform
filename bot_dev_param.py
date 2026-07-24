@@ -172,7 +172,9 @@ from bot import (
     _get_mongo_collection as _bot_get_mongo_collection,
 )
 import bot as _bot_module
-from agent_resolver import render_greeting, resolve_agent_config, resolve_bot_id, fetch_custom_functions
+from agent_resolver import render_greeting, resolve_agent_config
+from custom_functions import interpolate_vars, run_lifecycle_functions
+from custom_function_tools import build_during_call_tools
 
 # Override bot.py globals so all calls in this process use the parameterised values
 _bot_module.MONGO_URI        = _MONGO_URI
@@ -189,130 +191,6 @@ MONGO_COLLECTION = _MONGO_COLLECTION
 def _get_mongo_collection():
     return _bot_module._get_mongo_collection()
 
-
-# ---------------------------------------------------------------------------
-# Generic user-configured custom functions (tbl_ai_vb_custom_functions)
-#
-# pre_call functions run before the call connects (during ring) and feed {{variables}}
-# into the system prompt. Execution/extraction mirrors backend/routers/custom_functions.py
-# so the dashboard "Test" button and a live call behave identically. Kept here (not in
-# bot.py) so the shared base stays untouched.
-# ---------------------------------------------------------------------------
-
-_VAR_TOKEN_RE = re.compile(r"\{\{\s*([\w.]+)\s*\}\}")
-
-
-def substitute_variables(text, variables: dict):
-    """Replace {{token}} occurrences with values from `variables`. Unknown tokens are left
-    verbatim so a missing value degrades to a visible placeholder rather than a crash."""
-    if not text:
-        return text
-    return _VAR_TOKEN_RE.sub(lambda m: str(variables.get(m.group(1), m.group(0))), text)
-
-
-def _extract_path(obj, path: str):
-    """Walk a dotted path with numeric list indices, e.g. 'results.0.buyer_name'. Returns
-    None if any segment is missing rather than raising."""
-    cur = obj
-    for part in (path or "").split("."):
-        if part == "":
-            continue
-        if isinstance(cur, list):
-            try:
-                cur = cur[int(part)]
-            except (ValueError, IndexError):
-                return None
-        elif isinstance(cur, dict):
-            cur = cur.get(part)
-        else:
-            return None
-        if cur is None:
-            return None
-    return cur
-
-
-async def _execute_custom_function(fn: dict, context: dict):
-    """Run one configured custom function with context tokens substituted into the request.
-    Returns the parsed JSON (or text) body, or None on any failure — a bad user API must
-    never fail the call."""
-    method = (fn.get("method") or "GET").upper()
-    url = substitute_variables(fn.get("url") or "", context) or ""
-    if not url:
-        return None
-    headers = {k: substitute_variables(v, context) for k, v in (fn.get("headers") or {}).items()}
-    params = {k: substitute_variables(v, context) for k, v in (fn.get("query_params") or {}).items()}
-    body = substitute_variables(fn.get("body"), context)
-    timeout = aiohttp.ClientTimeout(total=max(int(fn.get("timeout_ms") or 8000), 1) / 1000)
-    kwargs: dict = {"headers": headers or None, "params": params or None, "timeout": timeout}
-    if body and method != "GET":
-        try:
-            parsed = json.loads(body)
-        except (ValueError, TypeError):
-            parsed = None
-        if (fn.get("body_format") or "json") == "json":
-            if parsed is not None:
-                kwargs["json"] = parsed
-            else:
-                kwargs["data"] = body
-        else:
-            kwargs["data"] = parsed if isinstance(parsed, dict) else body
-    logger.info(f"[CUSTOM FN] {method} {url} | fn={fn.get('name')!r}")
-    try:
-        session = _bot_module._get_http_session()
-        async with session.request(method, url, **kwargs) as resp:
-            try:
-                return await resp.json(content_type=None)
-            except Exception:
-                return await resp.text()
-    except Exception as e:
-        logger.error(f"[CUSTOM FN] {fn.get('name')!r} failed: {e}")
-        return None
-
-
-async def run_pre_call_functions(functions: list[dict], context: dict) -> dict:
-    """Execute all enabled pre_call functions concurrently and collect their
-    response_mappings into a single {variable: value} dict for prompt substitution."""
-    pre = [
-        f for f in (functions or [])
-        if f.get("timing") == "pre_call" and f.get("enabled", True)
-    ]
-    if not pre:
-        return {}
-    results = await asyncio.gather(
-        *[_execute_custom_function(f, context) for f in pre], return_exceptions=True
-    )
-    variables: dict = {}
-    for fn, res in zip(pre, results):
-        if isinstance(res, BaseException) or res is None:
-            continue
-        for m in (fn.get("response_mappings") or []):
-            var, path = m.get("variable"), m.get("path")
-            if not var or not path:
-                continue
-            val = _extract_path(res, path)
-            if val is not None:
-                variables[var] = val
-    logger.info(f"[CUSTOM FN] pre_call produced variables: {list(variables)}")
-    return variables
-
-
-def _to_function_entry(cf: dict) -> dict:
-    """Normalize a stored custom function into the shape the existing executor and tool
-    builder expect (matching the built-in `functions` config entries). Tolerant of both the
-    collection field names and the canonical bot.py shape."""
-    return {
-        "name": cf.get("name"),
-        "description": cf.get("description", ""),
-        "timing": cf.get("timing"),  # preserved so the tool-registration loop can find it
-        "url": cf.get("url", ""),
-        "method": cf.get("method", "GET"),
-        "headers": cf.get("headers") or {},
-        "query_params": cf.get("query_params") or {},
-        "body_format": cf.get("body_format", "json"),
-        "custom_body": cf.get("custom_body") or cf.get("body") or "",
-        # `schema` is the LLM argument schema; the collection may store it as `parameters`.
-        "schema": cf.get("schema") or cf.get("parameters") or {},
-    }
 
 # Dev API — overrides the live URLs imported from bot.py
 MIS_API_BASE        = os.getenv("MIS_API_BASE", "http://192.168.14.101:3006")
@@ -474,39 +352,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             fetch_lead(lead_id=_lead_id_meta, mobile=_room_mobile, mis_api_base=MIS_API_BASE)
         )
 
-    # Generic user-configured pre_call functions — fire during the ring window, same
-    # pattern as the lead fetch above. The bot is identified by the number→bot mapping
-    # (resolve_bot_id), and its response_mappings become {{variables}} substituted into the
-    # system prompt once it's built. Fully guarded so a misconfigured API never fails a call.
-    _precall_task: asyncio.Task | None = None
-    _precall_vars: dict = {}
-    _cf_bot_id: str | None = None
-    _custom_functions_all: list[dict] = []
-    try:
-        _cf_bot_id = resolve_bot_id(room_name=room_name)
-        if _cf_bot_id:
-            # Load all enabled custom functions once; pre_call ones fire now, in_call ones
-            # are registered as LLM tools later (step 8).
-            _custom_functions_all = fetch_custom_functions(_cf_bot_id)
-            _cf_pre = [f for f in _custom_functions_all if f.get("timing") == "pre_call"]
-            if _cf_pre:
-                _cf_ctx = {
-                    "mobile": _room_mobile,
-                    "lead_id": _lead_id_meta,
-                    "assistant_id": _room_meta_raw.get("assistant_id", ""),
-                    "room_name": room_name,
-                }
-                _precall_task = asyncio.create_task(run_pre_call_functions(_cf_pre, _cf_ctx))
-                _log.info(f"[CUSTOM FN] {len(_cf_pre)} pre_call function(s) firing during ring")
-    except Exception as _cf_exc:
-        _log.warning(f"[CUSTOM FN] pre-call setup failed: {_cf_exc}")
-
     await ctx.connect()
     await ctx.wait_for_participant()
 
     # ── 2. Resolve bot config and settings ──
     _assistant_id = _room_meta_raw.get("assistant_id", "")
-    _bc = await fetch_bot_config(_assistant_id) if _assistant_id else None
+    _bot_id_meta = _room_meta_raw.get("bot_id", "")
+    _test_version_meta = _room_meta_raw.get("test_bot_version_id", "")
+    # fetch_bot_config(bot_id, test_version) loads a specific version's config — used by the
+    # dashboard test flow, which passes both in room metadata. Live number-attached calls
+    # instead resolve config via the number→bot mapping (resolve_agent_config, below).
+    _bc = await fetch_bot_config(_bot_id_meta, _test_version_meta) if (_bot_id_meta and _test_version_meta) else None
     _bot_config: dict = _bc or _HARDCODED_BOT_CONFIG
 
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
@@ -527,22 +383,6 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _inactivity_first_nudge_gap_secs = float(_bot_config.get("inactivity_first_nudge_gap_secs") or 4.0)
     _inactivity_nudge_secs = float(_bot_config.get("inactivity_nudge_secs") or 10.0)
     _inactivity_close_secs = float(_bot_config.get("inactivity_close_secs") or 5.0)
-    _functions: list[dict] = list(_bot_config.get("functions") or [])
-    # Merge user-configured in_call custom functions (from the UI collection) into the
-    # functions list so the existing executor (_execute_function_call) can resolve them by
-    # name, exactly like the built-in FetchLead/FetchCategorySchema entries.
-    _cf_incall = [
-        _to_function_entry(f) for f in _custom_functions_all if f.get("timing") == "in_call"
-    ]
-    if _cf_incall:
-        _existing_names = {f.get("name") for f in _functions}
-        _functions += [f for f in _cf_incall if f.get("name") not in _existing_names]
-        _log.info(f"[CUSTOM FN] merged {len(_cf_incall)} in_call function(s) into config")
-    _function_calling = bool(_bot_config.get("function_calling", False)) and bool(_functions)
-    # Any user-defined in_call function implies function calling is wanted, even if the base
-    # config left the flag off.
-    if _cf_incall:
-        _function_calling = True
     _lang_cfg = HINDI_LANG_CONFIG
 
     # ── 3. Per-call state ──
@@ -600,6 +440,33 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _persona_gender = ((_mapped_config or {}).get("persona_gender") or "female").lower()
     _log.info(f"[AGENT] persona_gender={_persona_gender!r}")
 
+    # ── 3c. Custom functions (from the bot's saved config) ──
+    # Source functions from the mapped agent config (number→bot→published version) for live
+    # calls, falling back to the metadata-resolved config. This is where the dashboard-saved
+    # custom functions live (config.functions).
+    _fn_config = _mapped_config or _bot_config
+    _functions: list[dict] = list(_fn_config.get("functions") or [])
+    _function_calling = bool(_fn_config.get("function_calling", False)) and bool(_functions)
+
+    # Pre-call custom functions: run before the greeting; their store_variables land in
+    # call_state["vars"] for {{var}} interpolation into the prompt AND the opening line.
+    # Guarded so a misconfigured API never fails the call.
+    _pre_call_params = {
+        "lead_id": _lead_id_meta or (call_state.get("record_id") or ""),
+        "mobile": _room_mobile,
+        "call_id": call_state.get("call_id") or room_name,
+    }
+    try:
+        _pre_results = await run_lifecycle_functions(
+            _functions, "pre_call", _pre_call_params,
+            call_configured_function, call_state.setdefault("vars", {}),
+        )
+        if _pre_results:
+            _log.info(f"[PRE-CALL] ran {len(_pre_results)} function(s): "
+                      f"{[(r['name'], r['ok']) for r in _pre_results]} | vars={list(call_state['vars'])}")
+    except Exception as _pre_ex:
+        _log.warning(f"[PRE-CALL] hook error (ignored): {_pre_ex}")
+
     # ── 4. Build system instruction ──
     system_instruction = build_system_prompt(
         _prefetched_lead, lang_key=_language, bot_config=_bot_config
@@ -609,18 +476,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     if _SYSTEM_PROMPT_EXTRA:
         system_instruction = system_instruction + "\n\n" + _SYSTEM_PROMPT_EXTRA
 
-    # Fill {{variables}} produced by pre_call custom functions. The task was fired during
-    # the ring, so by now it has usually finished; each request is already bounded by its
-    # own timeout_ms, so awaiting here can't hang the greeting indefinitely.
-    if _precall_task is not None:
-        try:
-            _precall_vars = await _precall_task
-        except Exception as _cf_await_exc:
-            _log.warning(f"[CUSTOM FN] pre_call execution failed: {_cf_await_exc}")
-            _precall_vars = {}
-        if _precall_vars:
-            call_state["custom_vars"] = _precall_vars
-            system_instruction = substitute_variables(system_instruction, _precall_vars) or system_instruction
+    # Fill {{variables}} from pre_call functions into the system prompt.
+    if call_state.get("vars"):
+        system_instruction = interpolate_vars(system_instruction, call_state["vars"])
 
     try:
         _sch = (_prefetched_lead or {}).get("qualification_schema") or {}
@@ -1437,40 +1295,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     tools = [FetchCategorySchema, FetchLead] if _function_calling else []
 
-    # Register user-defined in_call custom functions as LLM tools. Each is built from its
-    # stored definition (name/description/schema) via the programmatic raw-schema form of
-    # function_tool (livekit-agents 1.5.x), and delegates to the same _execute_function_call
-    # the built-in tools use. Guarded per-function: a bad definition is logged and skipped
-    # rather than failing the whole call.
-    def _make_custom_tool(fn_cfg: dict):
-        _cf_name = fn_cfg.get("name")
-
-        async def _handler(raw_arguments: dict):
-            return await _execute_function_call(
-                _cf_name, dict(raw_arguments or {}),
-                functions=_functions, call_state=call_state,
-            )
-
-        return function_tool(
-            _handler,
-            raw_schema={
-                "name": _cf_name,
-                "description": fn_cfg.get("description", ""),
-                "parameters": fn_cfg.get("schema") or {"type": "object", "properties": {}},
-            },
-        )
-
+    # Register user-defined during_call custom functions as LLM tools (from config.functions),
+    # via the shared builder — same code path as bot_dev.py. Delegates to _execute_function_call.
     if _function_calling:
-        _builtin_tool_names = {"FetchLead", "FetchCategorySchema"}
-        for _cf in _functions:
-            _cf_nm = _cf.get("name")
-            if _cf.get("timing") != "in_call" or _cf_nm in _builtin_tool_names or not _cf_nm:
-                continue
-            try:
-                tools.append(_make_custom_tool(_cf))
-                _log.info(f"[CUSTOM FN] registered in_call tool {_cf_nm!r}")
-            except Exception as _tool_exc:
-                _log.error(f"[CUSTOM FN] failed to register tool {_cf_nm!r}: {_tool_exc}")
+        _dynamic_tools = build_during_call_tools(_functions, _execute_function_call, call_state)
+        if _dynamic_tools:
+            _log.info(f"[FnCall] registered {len(_dynamic_tools)} custom during-call tool(s): "
+                      f"{[t.info.name for t in _dynamic_tools]}")
+            tools += _dynamic_tools
 
     _TTS_SPEAKABLE_RE = re.compile(r"[A-Za-z0-9ऀ-ॿ]")
 
@@ -2400,6 +2232,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     if not _greeting_text:
         _greeting_text = _build_greeting(record)
         _log.info("[AGENT] no mapped agent for this number — built-in persona")
+
+    # Fill {{variables}} from pre_call custom functions into the opening line (render_greeting
+    # only fills the single-brace {agent_name}/{organization_name}/{product} tokens; the
+    # double-brace {{customer_name}}/{{city}}/... come from call_state["vars"]).
+    if call_state.get("vars"):
+        _greeting_text = interpolate_vars(_greeting_text, call_state["vars"])
 
     _log.info(f"[GREETING] Text: {_greeting_text!r}")
 

@@ -127,6 +127,42 @@ def get_bot(bot_id: str, _: dict = Depends(require_user)) -> dict:
     return {"bot": _serialize_bot(bot), "versions": [_serialize_version(v) for v in versions]}
 
 
+@router.get("/{bot_id}/functions")
+def list_bot_functions(bot_id: str, version_id: str = "", _: dict = Depends(require_user)) -> dict:
+    """List the custom functions saved against a bot.
+
+    Custom functions are stored inside a version's `config.functions` (versioned/published
+    with the rest of the bot config), not in a standalone table. By default this reads the
+    bot's live version (active/published), falling back to the draft, then the latest — so
+    it reflects what the runtime would actually use. Pass ?version_id=... to inspect a
+    specific version instead.
+    """
+    bot = bots.find_one({"_id": _oid(bot_id)})
+    if not bot:
+        raise HTTPException(404, "Bot not found")
+
+    if version_id:
+        version = bot_versions.find_one({"_id": _oid(version_id), "bot_id": _oid(bot_id)})
+    else:
+        target_id = bot.get("active_version_id") or bot.get("draft_version_id")
+        version = bot_versions.find_one({"_id": _oid(target_id)}) if target_id else None
+        if not version:  # last resort: newest version of any state
+            version = bot_versions.find_one({"bot_id": _oid(bot_id)}, sort=[("version", -1)])
+
+    if not version:
+        raise HTTPException(404, "No version found for this bot")
+
+    functions = (version.get("config") or {}).get("functions") or []
+    return {
+        "bot_id": bot_id,
+        "version_id": str(version["_id"]),
+        "version": version.get("version"),
+        "state": version.get("state"),
+        "count": len(functions),
+        "functions": functions,
+    }
+
+
 def _fork_new_draft(bot_id: str, config: dict, notes: str = "") -> str:
     latest = bot_versions.find_one({"bot_id": _oid(bot_id)}, sort=[("version", -1)])
     next_version = (latest["version"] + 1) if latest else 1

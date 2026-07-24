@@ -171,7 +171,15 @@ function FunctionForm({
       </div>
       <label style={{ marginTop: '0.5rem', display: 'block', maxWidth: '14rem' }}>
         Timeout (ms)
-        <input type="number" min={1} value={fn.timeout_ms} onChange={(e) => onUpdate({ timeout_ms: Number(e.target.value) })} />
+        <input
+          type="text"
+          inputMode="numeric"
+          value={fn.timeout_ms}
+          onChange={(e) => {
+            const digits = e.target.value.replace(/\D/g, '');
+            onUpdate({ timeout_ms: digits === '' ? 0 : Number(digits) });
+          }}
+        />
       </label>
 
       <div style={sectionLabel}>Headers</div>
