@@ -8,12 +8,33 @@ from datetime import datetime, timedelta, timezone
 import aiohttp
 from loguru import logger
 
-from voicebot_platform.outcome_catalog import get_disposition_map
-from voicebot_platform.phrase_library import get_phrase_texts
+from backend.analysis_prompts import (
+    B2B_SCORE_KEY,
+    CALL_ANALYSIS_KEY,
+    DEFAULT_PROMPTS,
+    get_analysis_prompt_for_runtime,
+)
 
-from .config import GEMINI_API_KEY
+from .config import GEMINI_API_KEY, HOT_LEAD_FLOW_ENABLED
 
 IST = timezone(timedelta(hours=5, minutes=30))
+
+
+class _SafeFormatDict(dict):
+    """Renders unknown {placeholder} names as-is instead of raising KeyError, so a PM
+    typo in the stored template can never crash post-call analysis in production."""
+
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _render_analysis_prompt(key: str, ctx: dict) -> str:
+    template = get_analysis_prompt_for_runtime(key)
+    try:
+        return template.format_map(_SafeFormatDict(ctx))
+    except Exception:
+        logger.error("Failed to render analysis prompt '{}' from stored template — falling back to default.", key)
+        return DEFAULT_PROMPTS[key].format_map(_SafeFormatDict(ctx))
 
 
 def _strip_punct(s: str) -> str:
@@ -105,7 +126,7 @@ _WRONG_OPENER_PHRASES: tuple[str, ...] = (
     "are you on the line",
 )
 
-_FALLBACK_DISPOSITION_MAP: dict[str, str] = {
+DISPOSITION_MAP: dict[str, str] = {
     "Short Hangup":                      "The call ended with no product discussion — the customer said nothing at all, OR gave only a bare call-acknowledgment (e.g. hello, haan, hold on, ek second) and disconnected before any product topic was raised.",
     "Voicemail":                        "The call went to the recipient's voicemail instead of connecting directly.",
     "Wrong Number":                     "The number dialed does not belong to the intended customer.",
@@ -119,6 +140,7 @@ _FALLBACK_DISPOSITION_MAP: dict[str, str] = {
     "Will do it Myself":                "The customer still has the requirement but will source/handle it themselves without JD's help — they explicitly declined seller connections (e.g. 'मैं खुद देख लूँगा', 'I'll manage it myself'). The need exists; only JD's assistance is rejected. Distinct from Not Interested.",
     "Call Rescheduled":                 "The customer asked to call at a specific date and time.",
     "Seller Intent":                    "The caller is a seller or vendor trying to offer their own products/services — they are NOT a buyer with a requirement. They may want to list on JustDial or pitch their business. This is the opposite of a buyer lead.",
+    "Job Seeker":                       "The caller is seeking employment/a job rather than the product or service being inquired about — this is not a genuine buyer lead. No further call attempts or WhatsApp follow-ups should be made.",
     "Abusive Lead":                     "The recipient exhibited abusive or inappropriate behavior during the call.",
     "DNC Client : Don't Call Further":  "The customer explicitly requested not to be contacted again.",
     "Other Cases":                      "The call outcome does not fit into any predefined categories.",
@@ -126,51 +148,11 @@ _FALLBACK_DISPOSITION_MAP: dict[str, str] = {
     "Language Issue":                   "Communication was not possible due to a language mismatch.",
 }
 
-def _current_disposition_map() -> dict[str, str]:
-    """Resolve the editable outcome catalog with a hardcoded fallback."""
-    try:
-        mapping = get_disposition_map()
-        if mapping:
-            return mapping
-    except Exception:
-        pass
-    return _FALLBACK_DISPOSITION_MAP
-
-
-class _LazyDispositionMap(dict):
-    def __getitem__(self, key):
-        return _current_disposition_map()[key]
-
-    def get(self, key, default=None):
-        return _current_disposition_map().get(key, default)
-
-    def keys(self):  # type: ignore[override]
-        return _current_disposition_map().keys()
-
-    def items(self):  # type: ignore[override]
-        return _current_disposition_map().items()
-
-    def __iter__(self):
-        return iter(_current_disposition_map())
-
-    def __contains__(self, key):  # type: ignore[override]
-        return key in _current_disposition_map()
-
-
-DISPOSITION_MAP: dict[str, str] = _LazyDispositionMap()
-
-
-def _valid_outcomes() -> set[str]:
-    return set(_current_disposition_map().keys())
+_VALID_OUTCOMES = set(DISPOSITION_MAP.keys())
 
 
 def status_to_outcome(status: str) -> str:
-    normalized = (status or "").strip().lower()
-    if normalized in {"timeout", "inactivity_timeout", "max_duration", "failed", "error"}:
-        return "Technical Issue - Call Connected"
-    if normalized in {"short_hangup", "no_response"}:
-        return "Short Hangup"
-    if normalized == "abusive":
+    if status == "abusive":
         return "Abusive Lead"
     return "Could Not Confirm"
 
@@ -201,6 +183,7 @@ def fallback_analysis(status: str) -> dict:
         "call_outcome_description": DISPOSITION_MAP.get(outcome, ""),
         "call_summary": "", "is_business": "", "qna": [],
         "product_change": {}, "rescheduled_to": "",
+        "business_intent": "", "b2b_user": "",
     }
 
 
@@ -216,20 +199,39 @@ async def generate_call_analysis(
     greeting_done: bool = True,
     user_speech_ms: int = 0,
     wrong_opener_detected: bool = False,
-    transcript_source: str = "gemini_live",
+    is_business_flag: int | None = None,
 ) -> dict:
     if gemini_connect_failed:
         return {
             "call_outcome": "Technical Issue - Call Connected",
             "call_outcome_description": DISPOSITION_MAP["Technical Issue - Call Connected"],
             "call_summary": "Gemini realtime WebSocket failed to connect — bot was silent, no greeting was spoken.",
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
     if not transcript:
-        return fallback_analysis(base_status)
+        # Empty transcript = no audio captured at all.
+        # The only non-Short-Hangup case is an explicit abusive status (set by the bot
+        # before analysis runs). Everything else — disconnected, completed with no audio,
+        # etc. — is a Short Hangup: the call connected but nothing was said.
+        if base_status == "abusive":
+            return fallback_analysis(base_status)
+        if not greeting_done:
+            _no_tr_summary = "User disconnected before or during the agent greeting — no audio captured."
+        elif user_speech_ms > 0:
+            _no_tr_summary = (
+                f"Greeting completed. User spoke briefly (~{user_speech_ms}ms, below STT threshold) "
+                "then disconnected — no transcribable response captured."
+            )
+        else:
+            _no_tr_summary = "No user response recorded — call ended after agent greeting only."
+        return {
+            "call_outcome": "Short Hangup",
+            "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
+            "call_summary": _no_tr_summary,
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
 
     # --- Deterministic pre-LLM guards (saves cost + prevents model misclassification) ---
 
@@ -239,10 +241,8 @@ async def generate_call_analysis(
             "call_outcome": "Voicemail",
             "call_outcome_description": DISPOSITION_MAP["Voicemail"],
             "call_summary": "Call was answered by an automated IVR system, not a live person.",
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     # Deterministic abusive-language check — scan every user turn before hitting the LLM.
@@ -265,14 +265,11 @@ async def generate_call_analysis(
                 "call_outcome": "Abusive Lead",
                 "call_outcome_description": DISPOSITION_MAP["Abusive Lead"],
                 "call_summary": "Caller used explicit profanity or abusive language during the call.",
-                "is_business": "", "business_city": "", "business_name": "",
+                "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-            "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
             }
 
-    user_roles = {"user", "buyer", "recording"}
-    user_turns = [t for t in transcript if str(t.get("role", "")).lower() in user_roles]
+    user_turns = [t for t in transcript if t.get("role") == "user"]
     non_empty_user_turns = [t for t in user_turns if (t.get("text") or "").strip()]
 
     # Tokens that count as product confirmation when they appear as the buyer's
@@ -280,7 +277,7 @@ async def generate_call_analysis(
     _CONFIRMATION_TOKENS = {
         "हाँ", "हां", "ha", "han", "haan", "yes", "ji", "jee",
         "bilkul", "zaroor", "theek", "ठीक", "okay", "ok",
-        "good", "गुड", "sure", "right", "correct", "हा",
+        "good", "गुड", "sure", "right", "correct", "हा", "जी",
     }
 
     # No real user speech captured. Check how far the agent progressed before deciding.
@@ -294,22 +291,58 @@ async def generate_call_analysis(
     # turn instead of the product greeting, agent progression is unreliable — the bot may
     # have advanced on ambient noise or background conversation, not product confirmation.
     _first_agent_text_lower = (_agent_turns_with_text[0].get("text") or "").lower() if _agent_turns_with_text else ""
+
+    # ── Positional anchor: find the first agent turn containing the product question. ──
+    # Used to detect whether the user responded AFTER the product question was asked.
+    # With two-step greeting, Step 1 (identity-only) is agent turn 0; the LLM asks the
+    # product question as agent turn 1+. Any positive response AFTER that is a genuine
+    # product confirmation — not a phone-pickup reflex.
+    _PRODUCT_Q_MARKERS = (
+        "requirement", "है ना", "चाहिए", "chahiye", "zaroorat",
+        "देख रहे", "dekh rahe", "dekh rhe",
+    )
+    _product_q_turn_idx = None
+    for _pq_i, _pq_t in enumerate(transcript):
+        if _pq_t.get("role") == "assistant" and any(
+            m in (_pq_t.get("text") or "").lower() for m in _PRODUCT_Q_MARKERS
+        ):
+            _product_q_turn_idx = _pq_i
+            break
+    _product_q_asked = _product_q_turn_idx is not None
+    # True when at least one non-empty user turn exists AFTER the product question in the transcript.
+    _user_after_product_q = _product_q_asked and any(
+        _pq_t.get("role") == "user" and (_pq_t.get("text") or "").strip()
+        for _pq_t in transcript[_product_q_turn_idx + 1:]
+    )
+
+    # True when the user's FIRST response directly after the product question contains a
+    # confirmation token and no explicit rejection.  With the two-step greeting design the
+    # product question is always the bot's second turn, so this is the user's genuine verdict
+    # — not a pickup reflex to the identity-only greeting.
+    _pq_direct_response_confirmed: bool = False
+    if _product_q_turn_idx is not None:
+        for _dr_t in transcript[_product_q_turn_idx + 1:]:
+            if _dr_t.get("role") == "user" and (_dr_t.get("text") or "").strip():
+                _dr_words = {
+                    unicodedata.normalize("NFC", _strip_punct(w))
+                    for w in (_dr_t.get("text") or "").split() if w.strip()
+                }
+                _dr_has_confirm = bool(_dr_words & {unicodedata.normalize("NFC", w) for w in _CONFIRMATION_TOKENS})
+                _dr_has_reject  = unicodedata.normalize("NFC", "नहीं") in _dr_words
+                _pq_direct_response_confirmed = _dr_has_confirm and not _dr_has_reject
+                break  # only the FIRST user turn after the product question matters
+
     # Also detect a truncated greeting: agent started with "हेलो…" but the TTS was cut
     # before the product question ("requirement है ना?" / "चाहिए?" / "चाहिए थे?").
     # In that case the user's "हाँ/जी" was a response to an incomplete utterance, NOT to
     # the product question — agent progression cannot be used to infer product confirmation.
+    # Two-step greeting: scan the first TWO agent turns so we don't falsely flag Step 1
+    # (identity-only) as a truncated greeting when the product question is in Step 2.
     _greeting_start = any(
         _first_agent_text_lower.startswith(p)
         for p in ("हेलो", "hello", "helo", "नमस्ते", "namaste")
     )
-    _greeting_has_product_q = any(
-        kw in _first_agent_text_lower
-        for kw in (
-            "requirement", "है ना", "चाहिए", "chahiye", "zaroorat",
-            # new 2-step greeting: Step 1a
-            "देख रहे", "dekh rahe", "dekh rhe",
-        )
-    )
+    _greeting_has_product_q = _product_q_asked and _product_q_turn_idx < 2
     _truncated_greeting = _greeting_start and not _greeting_has_product_q
     _wrong_opener = (
         wrong_opener_detected
@@ -342,10 +375,8 @@ async def generate_call_analysis(
                 "call_outcome": "Short Hangup",
                 "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
                 "call_summary": _summary,
-                "is_business": "", "business_city": "", "business_name": "",
+                "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": ["zero_user_signal"], "needs_review": False,
             }
         # Muted transcript has content — check if it's only greetings/acknowledgements.
         # A bare "hello" / "haan bolo" / "haan" during the bot's opening turn is not
@@ -375,10 +406,8 @@ async def generate_call_analysis(
                 "call_outcome": "Short Hangup",
                 "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
                 "call_summary": _summary,
-                "is_business": "", "business_city": "", "business_name": "",
+                "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-            "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
             }
         # Muted transcript has substantive content but no live user turns — STT failed on live mic
         # but user did speak during muted window. Fall through to LLM with context.
@@ -392,64 +421,43 @@ async def generate_call_analysis(
         "dial 1", "dial 2", "dial 3",
         "for english press", "hindi ke liye", "हिंदी के लिए दबाएं",
         "please press", "kindly press",
-        "दबाएं", "के लिए दबाएं",          # Hindi "press X for Y" IVR
-        "reason for calling",
-        "रीज़न फॉर कॉलिंग",
-        "please state your",
         # Automated queuing / unavailability
         "all our representatives are busy", "all agents are busy",
         "our executives are busy", "all our executives are busy",
-        "our representatives are",
         "currently busy", "please hold the line",
         "your call is important to us",
         "estimated wait time",
         "you are number", "in the queue",
-        "currently unavailable",
-        "not available at the moment",
-        "आईवीआर", "ivr system",
         # Automated connection notices
         "your call is being connected", "apka call connect",
         "connecting your call",
         "this call may be recorded for quality",
         "this call is being recorded for training",
-        # Carrier / voicemail system messages — never uttered by a live person
-        "you may hang up", "may hang up now",
-        "यू मे हैंग अप",
-        "the person you are trying to",
-        "the person you are calling",
-        "the number you are trying to",
-        "पर्सन यू आर ट्राइंग", "पर्सन यू आर कॉलिंग",
-        "after the beep", "leave your message after",
-        "do you have recording",
+        # Voicemail end-of-greeting prompts — checked position-independently because an earlier
+        # "line to reach is not a" turn (also from the same voicemail) sets seen_substantive_user_turn
+        # True and bypasses the pre-substantive voicemail guard above.
+        "finished recording hang up", "when you have finished recording",
+        "finished recording you may hang up",
+        # Hinglish/Devanagari transliterations of the above (STT renders English voicemail in script)
+        "फिनिश्ड रिकॉर्डिंग", "व्हेन यू हैव फिनिश्ड रिकॉर्डिंग",
+        "फिनिश्ड रिकॉर्डिंग यू मे हैंग अप",
     ]
+
     _all_text = " ".join(
         (t.get("text") or "").lower() for t in transcript
     )
     _muted_text = " ".join((m or "").lower() for m in (muted_transcript or []))
     _full_text = f"{_all_text} {_muted_text}"
-    _DNC_SIGNALS_PRE = get_phrase_texts("dnc_trigger")
-    if any(sig in _full_text for sig in _DNC_SIGNALS_PRE):
-        return {
-            "call_outcome": "DNC Client : Don't Call Further",
-            "call_outcome_description": DISPOSITION_MAP["DNC Client : Don't Call Further"],
-            "call_summary": "Customer explicitly requested not to be called again.",
-            "is_business": "", "business_city": "", "business_name": "",
-            "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
-        }
     if any(sig in _full_text for sig in _HARD_IVR_SIGNALS):
         return {
             "call_outcome": "Voicemail",
             "call_outcome_description": DISPOSITION_MAP["Voicemail"],
             "call_summary": "Call was answered by an automated IVR system, not a live person.",
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
-    _VOICEMAIL_SIGNALS_PRE = get_phrase_texts("voicemail") or [
+    _VOICEMAIL_SIGNALS_PRE = [
         "leave a message", "leave your message", "please leave a message",
         "after the tone", "at the beep",
         "you have reached", "you've reached",
@@ -460,7 +468,7 @@ async def generate_call_analysis(
         "voice mail recording", "voicemail recording",
         "finished recording hang up", "when you have finished recording",
     ]
-    _HOLD_MUSIC_SIGNALS_PRE = get_phrase_texts("hold_music") or [
+    _HOLD_MUSIC_SIGNALS_PRE = [
         "put your call on hold",
         "placed your call on hold",
         "has put your call on hold",
@@ -477,7 +485,7 @@ async def generate_call_analysis(
     seen_substantive_user_turn = False
     for turn in transcript:
         text_lower = (turn.get("text") or "").lower()
-        if str(turn.get("role", "")).lower() in user_roles:
+        if turn.get("role") in ("user", "buyer"):
             words = {w.strip(".,!? ").lower() for w in (turn.get("text") or "").split() if w.strip()}
             if words - _GREETING_TOKENS:
                 seen_substantive_user_turn = True
@@ -488,21 +496,65 @@ async def generate_call_analysis(
                 "call_outcome": "Voicemail",
                 "call_outcome_description": DISPOSITION_MAP["Voicemail"],
                 "call_summary": "Call was answered by voicemail or automated IVR system.",
-                "is_business": "", "business_city": "", "business_name": "",
+                "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-            "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
             }
         if any(sig in text_lower for sig in _HOLD_MUSIC_SIGNALS_PRE):
             return {
                 "call_outcome": "Could Not Confirm",
                 "call_outcome_description": DISPOSITION_MAP["Could Not Confirm"],
                 "call_summary": "Caller placed the bot on hold; no product confirmation was obtained.",
-                "is_business": "", "business_city": "", "business_name": "",
+                "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
                 "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-            "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
             }
+
+    # Pre-LLM: detect wrong-number signal from user turns.
+    # When the caller explicitly says the number was mis-submitted (किसी ने गलत नंबर डाला,
+    # wrong number, etc.) this is a hard Tier-1 signal — short-circuit before NI or any LLM.
+    _WRONG_NUMBER_USER_PATTERNS = [
+        "गलत नंबर", "galat number", "galat no",
+        "wrong number", "rong number", "rang number",
+        "किसी ने गलत", "kisi ne galat",
+        "यह नंबर गलत", "yeh number galat", "number galat hai",
+        "मेरा नंबर नहीं", "mera number nahi",
+        "यह मेरा नंबर नहीं", "yeh mera number nahi",
+        "इस नंबर पर मत", "is number par mat",
+        "गलत आदमी", "galat aadmi", "wrong person",
+    ]
+    _user_text_wn = unicodedata.normalize("NFC", " ".join(
+        (t.get("text") or "").lower() for t in non_empty_user_turns
+    ))
+    if any(unicodedata.normalize("NFC", p.lower()) in _user_text_wn for p in _WRONG_NUMBER_USER_PATTERNS):
+        return {
+            "call_outcome": "Wrong Number",
+            "call_outcome_description": DISPOSITION_MAP["Wrong Number"],
+            "call_summary": "Caller confirmed the number does not belong to the intended contact — someone submitted the wrong number.",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
+
+    # Pre-LLM: detect DNC (Do Not Call) request from user turns.
+    # When the buyer explicitly asks not to be contacted again this is a hard Tier-1 signal.
+    _DNC_USER_PATTERNS = [
+        "कॉल मत करना", "call mat karna", "call mat karo",
+        "फोन मत करना", "phone mat karna", "phone mat karo",
+        "दोबारा मत कॉल", "dobara mat call", "dobara call mat",
+        "फिर कभी मत कॉल", "phir kabhi mat call",
+        "कभी कॉल मत करना", "kabhi call mat karna",
+        "कभी फोन मत करना", "kabhi phone mat karna",
+        "number हटा दो", "number hata do", "numer hata do",
+        "remove my number", "number remove karo",
+        "मुझे कॉल मत करो", "mujhe call mat karo",
+        "do not call", "don't call again",
+    ]
+    if any(unicodedata.normalize("NFC", p.lower()) in _user_text_wn for p in _DNC_USER_PATTERNS):
+        return {
+            "call_outcome": "DNC Client : Don't Call Further",
+            "call_outcome_description": DISPOSITION_MAP["DNC Client : Don't Call Further"],
+            "call_summary": "Buyer explicitly requested not to be called again.",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
+        }
 
     # Pre-LLM: detect agent's not-interested closing phrase.
     # The bot emits "कोई बात नहीं जी, future में ज़रूरत हो तो Justdial पे call कर सकते हैं"
@@ -542,6 +594,12 @@ async def generate_call_analysis(
         "हम vendor", "hum vendor", "vendor hain", "vendor hai",
         "खुद produce", "hum produce", "हम produce",
         "खुद इंक्वायरी", "khud inquiry", "khud enquiry",
+        # Trading / reseller signals
+        "ट्रेडिंग का", "trading ka", "trading business", "trading wale",
+        "hum trading", "हम ट्रेडिंग", "trading mein hain", "trading hai",
+        "hamara trading", "हमारा ट्रेडिंग", "trading karte", "trading karte hain",
+        "wholesale karte", "wholesale karta", "wholesale dealer",
+        "हम resell", "hum resell", "reseller hain", "reseller hai",
     ]
     # Bypass patterns: if user turns contain already-spoken signals, fall through to LLM so
     # it can classify as Already Spoken instead of Not Interested.
@@ -557,6 +615,9 @@ async def generate_call_analysis(
         "kaam ho gaya", "काम हो गया", "khatam ho gaya", "खत्म हो गया",
         "pura ho gaya", "पूरा हो गया", "poora ho gaya",
         "le liya", "ले लिया",
+        "khareed liya", "खरीद लिया", "khareed li", "khareeda",
+        "close ho gaya", "क्लोज हो गया", "close hua", "close kar diya",
+        "closed ho gaya", "requirement close", "band ho gaya", "बंद हो गया",
         "kisi ne baat ki", "किसी ने बात की",
         "seller ne call", "seller ka call", "seller se baat",
         "idar se baat", "इधर से बात", "idhar se baat",
@@ -582,21 +643,58 @@ async def generate_call_analysis(
         _schema_q_count > 0
         and len(_agent_turns_with_text) > _schema_q_count + 1
     )
+    # Bypass when ANY user turn contains an explicit positive-want signal. The bot can misfire
+    # the NI closing when it misreads an initial "नहीं" as rejection while the buyer was
+    # actually correcting the product name or confirming strong intent ("वही चाहिए किसी भी कीमत").
+    _NI_POSITIVE_WANT_PATTERNS = [
+        "चाहिए था", "chahiye tha",
+        "चाहिए थी", "chahiye thi",
+        "वही चाहिए", "wahi chahiye",
+        "किसी भी कीमत", "kisi bhi keemat", "kisi bhi price",
+        "मुझे चाहिए", "mujhe chahiye",
+        "हमें चाहिए", "humein chahiye",
+        "मेरे को चाहिए", "mere ko chahiye",
+        "हमारे को चाहिए", "hamare ko chahiye",
+        "मुझे लेना है", "mujhe lena hai",
+        "हमें लेना है", "humein lena hai",
+        "खरीदना है", "kharidna hai",
+        "order करना है", "order karna hai",
+    ]
+    # The exact-phrase list above is word-order-sensitive ("मुझे चाहिए" matches but the
+    # equally common "चाहिए मुझे"/"हाँ चाहिए मुझे" does not) — spoken Hindi word order varies
+    # a lot, so also fall back to a bare "चाहिए"/"chahiye" anywhere in a user turn. That
+    # single word is a strong "I want/need this" signal on its own — EXCEPT when the same
+    # turn also contains "नहीं" (e.g. "नहीं चाहिए" = "don't need it"), which is a rejection,
+    # not a want, even though the substring "चाहिए" is present.
+    def _turn_has_bare_want_signal(_text: str) -> bool:
+        _t_nfc = unicodedata.normalize("NFC", _text)
+        _t_lower = unicodedata.normalize("NFC", _text.lower())
+        if "नहीं" in _t_nfc or "nahi" in _t_lower or "nahin" in _t_lower:
+            return False
+        return "चाहिए" in _t_nfc or "chahiye" in _t_lower
+
+    _ni_user_wants_product_bypass = any(
+        any(
+            unicodedata.normalize("NFC", p.lower()) in unicodedata.normalize("NFC", (t.get("text") or "").lower())
+            for p in _NI_POSITIVE_WANT_PATTERNS
+        )
+        or _turn_has_bare_want_signal(t.get("text") or "")
+        for t in non_empty_user_turns
+    )
     if (
         not _approved_closing_present
         and any(m.lower() in _last_agent_text for m in _NI_AGENT_MARKERS)
         and not _ni_seller_bypass
         and not _ni_already_spoken_bypass
         and not _ni_enrichment_complete_bypass
+        and not _ni_user_wants_product_bypass
     ):
         return {
             "call_outcome": "Not Interested",
             "call_outcome_description": DISPOSITION_MAP["Not Interested"],
             "call_summary": "Agent responded with not-interested closing — buyer did not confirm the product requirement.",
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     # Pre-LLM: detect job-seeking caller intent.
@@ -641,7 +739,7 @@ async def generate_call_analysis(
         "naukri ke liye",
         "job chahiye", "job chaahiye",
         "job milega", "job milegi",
-        "job ke liye call", "job ke liye phone",
+        "job ke liye", "job ke liye call", "job ke liye phone",
         "job dhundh", "job ki talash",
         "job dila", "job lena hai",
         "rozgar chahiye", "rojgar chahiye",
@@ -718,6 +816,10 @@ async def generate_call_analysis(
         "talash", "तलाश", "search", "milega", "milegi", "milni",
         "apply", "karna", "related", "riletad", "lena", "dila",
         "seeking", "seeker",
+        # "requirement"/"inquiry" are too generic alone (buyers say them about the
+        # product too), but paired with a _JOB_CORE word in the same turn they
+        # reliably mean job-seeking — e.g. "job requirement", "job ki inquiry".
+        "requirement", "रिक्वायरमेंट", "inquiry", "enquiry", "इंक्वायरी",
     })
     # Bigrams that look like job-seeking but are actually manufacturing/B2B terms.
     # If any of these appear in a user turn, don't count "job" as an employment indicator.
@@ -738,15 +840,24 @@ async def generate_call_analysis(
         if _words & _JOB_CORE and _words & _SEEKING_CONTEXT:
             _job_seeker_cooccur = True
             break
-    if _job_seeker_literal or _job_seeker_cooccur:
+    # route_cat=1 calls close with a fixed line the instant the buyer confirms job intent
+    # (bot.py _job_seeker_close, said verbatim or paraphrased in Devanagari) — if the agent's
+    # last turn is that closing, the buyer's answer already committed the call to Job Seeker
+    # even when their exact wording (e.g. a referential "पहले वाला") isn't itself matchable.
+    # Scoped to the LAST turn only + requires "requirement": mid-call "note kar li"
+    # acknowledgments before further spec questions use "जानकारी"/info, not "requirement",
+    # and aren't the final turn — verified against a full day of production transcripts.
+    _job_seeker_closing_fired = (
+        ("requirement" in _last_agent_text or "रिक्वायरमेंट" in _last_agent_text)
+        and ("note kar li" in _last_agent_text or "नोट कर ली" in _last_agent_text)
+    )
+    if _job_seeker_literal or _job_seeker_cooccur or _job_seeker_closing_fired:
         return {
-            "call_outcome": "Not Interested",
-            "call_outcome_description": DISPOSITION_MAP["Not Interested"],
+            "call_outcome": "Job Seeker",
+            "call_outcome_description": DISPOSITION_MAP["Job Seeker"],
             "call_summary": "Caller is seeking employment/job opportunities — this is not a product inquiry.",
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     # Buyer explicitly identifies this call as automated/computer/robot and dismisses it.
@@ -774,10 +885,8 @@ async def generate_call_analysis(
                 "Buyer explicitly identified and dismissed this as an automated/computer call "
                 "— no product engagement obtained."
             ),
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     # Pre-LLM: detect caller who dialled to contact a company/seller directly
@@ -816,10 +925,8 @@ async def generate_call_analysis(
                 "Caller's intent was to contact the company/seller directly — "
                 "this was not a product purchase inquiry through Justdial."
             ),
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     # Transfer-to-someone-else: receptionist/assistant answered and offered to connect
@@ -848,10 +955,8 @@ async def generate_call_analysis(
             "call_outcome": "Could Not Confirm",
             "call_outcome_description": DISPOSITION_MAP["Could Not Confirm"],
             "call_summary": "Call answered by a gatekeeper who offered to transfer — decision maker not reached.",
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
 
     # All user turns contain only bare call-presence signals (hello, haan bolo, achha, etc.)
@@ -870,10 +975,14 @@ async def generate_call_analysis(
                     tokens.add(t)
         return tokens
 
-    if non_empty_user_turns and all(
+    if non_empty_user_turns and not _user_after_product_q and all(
         not (_tokenize_bare(t.get("text") or "") - _BARE_CALL_SIGNAL_TOKENS - _INFO_REQUEST_TOKENS)
         for t in non_empty_user_turns
     ):
+        # Two-step greeting: if the user responded AFTER the product question was asked,
+        # their bare "हाँ" is a genuine product confirmation — skip this guard and let
+        # the LLM classify. Only short-circuit when no response followed the product question.
+        #
         # Distinguish: if all tokens are info-request words (and no bare call-presence signal
         # overlap), the buyer was asking "what is this call about?" — prefer a Short Hangup
         # summary that reflects the info-seeking intent.
@@ -891,10 +1000,74 @@ async def generate_call_analysis(
             "call_outcome": "Short Hangup",
             "call_outcome_description": DISPOSITION_MAP["Short Hangup"],
             "call_summary": _summary_bare,
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
+        }
+
+    # Pre-LLM GP-7 enforcement: bot advanced past the opening to actual spec questions
+    # (type / quantity / grade / size / prefer etc.) but STT only captured bare tokens from
+    # the buyer's responses. The bot NEVER asks spec questions without product confirmation,
+    # so this is structurally Interested — do not Short Hangup regardless of bare turns.
+    _SPEC_Q_INDICATORS = (
+        "किस", "कितन", "कौन", "कैसा", "type", "quantity", "size", "grade",
+        "diameter", "floor", "prefer", "colour", "color", "रंग", "weight",
+        "material", "capacity", "voltage", "power",
+    )
+    _bot_asked_spec_q = _product_q_turn_idx is not None and any(
+        t.get("role") == "assistant"
+        and any(ind in (t.get("text") or "").lower() for ind in _SPEC_Q_INDICATORS)
+        for t in transcript[_product_q_turn_idx + 1:]
+    )
+    # Index of the first spec question turn (used by pre-LLM guard and post-proc 5h).
+    _first_spec_q_idx: int | None = None
+    if _bot_asked_spec_q and _product_q_turn_idx is not None:
+        for _si, _st in enumerate(
+            transcript[_product_q_turn_idx + 1:], _product_q_turn_idx + 1
+        ):
+            if _st.get("role") == "assistant" and any(
+                ind in (_st.get("text") or "").lower() for ind in _SPEC_Q_INDICATORS
+            ):
+                _first_spec_q_idx = _si
+                break
+    # True only when at least one user turn AFTER the first spec question contains a word
+    # that is NOT a bare confirmation/call-signal token.  If False, every user response to
+    # the spec question was "हाँ/ji/okay" — meaning no real spec value was given and any
+    # LLM-extracted QNA answer is likely fabricated.
+    _CONFIRM_NFC_PP = {unicodedata.normalize("NFC", w) for w in _CONFIRMATION_TOKENS}
+    _post_spec_user_has_nonbare: bool = (
+        _first_spec_q_idx is not None
+        and any(
+            t.get("role") == "user"
+            and bool(
+                {
+                    unicodedata.normalize("NFC", _strip_punct(w))
+                    for w in (t.get("text") or "").split()
+                    if w.strip()
+                }
+                - _CONFIRM_NFC_PP
+                - _BARE_CALL_SIGNAL_TOKENS
+            )
+            for t in transcript[_first_spec_q_idx + 1:]
+        )
+    )
+    _all_user_bare_or_empty = not non_empty_user_turns or all(
+        not (
+            {_strip_punct(w) for w in (t.get("text") or "").split() if w.strip()}
+            - _BARE_CALL_SIGNAL_TOKENS
+        )
+        for t in non_empty_user_turns
+    )
+    if _bot_asked_spec_q and _all_user_bare_or_empty and non_empty_user_turns:
+        return {
+            "call_outcome": "Interested",
+            "call_outcome_description": DISPOSITION_MAP["Interested"],
+            "call_summary": (
+                "Buyer confirmed product interest — bot advanced to spec questions "
+                "but STT captured only bare acknowledgements from subsequent turns. "
+                "Classified as Interested per GP-7 (agent progression proves product confirmed)."
+            ),
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
+            "qna": [], "product_change": {}, "rescheduled_to": "",
         }
 
     # Pre-LLM: agent stuck on opening question — never progressed to spec questions.
@@ -926,11 +1099,36 @@ async def generate_call_analysis(
                 "substantive response — buyer gave only a bare call-presence signal or "
                 f"nothing at all.{_muted_note}"
             ),
-            "is_business": "", "business_city": "", "business_name": "",
+            "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
-                "analysis_transcript_source": transcript_source,
-                "confidence": 0.95, "evidence_quotes": [], "disqualifiers": [], "needs_review": False,
         }
+
+    # Pre-LLM: bot advanced to spec questions with NO user response between the product
+    # question and the first spec question. This means the bot jumped without product
+    # confirmation — GP-7 structural-proof does not apply because there was no user turn
+    # to advance on. Return CNC so the LLM doesn't infer Interested from the spec questions.
+    # Skip when the approved closing was already spoken (full flow completed).
+    if _bot_asked_spec_q and not _approved_closing_present:
+        # _first_spec_q_idx already computed above alongside _bot_asked_spec_q
+        _user_between_pq_and_spec = (
+            _product_q_turn_idx is not None
+            and _first_spec_q_idx is not None
+            and any(
+                t.get("role") == "user" and (t.get("text") or "").strip()
+                for t in transcript[_product_q_turn_idx + 1 : _first_spec_q_idx]
+            )
+        )
+        if _product_q_turn_idx is not None and _first_spec_q_idx is not None and not _user_between_pq_and_spec:
+            return {
+                "call_outcome": "Could Not Confirm",
+                "call_outcome_description": DISPOSITION_MAP["Could Not Confirm"],
+                "call_summary": (
+                    "Agent advanced to specification questions with no user response to the "
+                    "product question — product confirmation was never obtained."
+                ),
+                "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
+                "qna": [], "product_change": {}, "rescheduled_to": "",
+            }
 
     # --- End pre-LLM guards ---
 
@@ -970,11 +1168,10 @@ async def generate_call_analysis(
         (i for i, t in enumerate(_non_empty_turns) if t.get("role") == "assistant"),
         default=-1,
     )
-    _has_user_after_last_agent = (
-        any(str(t.get("role", "")).lower() in user_roles for t in _non_empty_turns[_last_agent_idx + 1:])
-        if _last_agent_idx >= 0
-        else False
-    )
+    _has_user_after_last_agent = any(
+        t.get("role") == "user"
+        for t in _non_empty_turns[_last_agent_idx + 1:]
+    ) if _last_agent_idx >= 0 else False
     _ends_on_agent_no_response = _last_agent_idx >= 0 and not _has_user_after_last_agent
     _trailing_agent_note = (
         "\n⚠ TRANSCRIPT ENDS ON AGENT QUESTION: The last turn in the transcript is from "
@@ -1029,16 +1226,78 @@ async def generate_call_analysis(
     _bot_reask_patterns = (
         "तो क्या आपको", "to kya aapko", "क्या आपको", "kya aapko",
         "do you need", "do you still need", "क्या आप",
-        # Step 1b of new 2-step greeting — agent asking requirement after search confirmation
-        "की requirement है ना", "requirement hai na",
-        # Step 1a re-ask
-        "देख रहे हैं", "dekh rahe hain",
+        # Note: "की requirement है ना" / "requirement hai na" / "देख रहे हैं" were previously
+        # included here but are REMOVED — in the two-step greeting these ARE the legitimate
+        # Step 2 product question in agent turn 1, not a stuck re-ask.
     )
     _agent_reask_opening = any(p in _second_agent_text for p in _bot_reask_patterns)
     # Also block the note when the buyer's first turn contains an explicit "नहीं" —
     # even if the agent mistakenly proceeded to spec questions (bot error), the buyer
     # rejection is the authoritative signal.
     _first_turn_has_explicit_no = "नहीं" in unicodedata.normalize("NFC", _first_user_text)
+
+    # Find the B2B/verified-leads upsell question turn, if the agent reached it. This is
+    # a separate cross-sell pitch asked AFTER product qualification is done — a buyer's
+    # "नहीं" here answers "is your business B2B?" / "do you want verified leads?", not
+    # "do you still need the product?". It must never be scanned as a product rejection.
+    _UPSELL_Q_PATTERNS = ["verified leads", "business B2B", "business के लिए", "B2B है"]
+    _upsell_q_turn_idx = None
+    if _product_q_turn_idx is not None:
+        for _up_i in range(_product_q_turn_idx + 1, len(transcript)):
+            _up_t = transcript[_up_i]
+            if _up_t.get("role") == "assistant" and any(
+                p in (_up_t.get("text") or "") for p in _UPSELL_Q_PATTERNS
+            ):
+                _upsell_q_turn_idx = _up_i
+                break
+    _after_pq_scope_end = _upsell_q_turn_idx if _upsell_q_turn_idx is not None else len(transcript)
+
+    # Block the note when the buyer replied "नहीं" to the ACTUAL product question.
+    # The _first_turn_has_explicit_no guard only covers the very first user turn, which
+    # may have been a phone-pickup "हाँ" spoken BEFORE the product question was asked.
+    # In two-step greetings this "हाँ" is NOT a product confirmation — and if the user
+    # then rejects after the product question we must not inject PRODUCT CONFIRMED.
+    # Scoped to end BEFORE the B2B/upsell pitch (see _upsell_q_turn_idx above) so a
+    # "नहीं" answering that later, unrelated question isn't misread as a product rejection.
+    _after_pq_has_explicit_no = _product_q_asked and any(
+        "नहीं" in unicodedata.normalize("NFC", (t.get("text") or ""))
+        for t in transcript[_product_q_turn_idx + 1 : _after_pq_scope_end]
+        if t.get("role") == "user" and (t.get("text") or "").strip()
+    )
+    # A buyer can say "नहीं" and then reverse themselves later in the same call (confusion,
+    # mishearing, or genuinely changing their mind mid-conversation — e.g. "नहीं... अरे हाँ
+    # चाहिए मुझे"). The plain substring scan above only detects THAT a "नहीं" occurred
+    # somewhere; it has no notion of conversation order after that point. Find the LAST
+    # "नहीं" turn and check whether any user turn AFTER it (still before the B2B pitch)
+    # contains a confirmation/buying signal — if so, this is a reversal, not a rejection,
+    # and the deterministic post-proc rules below must not force Not Interested over it.
+    _last_no_turn_idx = None
+    if _after_pq_has_explicit_no:
+        for _no_i in range(_after_pq_scope_end - 1, _product_q_turn_idx, -1):
+            _no_t = transcript[_no_i]
+            if _no_t.get("role") == "user" and "नहीं" in unicodedata.normalize(
+                "NFC", (_no_t.get("text") or "")
+            ):
+                _last_no_turn_idx = _no_i
+                break
+    _REVERSAL_SIGNALS = _CONFIRMATION_TOKENS | {
+        unicodedata.normalize("NFC", s) for s in {
+            "चाहिए", "chahiye", "लेना", "lena", "मंगाना", "mangana", "मुझे", "hamein", "हमें",
+        }
+    }
+    _no_has_later_reversal = _last_no_turn_idx is not None and any(
+        bool({_strip_punct(w) for w in (t.get("text") or "").split() if w.strip()} & _REVERSAL_SIGNALS)
+        for t in transcript[_last_no_turn_idx + 1 : _after_pq_scope_end]
+        if t.get("role") == "user" and (t.get("text") or "").strip()
+    )
+    # Require that a confirmation token actually appears AFTER the product question.
+    # Without this, a "हाँ" to the greeting (before the product question) could fire
+    # the PRODUCT CONFIRMED note even when the buyer later rejects.
+    _first_confirm_after_pq = _product_q_asked and any(
+        bool({_strip_punct(w) for w in (t.get("text") or "").split() if w.strip()} & _CONFIRMATION_TOKENS)
+        for t in transcript[_product_q_turn_idx + 1:]
+        if t.get("role") == "user" and (t.get("text") or "").strip()
+    )
 
     # Detect "connect me to [agent]" pattern across ALL user turns.
     # A buyer asking to be connected to the bot by name proves they don't realise they're
@@ -1085,12 +1344,14 @@ async def generate_call_analysis(
         f"Could Not Confirm or Short Hangup. "
         f"Classify as Interested (zero valid specs), Enriched (1+ valid specs), or Approved."
         if _first_turn_is_confirmation
+        and _first_confirm_after_pq        # confirmation must come AFTER the product question
         and not _wrong_opener
-        and not _truncated_greeting   # buyer never heard the product question
+        and not _truncated_greeting        # buyer never heard the product question
         and not _agent_reask_opening
         and not _first_turn_has_explicit_no
+        and not _after_pq_has_explicit_no  # reject AFTER the product question overrides earlier हाँ
         and not _user_asks_for_agent
-        and not _first_turn_has_identity_q   # "हां" bundled with who-are-you/where-from is a reflex
+        and not _first_turn_has_identity_q
         else ""
     )
     # Phantom signal: user asked to be connected to the agent they are already talking to.
@@ -1219,7 +1480,14 @@ QnA EXTRACTION when buyer turns are absent:
                 f"confirmation beyond a single-word acknowledgement. "
                 f"Only classify as Could Not Confirm if there is a clear reason the "
                 f"confirmation couldn't happen (hold, handoff, IVR). Garbled or off-topic "
-                f"audio alone is Short Hangup, not Could Not Confirm."
+                f"audio alone is Short Hangup, not Could Not Confirm. "
+                f"EXCEPTION — this short-call preference does NOT override the Short Hangup "
+                f"exclusion rule: if the buyer's बare हाँ/जी/नहीं was said DIRECTLY in answer "
+                f"to the agent's opening product-requirement question itself (e.g. जी answering "
+                f"'आपको X की requirement है ना?'), that IS product engagement regardless of call "
+                f"length — classify as Interested (हाँ/जी) or Not Interested (नहीं), never Short "
+                f"Hangup. This exception applies ONLY to a direct answer to the opening product "
+                f"question, not to acknowledgements during the greeting or before that question."
             )
         elif duration_secs < 25:
             _duration_note = (
@@ -1229,441 +1497,152 @@ QnA EXTRACTION when buyer turns are absent:
         else:
             _duration_note = f"\n📞 CALL DURATION: {_dur_label}."
 
-    prompt = f"""You are a strict call-analysis engine for JustDial's AI outbound qualification calls. Return accurate structured JSON — no guessing, no approximating. Every rule below is mandatory.{cut_note}{_wrong_opener_note}{_truncated_greeting_note}{_phantom_connect_note}{_identity_q_note}{_reask_opening_note}{_user_sparse_note}{_trailing_agent_note}{_product_confirmed_note}{_duration_note}
+    _biz_flag_note = ""
+    if HOT_LEAD_FLOW_ENABLED:
+        if is_business_flag == 5:
+            _biz_flag_note = (
+                f"\n📋 BUSINESS PITCH FLAG: is_business_flag=5. "
+                f"The agent was instructed to run the business gate → leads pitch → B2B → city → "
+                f"business name flow, but ONLY after every qualification question was answered "
+                f"and the call reached the normal closing point. business_intent MUST be a "
+                f"non-empty value for this call — use 'not_pitched' if the call ended before "
+                f"qualification was fully complete for ANY reason (hard exclusion like "
+                f"seller/job-seeker/abusive/grievance/annoyed caller, NOT-INTERESTED, "
+                f"unresponsive, disconnect mid-qualification, etc.), or if qualification did "
+                f"finish but the gate question itself was declined/unclear/never answered."
+            )
+        elif is_business_flag in (1, 2, 3, 4):
+            _biz_flag_note = (
+                f"\n📋 BUSINESS PITCH FLAG: is_business_flag={is_business_flag}. "
+                f"The agent was instructed to pitch business leads after qualification — a "
+                f"single yes/no question, with NO gate question and NO B2B/city/name "
+                f"follow-up for this call. "
+                f"business_intent MUST be set to a non-empty value for this call — "
+                f"use 'not_pitched' if the caller disconnected before the pitch was made."
+            )
+        else:
+            _biz_flag_note = (
+                "\n📋 BUSINESS PITCH FLAG: not set (flag 6-9 or absent). "
+                "No business pitch was made. Set business_intent to '' always for this call."
+            )
 
-Current date/time (IST, GMT+5:30): {current_dt_str}
-
+    _hot_lead_step2c = ""
+    _hot_lead_step3_keys = ""
+    if HOT_LEAD_FLOW_ENABLED and is_business_flag == 5:
+        _hot_lead_step2c = """
 ━━━━━━━━━━━━━━━━━━━━━━━━
-TRANSCRIPT
-━━━━━━━━━━━━━━━━━━━━━━━━
-{lines}{_muted_lines}
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-QUALIFICATION QUESTIONS
-━━━━━━━━━━━━━━━━━━━━━━━━
-{q_list}
-{_agent_inference_section}
-━━━━━━━━━━━━━━━━━━━━━━━━
-GLOBAL PRINCIPLES (defined once — referenced by name throughout)
-━━━━━━━━━━━━━━━━━━━━━━━━
-
-GP-1  POSITIVE PROGRESSION: A reflex "नहीं" followed by spec details, a product question, or
-      continued engagement means product IS confirmed. Classify on the final positive stance,
-      not the opening negative.
-
-GP-2  FINAL STATE WINS:
-      • Explicit final rejection overrides earlier weak interest.
-      • Explicit final confirmation overrides early reflex "नहीं".
-      • Off-topic later turns (agent identity, caller location, unrelated topics) do NOT undo
-        prior confirmed qualification. Only an explicit requirement withdrawal can downgrade
-        a Tier 3 classification.
-
-GP-3  NEGATIVE TONE ≠ REJECTION: Rudeness, impatience, or dismissive phrasing ("jaldi bolo",
-      "kya hai", "nahi nahi") is NOT a rejection. Rejection requires explicit, final
-      requirement withdrawal.
-
-GP-4  GENERIC CONVERSATION ≠ INTEREST: The following are participation signals only —
-      they do NOT imply product interest:
-        "haan bolo" / "achha" / "theek hai" / "kaun hai" / "kis company se?" /
-        "human ho ya bot?" / "can you help me?" / "why are you calling?" / "hello"
-      Interest requires: product confirmation OR a product-specific question OR a buying signal.
-
-GP-5  OPERATIONAL > CONVERSATIONAL: A buyer saying "haan / ji / ok / standard / kuch bhi /
-      you decide" to a spec question is answering conversationally — NOT providing a
-      valid_spec_value. Only concrete, operationally useful data counts.
-
-GP-6  SELF-SOURCING OVERRIDES REJECTION: "Khud dekh lenge / apne aap le lenge" with a live
-      requirement → Will do it Myself, not Not Interested. Requirement exists; only JD's
-      help is declined.
-
-GP-7  AGENT PROGRESSION GUARANTEES PRODUCT CONFIRMATION: The bot is strictly programmed and
-      NEVER asks any qualification question (quantity, grade, spec, type, application, etc.)
-      without first receiving product confirmation from the buyer. Therefore:
-        • If the transcript shows the agent asking ANY question from the qualification schema
-          listed above → product_confirmed is STRUCTURALLY TRUE.
-        • The outcome CANNOT be Could Not Confirm or Short Hangup in this case.
-        • This overrides any superficially vague or unclear buyer responses you observe.
-      You do not need to re-derive product_confirmed from buyer turns alone when the agent's
-      own behaviour already proves it.
-      EXCEPTION — bot mis-step (applies to FIRST turn OR ALL turns):
-        Case A — First turn only: if the buyer's first response to the opening product question
-          was entirely off-topic (e.g., a person's name, a personal-call response, an unrelated
-          utterance like "Aryan" or "Himank hello"), the bot may have advanced incorrectly on a
-          misread. GP-7 does NOT apply — evaluate product_confirmed from the buyer's actual words.
-        Case B — All turns are background noise (apply GP-8 before GP-7): if EVERY buyer turn
-          throughout the entire call is off-topic personal chatter, name-calls, or background
-          conversation unrelated to the product — domestic talk, side conversations, commenting on
-          unrelated things (water, bathroom, payments, people nearby, "बना कर दे दिया क्लाइंट को",
-          "पानी मत दो", "बाथरूम में से ना बात करो") — no single turn engages with any product
-          topic, spec, or buying signal — then the bot ran a one-sided conversation with background
-          noise. GP-7 does NOT apply. Evaluate as Could Not Confirm.
-        Case C — Wrong opener (🚨 GREETING FAILURE note present above): the agent started with
-          a connection probe ("क्या आप अभी line पर हैं?") instead of the product greeting, so
-          the bot may have advanced on ambient noise. GP-7 does NOT apply regardless of agent
-          turn count. Evaluate product confirmation from the buyer's actual words only.
-        Case D — Explicit buyer rejection ignored by bot (bot error): if the buyer's FIRST
-          live response to the opening product question begins with or prominently contains
-          "नहीं" (no) — e.g. "नहीं मैम", "नहीं जी", "नहीं, हमें नहीं चाहिए" — AND the agent
-          then proceeded to ask spec questions without resolving the rejection, this is a bot
-          programming error. The agent advanced on a misread. GP-7 does NOT apply. Evaluate
-          product_confirmed from the buyer's actual words. A clear consistent "नहीं" to the
-          opening question = product_confirmed FALSE → classify as Not Interested.
-        Case E — Bare phone-pickup signal injected as muted capture: if the only user signal
-          is a reflexive greeting or acknowledgement ("हाँ जी", "हाँ", "जी", "हेलो") captured
-          during the bot's greeting window (mic was muted), and the agent advanced on this
-          signal alone with no subsequent live user confirmation — the bot advanced on a
-          phone-pickup reflex, not a product confirmation. GP-7 does NOT apply. Evaluate as
-          Could Not Confirm or Short Hangup based on actual engagement.
-
-GP-8  PHANTOM ENGAGEMENT / BACKGROUND NOISE: When ALL of the following are true simultaneously:
-        ✓ ZERO valid_spec_values were captured across all questions
-        ✓ NO buyer turn contains any product-related word, quantity, spec, or buying signal
-        ✓ Buyer turns read as background conversations, name-calls, or side-chatter
-          (e.g. calling out a person's name, commenting on unrelated topics like payments/internet,
-          domestic talk, conversations with people nearby, rambling with no product relevance)
-      → The agent was capturing background noise, not a real engaged buyer.
-      → product_confirmed = FALSE. GP-7 does NOT apply.
-      → Outcome: "Could Not Confirm"
-      This applies regardless of whether closing_line_spoken is TRUE or FALSE — a bot that
-      ran its full flow (or any part of it) while the user was talking to someone else or
-      in a noisy environment did not achieve genuine qualification.
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-DEFINITIONS
+STEP 2C — EXTRACT HOT LEAD FIELDS
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
-product_topic_reached — agent named the product AND buyer responded to the product itself
-                        (not merely to the caller's identity or presence).
+The agent runs a fixed sequence for this call (is_business_flag=5): GATE question ("is this
+requirement for your business?") → LEADS PITCH ("do you want Justdial leads for your
+business?") → B2B question → business city → business name. Extract these fields from the full
+transcript. Do NOT infer or guess — only extract values explicitly stated or clearly implied by
+the buyer's direct response, OR by where the transcript cuts off relative to this sequence (see
+the CUTOFF RULE below).
 
-product_confirmed     — TRUE if ANY of:
-                          • buyer said yes/ji/bilkul/theek hai/haan in response to
-                            "आपको X की requirement है ना?" or equivalent opening question
-                          • buyer provided a spec value, quantity, or product variant
-                          • buyer asked a product-specific question (pricing, delivery,
-                            availability, specs) — generic call questions do NOT count.
-                        Apply GP-1: later confirmation overrides early "नहीं".
+  business_intent | Outcome of the gate + leads pitch. This flow is only SUPPOSED to run after
+                  | qualification is fully complete and the call reaches the normal closing
+                  | point — but business_intent still needs a value even for calls that never
+                  | got that far. Values:
+                  |   "hot_lead"                — caller said YES to the leads pitch. Once this
+                  |                               happens the call IS a hot lead regardless of
+                  |                               whether B2B/city/name were reached or completed
+                  |                               afterward.
+                  |   "business_not_interested" — gate = YES (it is for their business), pitch
+                  |                               was asked, caller clearly declined the leads
+                  |                               offer.
+                  |   "not_into_business"        — caller said they have no business at all —
+                  |                               at the gate question, or at the pitch question.
+                  |   "no_response"              — gate = YES and the leads pitch WAS asked, but
+                  |                               the caller never gave a clear yes/no to it.
+                  |   "not_pitched"              — the leads pitch never happened, for ANY reason:
+                  |                               the call ended before qualification was fully
+                  |                               complete (hard exclusion, NOT-INTERESTED,
+                  |                               unresponsive, disconnect mid-qualification,
+                  |                               etc.), OR qualification finished and the flow
+                  |                               began but the gate question was declined,
+                  |                               unclear, or never answered.
+                  |   ""                         — no pitch was ever expected (should not occur
+                  |                               for a flag=5 call, but use if truly N/A).
+                  | RULE: business_intent must be non-empty — default to "not_pitched" whenever
+                  | the call never produced a clear gate/pitch outcome, regardless of why (early
+                  | call end or a failed gate).
+                  | CUTOFF RULE: once qualification has genuinely finished and this flow has
+                  | begun, use WHERE the transcript ends to decide when there's no explicit
+                  | accept/decline:
+                  |   • Ends before/at the gate question, no answer given → "not_pitched"
+                  |   • Ends after gate = YES, at/after the pitch question, no answer given →
+                  |     "no_response"
+                  |   • Ends after the caller said YES to the pitch (with or without reaching
+                  |     B2B/city/name) → "hot_lead"
 
-valid_spec_value      — a concrete, operationally useful answer: named option, number+unit,
-                        material/grade, specific measurable choice.
-                        NOT valid: "haan / yes / ji / ok", "standard", "kuch bhi",
-                        "you decide", "don't know", "हम्म", or any vague filler.
-                        ASR CORRUPTION: interpret phonetically/contextually garbled text by
-                        intent and context; the agent's echo-confirmation in the next turn
-                        is the strongest signal.
+  b2b_user        | Caller's direct answer to the agent's question "is your business B2B?" /
+                  | "Kya apka business B2B hai?" (asked for every hot_lead call on this flag):
+                  |   "yes" — caller confirmed their business is B2B
+                  |   "no"  — caller confirmed their business is NOT B2B
+                  |   ""    — call ended before this question was reached, or caller did not
+                  |           give a clear answer
 
-closing_line_spoken   — ALL of the following conditions are met:
-                          1. The LAST assistant turn contains "relevant sellers"
-                          2. The LAST assistant turn also contains EITHER
-                               "सारी details मिल गईं"  (mixed Hindi+English form)
-                             OR "सारी डिटेल्स मिल गई" (full Devanagari form)
-                        Both conditions must be satisfied simultaneously. No other phrasing qualifies.
-
+For business_intent = "hot_lead", the business city and business name asked afterward are
+captured via the existing business_city / business_name fields (Step 2B) — apply the Step 2B
+extraction rules to the buyer's answers to those two questions.
+"""
+        _hot_lead_step3_keys = """
+  "business_intent": "<'hot_lead'|'business_not_interested'|'not_into_business'|'no_response'|'not_pitched'|'' — per Step 2C>",
+  "b2b_user": "<'yes'|'no'|'' — per Step 2C>","""
+    elif HOT_LEAD_FLOW_ENABLED and is_business_flag in (1, 2, 3, 4):
+        _hot_lead_step2c = """
 ━━━━━━━━━━━━━━━━━━━━━━━━
-EVALUATION ORDER
-━━━━━━━━━━━━━━━━━━━━━━━━
-
-Evaluate tiers in order: Tier 1 → Tier 2 → Tier 3 → Tier 4.
-Within each tier, return the FIRST fully satisfied outcome.
-Once an outcome is matched, do not evaluate lower tiers.
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-TIER 1 — SYSTEM / TERMINAL
-━━━━━━━━━━━━━━━━━━━━━━━━
-These override everything else when the signal is unambiguous.
-
-SHORT HANGUP
-  Condition: product_topic_reached == FALSE AND buyer gave only bare call-presence signals.
-  Bare signals: "hello", "haan", "kaun hai", "ek second", "hold on", "ruko", calling out a
-    name thinking it was a personal call, or asking "kaun bol raha hai?" — responses about the
-    caller's identity or presence, not the product.
-  Test: Did the buyer engage with the product topic in ANY way?
-    YES → do NOT use Short Hangup.   NO → Short Hangup.
-  NOT ALLOWED IF: buyer said "नहीं" in response to the product question (that IS product
-    engagement). Short Hangup requires zero product engagement.
-  → "Short Hangup"
-
-VOICEMAIL
-  Condition: call answered by automated voicemail/IVR, not a live human.
-  Signals (any one is sufficient):
-    English: "leave a message", "after the beep", "you have reached [name/voicemail]",
-             "unable to take your call", "mailbox is full"
-    Hindi:   "sandesh chhod", "beep ke baad", "uplabdh nahi / उपलब्ध नहीं",
-             "aapka call abhi", "subscriber"
-  Pattern: robotic/templated text with no human conversational structure.
-  NOT ALLOWED IF: a real human conversational response exists anywhere in the transcript.
-  → "Voicemail"
-
-CALL ON HOLD
-  Condition: a carrier/PBX hold-music announcement appears in a user turn — same phrase
-    repeated in multiple languages, OR any of: "put your call on hold", "placed your call on
-    hold", "hold par rakha hai", "होल्ड पर राख्यो छे".
-  Note: buyer saying "hold on" themselves → Short Hangup, NOT this. This applies only when
-    the carrier/PBX automated message appears as a transcript turn.
-  → "Could Not Confirm"
-
-WRONG NUMBER
-  Condition: person who answered confirmed the number belongs to someone else.
-  → "Wrong Number"
-
-LANGUAGE ISSUE
-  Condition: communication was entirely impossible throughout the call due to language mismatch.
-  → "Language Issue"
-
-ABUSIVE LEAD
-  Condition: a live HUMAN was abusive or used profanity. NOT automated system messages —
-    phrases like "hang up" or "call cannot be taken" from IVR/voicemail are NEVER abusive.
-  → "Abusive Lead"
-
-DNC
-  Condition: buyer explicitly asked not to be contacted again.
-  Examples: "dobara mat call karna", "remove my number", "number हटा दो".
-  → "DNC Client : Don't Call Further"
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-TIER 2 — OPERATIONAL ROUTING
-━━━━━━━━━━━━━━━━━━━━━━━━
-Check these before qualification outcomes (Tier 3).
-
-SELLER INTENT
-  Condition: caller is on the supply/service side — NOT a buyer.
-  Signals: offering own products/services, seeking manufacturing contracts, wanting to list
-    on JD, or supplying the exact product being discussed.
-  Strict: must be clear from what the caller SAYS. A manufacturer buying materials for their
-    own use is still a buyer.
-  → "Seller Intent"
-
-ALREADY SPOKEN
-  Condition: requirement already discussed with JD/seller, OR requirement already fulfilled/no longer active.
-  Examples: "already purchased", "kaam ho gaya", "le liya", "sorted", "already spoken to seller",
-    "ab nahi hai" / "nahi ab nahi hai" (not anymore — requirement existed but is now gone/fulfilled),
-    "ho gaya" / "khatam ho gaya" / "pura ho gaya" (done / finished / completed),
-    "already hua" / "already le liya" / "already connected" / "already kisi ne baat ki".
-  KEY RULE: if the buyer uses "ab" (now/anymore) to negate the requirement — "ab nahi chahiye",
-    "ab nahi hai", "pehle tha ab nahi", "ab zaroorat nahi" — treat as Already Spoken, NOT Not
-    Interested. The "ab" signals the requirement existed before and has since been resolved.
-  → "Already Spoken"
-
-CALL RESCHEDULED
-  Condition: buyer asked to be called at a SPECIFIC date and/or time.
-  Strict: "baad mein / call later / abhi busy hoon" without a specific time → Could Not
-    Confirm (Tier 4), NOT this outcome.
-  EXCEPTION: if valid_spec_count ≥ 1 AND product_confirmed — do NOT use this outcome.
-    The enrichment data is complete and valuable. Evaluate Tier 3 (Enriched/Approved) instead.
-  → "Call Rescheduled"
-
-ALTERNATE NUMBER
-  Condition: buyer provided a different contact number for follow-up.
-  → "Alternate Number"
-
-WILL DO IT MYSELF
-  Condition: buyer still has the requirement but will source it independently, explicitly
-    declining JD's help. Apply GP-6.
-  Examples: "khud dekh lenge", "don't send sellers", "apne aap le lenge".
-  Strict: requirement must exist — only JD's assistance is rejected.
-  → "Will do it Myself"
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-TIER 3 — QUALIFICATION
-━━━━━━━━━━━━━━━━━━━━━━━━
-Reached ONLY if product_confirmed == TRUE and no Tier 1/2 outcome matched.
-If product_confirmed == FALSE → skip directly to Tier 4.
-
-Evaluate in this exact order:
-
-1. APPROVED — closing line present  ← HARD OVERRIDE
-   IF closing_line_spoken == TRUE AND ≥1 valid_spec_value was captured:
-   → "Approved"  ← MANDATORY. No exceptions.
-   HARD OVERRIDE: The closing line ("सारी details मिल गईं" + "relevant sellers") is spoken
-   ONLY when the bot's internal logic confirms the full qualification flow was completed
-   successfully. When it appears, the outcome MUST be Approved. You are NOT permitted to
-   downgrade to Enriched or Interested under any circumstances — not because a spec seemed
-   vague, not because one question appeared unanswered, not because of ASR corruption. The
-   bot's confirmed completion is authoritative and supersedes your individual spec evaluation.
-   If you are about to emit Enriched or Interested and closing_line_spoken is TRUE, STOP and
-   emit Approved instead.
-   EXCEPTION — GP-8 overrides this rule: if GP-8 (phantom engagement / background noise)
-   applies — zero valid spec values AND all buyer turns are incoherent background noise — then
-   closing_line_spoken does NOT make this Approved. The closing line fired on a phantom
-   conversation. Classify as Could Not Confirm.
-
-2. APPROVED — all specs answered
-   IF all {len(questions)} qualification question(s) received valid_spec_value answers:
-   → "Approved"
-
-3. ENRICHED
-   IF ≥1 valid_spec_value was captured (but not all questions answered):
-   → "Enriched"
-
-4. INTERESTED
-   IF product_confirmed == TRUE AND 0 valid_spec_value answers:
-   → "Interested"
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-TIER 4 — UNCERTAIN / NEGATIVE
-━━━━━━━━━━━━━━━━━━━━━━━━
-Reach this tier only if no Tier 1–3 outcome matched.
-
-INTERESTED (positive engagement, no product confirmation)
-  Condition: product_confirmed == FALSE but buyer showed clear, product-specific positive
-    interest — asked about pricing, delivery, specs, availability, or quantity — without a
-    final clear rejection.
-  Apply GP-4: generic call questions ("can you help me?", "which company?", identity
-    questions) do NOT qualify.
-  → "Interested"
-
-COULD NOT CONFIRM
-  Condition: ANY of:
-    a) vague/non-committal about the product ("शायद", "पता नहीं", "I'll think about it")
-    b) vague callback with no product signal — "baad mein", "call later", "busy" without
-       a specific time
-    c) call dropped before any product confirmation and no other rule matched
-    d) buyer's responses were off-topic with no product engagement detected
-  NOT ALLOWED IF: buyer said "हाँ/yes" or gave any spec detail → use Interested.
-  NOT ALLOWED IF: valid_spec_count ≥ 1 AND product_confirmed → use Tier 3 outcome (Enriched/Approved). A "call me later" after completing enrichment does not undo the collected data.
-  NOT ALLOWED IF: buyer clearly rejected → use Not Interested.
-  NOT ALLOWED IF: the agent asked ANY qualification question from the schema listed above
-    (see GP-7 — agent progression structurally proves product_confirmed is TRUE; Could Not
-    Confirm requires product_confirmed == FALSE or never reached). Use Interested minimum.
-  → "Could Not Confirm"
-
-Disambiguation:
-  product_topic_reached | product engagement     | final stance     → outcome
-  FALSE                 | none (bare signals)    | —                → Short Hangup (Tier 1)
-  TRUE                  | vague / off-topic      | unclear          → Could Not Confirm
-  TRUE                  | product-specific       | unclear          → Interested (Tier 4)
-  TRUE                  | product-specific       | explicit reject  → Not Interested
-  TRUE                  | any                    | self-source      → Will do it Myself (Tier 2)
-
-NOT INTERESTED
-  Condition: buyer CONSISTENTLY and CLEARLY stated they do not need the product. The
-    requirement itself is entirely gone AND was never fulfilled elsewhere.
-  ALL must be true:
-    ✓ buyer explicitly rejected the product (not just an initial reflex "नहीं")
-    ✓ NO positive engagement, NO spec answers, NO product questions anywhere in the call
-    ✓ buyer's FINAL overall stance is negative
-    ✓ cannot be explained by Seller Intent / Will do it Myself / Already Spoken / Wrong Number
-  STRICT EXCLUSION: if buyer uses temporal language — "ab nahi chahiye", "ab nahi hai",
-    "pehle tha ab nahi", "nahi ab nahi" — the requirement existed before and is now gone.
-    This is Already Spoken (fulfilled), NOT Not Interested.
-  Apply GP-1 (POSITIVE PROGRESSION) and GP-3 (NEGATIVE TONE ≠ REJECTION).
-  → "Not Interested"
-
-TECHNICAL ISSUE
-  Condition: call connected but disrupted entirely by technical problems with no meaningful
-    exchange achieved. Strict: if any positive exchange occurred before the issue, use the
-    appropriate Tier 3 outcome instead.
-  → "Technical Issue - Call Connected"
-
-OTHER CASES
-  Use ONLY if truly none of the above applies after careful evaluation of all tiers.
-  → "Other Cases"
-
-Valid outcome values (use EXACT strings only):
-{disposition_options}
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-CONSISTENCY CHECK (mandatory before emitting JSON)
-━━━━━━━━━━━━━━━━━━━━━━━━
-After completing Step 2 (qna extraction), self-verify:
-• valid_spec_count ≥ 1 AND product_confirmed → outcome MUST be Enriched or Approved (never Interested, never Not Interested, never Call Rescheduled, never Could Not Confirm — spec data is complete and valuable regardless of any late buyer statement).
-• valid_spec_count == 0 AND product_confirmed AND NO explicit buyer rejection → outcome MUST be Interested (never Enriched or Approved).
-• valid_spec_count == 0 AND product_confirmed AND buyer explicitly rejected → outcome MUST be Not Interested (never Interested or Enriched).
-• closing_line_spoken AND product_confirmed AND valid_spec_count ≥ 1 → outcome MUST be Approved.
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 2 — EXTRACT QnA
+STEP 2C — EXTRACT HOT LEAD FIELDS
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
-PRE-STEP (mandatory): Read the transcript sequentially. Each time the AGENT asks one of the
-listed qualification questions (in any language/paraphrase), record the question_id and the
-IMMEDIATELY FOLLOWING buyer turn as its raw answer.
+Extract this field from the full transcript. Do NOT infer or guess — only extract values
+explicitly stated or clearly implied by the buyer's direct response to the agent.
 
-EXTRACTION RULES (all mandatory):
+  business_intent | Outcome of the business leads pitch — a single yes/no question. There is
+                  | NO gate question and NO B2B/city/name follow-up for this call. Values:
+                  |   "hot_lead"                — caller confirmed they want to receive leads
+                  |   "business_not_interested" — caller was pitched but clearly declined
+                  |                               (they have a business but don't want leads)
+                  |   "not_into_business"        — caller said they are not a business owner
+                  |                               (flag was set but caller turned out to be
+                  |                               personal)
+                  |   "no_response"              — pitch was made but caller gave no clear yes/no
+                  |   "not_pitched"              — flag was set but caller disconnected before
+                  |                               the pitch was reached
+                  |   ""                         — no pitch was expected or made
+                  | RULE: only use "" if the call is so short the pitch was structurally
+                  | impossible — prefer "not_pitched" over "" otherwise.
 
-1. POSITION RULE: Attribute each buyer response to the qualification question the AGENT asked
-   immediately before that buyer turn. Nth question asked = Nth buyer answer. Never reassign
-   based on answer format or data type.
+  b2b_user        | This call's flow does not include a B2B question — always set b2b_user to "".
+"""
+        _hot_lead_step3_keys = """
+  "business_intent": "<'hot_lead'|'business_not_interested'|'not_into_business'|'no_response'|'not_pitched'|'' — per Step 2C>",
+  "b2b_user": "<'yes'|'no'|'' — per Step 2C>","""
 
-2. AGENT-CONFIRMATION RULE: If the buyer's response is garbled/unclear (STT noise),
-   verbose/embedded in a long sentence, OR missing entirely (no buyer turn between two agent
-   turns), and the AGENT's next turn explicitly restates or confirms a value (e.g. "ठीक है —
-   [value]", "okay, X", "aapne [value] bataya", "achha, [value]"), treat that agent-confirmed
-   value as the buyer's answer for the preceding question.
-   STT NUMBERS: agent may render Hindi numerals in romanized form — "das/dash"=10, "bees"=20,
-   "teen"=3, "paanch"=5, "sau"=100. "dash units note kar liya" means agent confirmed 10 units.
-   ANTI-HALLUCINATION: if buyer turn is missing AND agent gave no confirmed value, set
-   answ "Not Sure", opt_id null. A vague filler ("हम्म", "umm", "achha") followed by an
-   agent assumption is NOT a confirmed answer.
-   UNANSWERED FINAL QUESTION: transcript ends immediately after the agent's question with no
-   subsequent user OR agent turn → question is completely unanswered. Omit from qna entirely.
-
-3. CORRECTION RULE: If a buyer turn clearly corrects or confirms a PREVIOUSLY answered
-   question (does NOT match any option of the current question), update the prior answer —
-   do NOT assign to the current question.
-
-4. POST-WRAP-UP RULE: If the buyer speaks AFTER the agent's closing statement and clearly
-   answers an unanswered question, include it in qna.
-
-5. NO CROSS-TYPE REASSIGNMENT: a grade/spec answer stays with the spec question; a quantity
-   answer stays with the quantity question.
-
-6. OPT_ID MATCHING:
-   a. Exact match (case-insensitive) → use that option's id.
-   b. STT digit-drop: "40 GSM" vs option "140 GSM" (buyer value is a numeric suffix of the
-      option text) → use that option's id.
-   c. No match → set opt_id to null.
-
-7. QUANTITY FORMAT: For type=="quantity" questions, answ MUST be "<number> <unit>" (e.g.
-   "5 pieces"). Use buyer's unit if stated; else use first value from that question's
-   quantity_unit list. If buyer could not give a number → set answ to "Not Sure".
-   Apply this format ONLY to quantity questions — never to grade/spec answers.
-
-Each qna entry: {{"id": <qid>, "quest": <2–4 word English keyword label for the question — NOT the full text (e.g. "Material Type", "Brand Preference", "Usage Type", "Capacity")>, "answ": <normalized English answer>, "opt_id": <matching option id or null>}}
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 2B — EXTRACT BUSINESS DETAILS
-━━━━━━━━━━━━━━━━━━━━━━━━
-
-Extract these three fields from the full transcript. Do NOT infer or guess — only extract
-values explicitly stated by the buyer.
-
-  Field          | Value rules
-  is_business    | "True" if buyer confirmed business/commercial/shop/company use;
-                 | "False" if buyer said personal/home use;
-                 | "" if not discussed or answer was unclear.
-  business_name  | Exact name buyer stated for their business/shop/company; "" if not stated.
-                 | MUST be in English — transliterate Devanagari/regional script to Roman letters
-                 | (e.g. "एस एस पोर्टेबल कैबिन" → "SS Portable Cabin").
-  business_city  | City buyer stated specifically for their business location; "" if not stated.
-                 | MUST be in English — use the standard English spelling of the city/state
-                 | (e.g. "भुवनेश्वर, उड़ीसा" → "Bhubaneswar, Odisha").
-                 | Do NOT use the buyer's personal city as business_city unless explicitly
-                 | stated in the context of their business during the call.
-
-If is_business is "False" or "" → set both business_name and business_city to "".
-
-━━━━━━━━━━━━━━━━━━━━━━━━
-STEP 3 — RETURN JSON
-━━━━━━━━━━━━━━━━━━━━━━━━
-
-Return a SINGLE JSON object with EXACTLY these keys — no extra keys, no markdown, no explanation:
-{{
-  "call_outcome": "<one exact string from the valid outcome list>",
-  "call_outcome_description": "<the corresponding description from the list>",
-  "call_summary": "<1-2 sentence English summary of what happened on the call>",
-  "is_business": "<'True' | 'False' | '' — per Step 2B>",
-  "business_name": "<business name in English (transliterated if needed), or ''>",
-  "business_city": "<business city in English, or ''>",
-  "qna": [ ...entries per Step 2... ],
-  "product_change": {{"product_name": "<new product name>"}},  // or {{}} if no product switch
-  "rescheduled_to": "<ISO datetime YYYY-MM-DDTHH:MM:SS in IST if rescheduled, else ''>"
-}}
-
-STRICT OUTPUT RULES:
-- call_outcome MUST be one of the exact strings from the valid outcome list. Any deviation is an error.
-- Do NOT guess, hallucinate, or invent values. If unsure, choose the most conservative option.
-- Do NOT include null fields — use "" or {{}} as specified above.
-- Return ONLY the JSON object. No markdown fences, no commentary before or after."""
+    _analysis_prompt_ctx = {
+        "cut_note": cut_note,
+        "_wrong_opener_note": _wrong_opener_note,
+        "_truncated_greeting_note": _truncated_greeting_note,
+        "_phantom_connect_note": _phantom_connect_note,
+        "_identity_q_note": _identity_q_note,
+        "_reask_opening_note": _reask_opening_note,
+        "_user_sparse_note": _user_sparse_note,
+        "_trailing_agent_note": _trailing_agent_note,
+        "_product_confirmed_note": _product_confirmed_note,
+        "_duration_note": _duration_note,
+        "_biz_flag_note": _biz_flag_note,
+        "current_dt_str": current_dt_str,
+        "lines": lines,
+        "_muted_lines": _muted_lines,
+        "q_list": q_list,
+        "_agent_inference_section": _agent_inference_section,
+        "disposition_options": disposition_options,
+        "_hot_lead_step2c": _hot_lead_step2c,
+        "_hot_lead_step3_keys": _hot_lead_step3_keys,
+    }
+    prompt = _render_analysis_prompt(CALL_ANALYSIS_KEY, _analysis_prompt_ctx)
 
     try:
         url = (
@@ -1672,7 +1651,7 @@ STRICT OUTPUT RULES:
         )
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0},
         }
         async with http_session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
             data = await resp.json()
@@ -1681,13 +1660,26 @@ STRICT OUTPUT RULES:
             raw = data["candidates"][0]["content"]["parts"][0]["text"]
             result = json.loads(raw)
             outcome = result.get("call_outcome", "")
-            if outcome not in _valid_outcomes():
+            if outcome not in _VALID_OUTCOMES:
                 outcome = status_to_outcome(base_status)
                 result["call_outcome"] = outcome
             result["call_outcome_description"] = DISPOSITION_MAP.get(outcome, "")
             result.setdefault("qna", [])
             result.setdefault("product_change", {})
             result.setdefault("rescheduled_to", "")
+            result.setdefault("business_intent", "")
+            result.setdefault("b2b_user", "")
+            if not HOT_LEAD_FLOW_ENABLED:
+                result["business_intent"] = ""
+                result["b2b_user"] = ""
+            else:
+                # Validate business_intent against allowed values
+                _valid_bi = {"hot_lead", "business_not_interested", "not_into_business", "no_response", "not_pitched", ""}
+                if result.get("business_intent") not in _valid_bi:
+                    result["business_intent"] = ""
+                # Validate b2b_user against allowed values
+                if result.get("b2b_user") not in {"yes", "no", ""}:
+                    result["b2b_user"] = ""
             pc = result.get("product_change") or {}
             if isinstance(pc, dict) and "new_product" in pc and "product_name" not in pc:
                 result["product_change"] = {"product_name": pc.get("new_product", "")}
@@ -1785,6 +1777,23 @@ STRICT OUTPUT RULES:
                     result["call_outcome"] = outcome
                     result["call_outcome_description"] = DISPOSITION_MAP[outcome]
 
+            # 3-pre. Two-step greeting protection: Short Hangup but user gave a clear
+            #        confirmation directly after the product question → Interested.
+            #        Must run BEFORE the _HARD_OUTCOMES gate (which blocks SH overrides)
+            #        because this is the one legitimate case where SH must be reversed.
+            if (
+                outcome == "Short Hangup"
+                and _pq_direct_response_confirmed
+                and (not _after_pq_has_explicit_no or _no_has_later_reversal)
+            ):
+                logger.info(
+                    f"[POST-PROC] Short Hangup → Interested: "
+                    f"user confirmed directly after product question (two-step greeting)"
+                )
+                outcome = "Interested"
+                result["call_outcome"] = outcome
+                result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+
             # 3. Hard outcomes that must never be overridden by downstream logic.
             _HARD_OUTCOMES = {
                 "Short Hangup", "Voicemail", "Wrong Number", "Seller Intent",
@@ -1827,19 +1836,19 @@ STRICT OUTPUT RULES:
                     result["qna"] = []
 
                 # 5a-2. Hard sub-20s Interested → Short Hangup regardless of live turns.
-                #       The 2-step greeting alone takes 5+ seconds; in < 20s the bot
-                #       cannot complete Step 1a + Step 1b + even start Q1. Any "Interested"
-                #       returned for a sub-20s call is either a phone-answer reflex or
-                #       Sarvam/post-call STT noise that fooled the LLM — not real engagement.
+                #       Skip when the user explicitly responded AFTER the product question
+                #       (two-step greeting): that is a genuine product confirmation even in
+                #       a short call. Otherwise, sub-20s Interested is almost always a
+                #       phone-answer reflex or STT noise — downgrade to Short Hangup.
                 if (
                     outcome == "Interested"
                     and duration_secs is not None
                     and duration_secs < 20
+                    and not _user_after_product_q
                 ):
                     logger.info(
                         f"[POST-PROC] Interested → Short Hangup: hard sub-20s rule, "
-                        f"duration={duration_secs:.0f}s (live turns present but call too short "
-                        f"for genuine qualification)"
+                        f"duration={duration_secs:.0f}s (no user response after product question)"
                     )
                     outcome = "Short Hangup"
                     result["call_outcome"] = outcome
@@ -1850,12 +1859,14 @@ STRICT OUTPUT RULES:
                 #     Calls at or under 30 s with only bare acknowledgements (हाँ / ji / yes / ok)
                 #     and no valid spec values are almost always Short Hangups — the buyer
                 #     said a reflexive yes and disconnected, not a genuine product confirmation.
-                #     ~10 % of these may be genuine quick yeses; that tradeoff is accepted.
-                #     Boundary is inclusive (≤ 30) to catch exact-30s boundary cases.
+                #     Skip when the user explicitly responded AFTER the product question
+                #     (two-step greeting): that bare "हाँ" was answering the product question,
+                #     not just picking up the phone — it is a genuine confirmation.
                 if (
                     outcome == "Interested"
                     and duration_secs is not None
                     and duration_secs <= 30
+                    and not _user_after_product_q
                 ):
                     _BARE_ACK_SET = {
                         "haan", "ha", "han", "ji", "jee", "yes", "okay", "ok",
@@ -1875,9 +1886,9 @@ STRICT OUTPUT RULES:
                     _bare_ack_nfc = {unicodedata.normalize("NFC", w) for w in _BARE_ACK_SET}
                     _all_user_words: set[str] = set()
                     for _t in transcript:
-                        if str(_t.get("role", "")).lower() in user_roles:
+                        if _t.get("role") == "user":
                             for _w in (_t.get("text") or "").split():
-                                _clean = unicodedata.normalize("NFC", re.sub(r"[^\w]", "", _w.lower()))
+                                _clean = _strip_punct(_w)
                                 if _clean:
                                     _all_user_words.add(_clean)
                     # Also include words from muted transcript
@@ -1895,6 +1906,95 @@ STRICT OUTPUT RULES:
                         result["call_outcome"] = outcome
                         result["call_outcome_description"] = DISPOSITION_MAP[outcome]
                         result["qna"] = []
+
+                # 5c. Interested + explicit "नहीं" after the product question + bot never
+                #     progressed to spec questions → Not Interested.
+                #     Catches two-step greetings where user said "हाँ" to the greeting,
+                #     then explicitly rejected when the product question was asked, but
+                #     the LLM (without a PRODUCT CONFIRMED note) still chose Interested.
+                #     Skipped if the buyer reversed themselves after the "नहीं" (a later
+                #     confirmation/buying-signal turn) — that's a change-of-mind, not a
+                #     rejection, and this deterministic rule must not override the LLM's
+                #     own full-conversation read in that case.
+                if (
+                    outcome == "Interested"
+                    and _after_pq_has_explicit_no
+                    and not _no_has_later_reversal
+                    and not _bot_asked_spec_q
+                ):
+                    logger.info(
+                        f"[POST-PROC] Interested → Not Interested: explicit 'नहीं' "
+                        f"after product question, bot never reached spec questions"
+                    )
+                    outcome = "Not Interested"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+                    result["qna"] = []
+
+                # 5d. Short-call Interested + bot never reached spec questions + user's
+                #     post-product-question response has no confirmation token and no buying
+                #     signal → Short Hangup.
+                #     Catches company-name or side-conversation responses (e.g. "Safe Express")
+                #     that the LLM misreads as product engagement on calls ≤35 s.
+                if (
+                    outcome == "Interested"
+                    and duration_secs is not None
+                    and duration_secs <= 35
+                    and not _bot_asked_spec_q
+                    and _user_after_product_q
+                ):
+                    _BUYING_SIGNALS_PP = {
+                        unicodedata.normalize("NFC", s) for s in {
+                            "चाहिए", "chahiye", "लेना", "lena", "order", "खरीद", "kharid",
+                            "मंगाना", "mangana", "बुक", "book", "purchase", "mangwana",
+                            "quantity", "मात्रा", "मुझे", "hamein", "हमें",
+                        }
+                    }
+                    _CONFIRM_NFC = {unicodedata.normalize("NFC", w) for w in _CONFIRMATION_TOKENS}
+                    _post_pq_words: set[str] = set()
+                    if _product_q_turn_idx is not None:
+                        for _pt in transcript[_product_q_turn_idx + 1:]:
+                            if _pt.get("role") == "user":
+                                for _pw in (_pt.get("text") or "").split():
+                                    _pc = unicodedata.normalize("NFC", _strip_punct(_pw))
+                                    if _pc:
+                                        _post_pq_words.add(_pc)
+                    if (
+                        _post_pq_words
+                        and not (_post_pq_words & _CONFIRM_NFC)
+                        and not (_post_pq_words & _BUYING_SIGNALS_PP)
+                    ):
+                        logger.info(
+                            f"[POST-PROC] Interested → Short Hangup: dur={duration_secs:.0f}s ≤35s, "
+                            f"no spec questions, no buying/confirmation signal in post-PQ response: "
+                            f"{_post_pq_words}"
+                        )
+                        outcome = "Short Hangup"
+                        result["call_outcome"] = outcome
+                        result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+                        result["qna"] = []
+
+                # 5e. Could Not Confirm + explicit "नहीं" after product question + bot
+                #     never reached spec questions → Not Interested.
+                #     Symmetric to 5c (covers cases where LLM already gave CNC instead of
+                #     Interested, but the underlying reason is an explicit rejection).
+                #     Same reversal exemption as 5c — a later confirmation after the "नहीं"
+                #     means the buyer changed their mind, so don't force Not Interested.
+                if (
+                    outcome == "Could Not Confirm"
+                    and _after_pq_has_explicit_no
+                    and not _no_has_later_reversal
+                    and not _bot_asked_spec_q
+                    and not _has_handoff_turn   # handoff is a valid CNC reason, not rejection
+                ):
+                    logger.info(
+                        f"[POST-PROC] Could Not Confirm → Not Interested: explicit 'नहीं' "
+                        f"after product question, bot never reached spec questions"
+                    )
+                    outcome = "Not Interested"
+                    result["call_outcome"] = outcome
+                    result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+                    result["qna"] = []
 
                 # 6. Short-call Could Not Confirm → Short Hangup when user speech is
                 #    off-topic / garbled / contains no product signal.
@@ -1931,28 +2031,55 @@ STRICT OUTPUT RULES:
                         result["call_outcome_description"] = DISPOSITION_MAP[outcome]
                         result["qna"] = []
 
+                # 5f. Explicit rescheduling pair in transcript → Call Rescheduled.
+                #     Catches cases where LLM gives CNC/Enriched/Interested even though
+                #     the user explicitly asked to call back and the bot confirmed a time.
+                #     Only fires when outcome is NOT already Call Rescheduled.
+                if outcome not in {"Call Rescheduled", "Not Interested", "Short Hangup"}:
+                    _RESCHEDULE_USER = {
+                        unicodedata.normalize("NFC", s) for s in {
+                            "call", "callback", "कॉल", "काल", "बाद", "baad", "later",
+                            "thodi", "थोड़ी", "phir", "फिर", "वापस", "vaapas",
+                        }
+                    }
+                    _RESCHEDULE_BOT = {
+                        unicodedata.normalize("NFC", s) for s in {
+                            "बजे", "baje", "बाद", "baad", "कल", "kal", "tomorrow",
+                            "बात करते", "baat karte",
+                        }
+                    }
+                    _user_reschedule_turn_idx = None
+                    for _ri, _rt in enumerate(transcript):
+                        if _rt.get("role") == "user":
+                            _rw = {
+                                unicodedata.normalize("NFC", _strip_punct(w))
+                                for w in (_rt.get("text") or "").split() if w.strip()
+                            }
+                            if _rw & _RESCHEDULE_USER and len(_rw) >= 3:
+                                _user_reschedule_turn_idx = _ri
+                    _bot_ack_after_reschedule = (
+                        _user_reschedule_turn_idx is not None
+                        and any(
+                            (
+                                _bt.get("role") == "assistant"
+                                and {
+                                    unicodedata.normalize("NFC", _strip_punct(w))
+                                    for w in (_bt.get("text") or "").split() if w.strip()
+                                } & _RESCHEDULE_BOT
+                            )
+                            for _bt in transcript[_user_reschedule_turn_idx + 1:]
+                        )
+                    )
+                    if _bot_ack_after_reschedule:
+                        logger.info(
+                            f"[POST-PROC] {outcome} → Call Rescheduled: "
+                            f"explicit rescheduling pair detected in transcript"
+                        )
+                        outcome = "Call Rescheduled"
+                        result["call_outcome"] = outcome
+                        result["call_outcome_description"] = DISPOSITION_MAP[outcome]
+
             # ── END POST-PROCESSING ────────────────────────────────────────
-            # ── END POST-PROCESSING ────────────────────────────────────────
-            user_quotes = [
-                (t.get("text") or "").strip()
-                for t in transcript
-                if str(t.get("role", "")).lower() in user_roles and (t.get("text") or "").strip()
-            ]
-            result.setdefault("confidence", 0.75)
-            result.setdefault("evidence_quotes", user_quotes[:3])
-            result.setdefault("disqualifiers", [])
-            result.setdefault("needs_review", False)
-            result["analysis_transcript_source"] = transcript_source
-            if result.get("call_outcome") == "Interested" and not user_quotes:
-                result["call_outcome"] = "Short Hangup"
-                result["call_outcome_description"] = DISPOSITION_MAP["Short Hangup"]
-                result["call_summary"] = (
-                    "No buyer-side evidence was available after transcript verification; "
-                    "downgraded from Interested to Short Hangup."
-                )
-                result["confidence"] = 0.9
-                result["disqualifiers"] = ["no_buyer_evidence"]
-                result["needs_review"] = False
 
             return result
     except Exception as e:
@@ -1974,49 +2101,7 @@ async def generate_b2b_score(
 
     lines = "\n".join(f"{t['role'].upper()}: {t['text']}" for t in transcript)
 
-    prompt = f"""You are an expert B2B lead qualification analyst. Your task is to score a sales call transcript and return a structured JSON object. Score only what is explicitly stated — do not infer or assume missing information. If the user is talking about multiple products, consider only the main product in the conversation.
-
-SCORING RUBRIC (max 10 points)
-
-1. Requirement Intent (0–5 pts) — How certain is the prospect about purchasing?
-   → Explicit, confident intent ("we need", "we want to order")          5
-   → Positive but hedged ("probably", "thinking about it", "might")      3–4
-   → Vague or exploratory only ("just checking", "not sure yet")         1–2
-   → No intent, or explicitly not buying                                 0  → triggers final_score override (see rules)
-
-2. Requirement Clarity (0–3.5 pts) — How actionable is the stated requirement?
-   → Quantity + product type + specifications all clearly stated         3–3.5
-   → Quantity or specs stated, but not both                              1.5–2.5
-   → Neither quantity nor specs provided                                 0–1
-
-3. Engagement & Completion (0–1.5 pts) — Did the prospect actively participate?
-   → Answered all or most questions and stayed till the end              1.5
-   → Partial engagement, some questions skipped or deflected             0.5–1
-   → Dropped call or non-cooperative                                     0
-
-DERIVED FIELDS
-- urgency_flag: Set true if the prospect explicitly mentions urgency (e.g. "urgent", "ASAP", "by Friday", specific near deadline). Otherwise false.
-- extracted_quantity: The numeric quantity stated. If a range is given, return the average.
-- estimated_unit_price: Infer a reasonable B2B market price range per unit strictly in the Indian landscape, based on the product type and any constraints mentioned on the call. Return as an object with low and high values in INR.
-- estimated_deal_value: STRICTLY computed as extracted_quantity * ((estimated_unit_price.low + estimated_unit_price.high) / 2). Without fail, use the average of the unit price range, DO NOT use a not a low–high range of the value at any instance.
-- lead_category: Based on final_score — "High" (7–10), "Medium" (4–6.9), "Low" (0–3.9).
-
-HARD RULES
-1. If requirement_intent_score = 0, set final_score = 0 immediately and do not compute other scores.
-2. final_score = requirement_intent_score + clarity_score + engagement_score. No other formula.
-3. Score buying signals only — ignore tone, sentiment, and politeness.
-4. The reason field must follow this structure: [what signals intent] · [what clarity gaps exist, if any] · [engagement observation].
-5. A relevant short or single-word answer ("yes", "correct", "confirmed") given in direct response to a question counts as fully valid for that dimension. Do not penalize brevity — score the signal, not the elaboration.
-
-OUTPUT — strict JSON, no additional keys or commentary:
-{{
-  "deal_value": "<estimated deal value as a single number string, e.g. '₹75,000', or '' if cannot be determined>",
-  "lead_intent_score": "<final_score as a string, e.g. '7.5'>",
-  "urgency_flag": "<'yes' if urgency detected, 'no' otherwise>"
-}}
-
-CONVERSATION TO ANALYZE:
-{lines}"""
+    prompt = _render_analysis_prompt(B2B_SCORE_KEY, {"lines": lines})
 
     try:
         url = (
@@ -2025,7 +2110,7 @@ CONVERSATION TO ANALYZE:
         )
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0},
         }
         async with http_session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
             data = await resp.json()
@@ -2036,6 +2121,8 @@ CONVERSATION TO ANALYZE:
             result.setdefault("deal_value", "")
             result.setdefault("lead_intent_score", "")
             result.setdefault("urgency_flag", "no")
+            if result.get("deal_value"):
+                result["deal_value"] = result["deal_value"].replace("₹", "").replace(",", "").strip()
             return result
     except Exception as e:
         logger.error(f"[B2B SCORE] LLM scoring failed: {type(e).__name__}: {e}")

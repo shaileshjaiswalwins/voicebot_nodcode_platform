@@ -1,0 +1,13 @@
+stages:
+  - validate
+
+branch_name_check:
+  stage: validate
+  script:
+    - |
+      if [[ ! "$CI_COMMIT_REF_NAME" =~ ^(main|DEV|JIRA-AI-[0-9]+)$ ]]; then
+        echo "❌ Invalid branch name: $CI_COMMIT_REF_NAME"
+        echo "Allowed: main, DEV, JIRA-AI-<number>"
+        exit 1
+      fi
+      echo "✅ Valid branch name"

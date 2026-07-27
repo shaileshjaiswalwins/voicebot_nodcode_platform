@@ -13,6 +13,12 @@ export default defineConfig(({ mode }) => {
         '/api': apiProxyTarget,
         '/health': apiProxyTarget
       }
-    }
+    },
+    test: {
+      environment: 'jsdom',
+      globals: true,
+      setupFiles: ['./src/test/setup.ts'],
+      css: false,
+    },
   };
 });

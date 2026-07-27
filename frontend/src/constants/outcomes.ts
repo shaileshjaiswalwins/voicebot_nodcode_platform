@@ -1,0 +1,43 @@
+import type { OutcomeRule } from '../api';
+
+export const OUTCOME_CATEGORIES: Record<string, { label: string; group: 'completed' | 'retry' | 'stop' | 'dnc' }> = {
+  'Approved': { label: 'Approved', group: 'completed' },
+  'Enriched': { label: 'Enriched', group: 'completed' },
+  'Interested': { label: 'Interested', group: 'completed' },
+  'Short Hangup': { label: 'Short Hangup', group: 'retry' },
+  'Voicemail': { label: 'Voicemail', group: 'retry' },
+  'Could Not Confirm': { label: 'Could Not Confirm', group: 'retry' },
+  'Call Rescheduled': { label: 'Call Rescheduled', group: 'retry' },
+  'Technical Issue - Call Connected': { label: 'Technical Issue', group: 'retry' },
+  'Language Issue': { label: 'Language Issue', group: 'retry' },
+  'Other Cases': { label: 'Other Cases', group: 'retry' },
+  'Not Interested': { label: 'Not Interested', group: 'stop' },
+  'Wrong Number': { label: 'Wrong Number', group: 'stop' },
+  'Already Spoken': { label: 'Already Spoken', group: 'stop' },
+  'Will do it Myself': { label: 'Will do it Myself', group: 'stop' },
+  'Alternate Number': { label: 'Alternate Number', group: 'stop' },
+  'Seller Intent': { label: 'Seller Intent', group: 'stop' },
+  'Abusive Lead': { label: 'Abusive Lead', group: 'dnc' },
+  "DNC Client : Don't Call Further": { label: "DNC Client", group: 'dnc' },
+};
+
+export const DEFAULT_OUTCOME_RULES: OutcomeRule[] = [
+  { outcome: 'Short Hangup', action: 'retry', max_attempts: 3, retry_after_min: 30 },
+  { outcome: 'Voicemail', action: 'retry', max_attempts: 2, retry_after_min: 120 },
+  { outcome: 'Wrong Number', action: 'stop' },
+  { outcome: 'Approved', action: 'completed' },
+  { outcome: 'Enriched', action: 'completed' },
+  { outcome: 'Interested', action: 'completed' },
+  { outcome: 'Not Interested', action: 'stop' },
+  { outcome: 'Could Not Confirm', action: 'retry', max_attempts: 2, retry_after_min: 60 },
+  { outcome: 'Alternate Number', action: 'stop' },
+  { outcome: 'Already Spoken', action: 'stop' },
+  { outcome: 'Will do it Myself', action: 'stop' },
+  { outcome: 'Call Rescheduled', action: 'retry', max_attempts: 1, retry_after_min: 0 },
+  { outcome: 'Seller Intent', action: 'stop' },
+  { outcome: 'Abusive Lead', action: 'dnc' },
+  { outcome: "DNC Client : Don't Call Further", action: 'dnc' },
+  { outcome: 'Other Cases', action: 'retry', max_attempts: 1, retry_after_min: 60 },
+  { outcome: 'Technical Issue - Call Connected', action: 'retry', max_attempts: 2, retry_after_min: 15 },
+  { outcome: 'Language Issue', action: 'retry', max_attempts: 1, retry_after_min: 60 },
+];

@@ -3,20 +3,23 @@
 import asyncio
 import os
 import signal
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 from loguru import logger
-from pymongo import ASCENDING
-
-from voicebot_platform.mongo import get_client
-from voicebot_platform.observability import recorder as _observability
-from voicebot_platform.call_events import record_call_event
+from pymongo import ASCENDING, MongoClient, ReturnDocument
 
 from .analysis import fallback_analysis, generate_b2b_score, generate_call_analysis
 from .callback import CALLBACK_API_URL, build_callback_payload, send_callback
-from .config import BATCH_LIMIT, LOG_DIR, MONGO_COLLECTION, MONGO_DB, POLL_INTERVAL_SEC
-from .recording import quality_flags, verify_transcript_from_recording
+from .config import BATCH_LIMIT, LOG_DIR, MONGO_COLLECTION, MONGO_DB, MONGO_URI, POLL_INTERVAL_SEC
+
+# A claimed-but-never-finished doc (worker crash mid-process) is reclaimable after this
+# long, so a dead worker doesn't permanently strand it in "processing" limbo.
+LEASE_TIMEOUT = timedelta(minutes=10)
+
+# After this many failed callback attempts, stop retrying (and stop re-running paid
+# Gemini analysis calls on every retry) and mark the doc for manual triage instead.
+DEAD_LETTER_THRESHOLD = 10
 
 os.makedirs(LOG_DIR, exist_ok=True)
 logger.add(
@@ -41,21 +44,12 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
     lead_id = doc.get("lead_id")
     doc_id = doc["_id"]
     loop = asyncio.get_running_loop()
-    event_context = {
-        "call_id": doc.get("call_id", ""),
-        "room_name": doc.get("room_name", ""),
-        "assistant_id": doc.get("assistant_id", ""),
-        "bot_id": doc.get("bot_id", ""),
-        "bot_version_id": doc.get("bot_version_id", ""),
-        "campaign_id": doc.get("campaign_id", ""),
-        "lead_id": lead_id,
-    }
 
     if not lead_id:
         logger.warning(f"[WORKER] Skipping doc {doc_id} — no lead_id")
         await loop.run_in_executor(None, lambda: collection.update_one(
             {"_id": doc_id},
-            {"$set": {"tagged": True, "tagged_at": datetime.utcnow(), "skipped_reason": "no_lead_id"}},
+            {"$set": {"tagged": True, "tagged_at": datetime.now(timezone.utc), "skipped_reason": "no_lead_id"}},
         ))
         return
 
@@ -63,160 +57,146 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
         logger.warning(f"[WORKER] Skipping doc {doc_id} — fallback lead_id={lead_id!r}")
         await loop.run_in_executor(None, lambda: collection.update_one(
             {"_id": doc_id},
-            {"$set": {"tagged": True, "tagged_at": datetime.utcnow(), "skipped_reason": "fallback_lead_id"}},
+            {"$set": {"tagged": True, "tagged_at": datetime.now(timezone.utc), "skipped_reason": "fallback_lead_id"}},
         ))
         return
 
     schema = (doc.get("lead_record") or {}).get("qualification_schema", {}) or {}
     status = doc.get("status", "completed")
 
-    doc = await verify_transcript_from_recording(doc, collection, http_session, event_context)
-    transcript = doc.get("verified_transcript") or doc.get("transcript") or []
-    analysis_transcript_source = doc.get("analysis_transcript_source") or (
-        "recording_verified" if doc.get("verified_transcript") else "gemini_live"
-    )
-    muted_transcript = doc.get("muted_transcript") or []
-    gemini_connect_failed = bool(doc.get("gemini_connect_failed"))
-    duration_secs = doc.get("call_duration_sec")
-    greeting_done = bool(doc.get("greeting_done", True))  # default True for older docs
-    user_speech_ms = int(doc.get("user_speech_ms") or 0)
-    wrong_opener_detected = bool(doc.get("wrong_opener_detected", False))
+    _buyer = ((doc.get("lead_record") or {}).get("buyer_details") or {})
     try:
-        record_call_event(
-            "analysis_started",
-            "info",
-            "Post-call analysis started",
-            event_context,
-            {
-                "doc_id": str(doc_id),
-                "transcript_count": len(transcript),
-                "analysis_transcript_source": analysis_transcript_source,
-            },
-        )
-        analysis, b2b_score = await asyncio.gather(
-            generate_call_analysis(
-                transcript,
-                status,
-                schema,
-                http_session,
-                muted_transcript=muted_transcript,
-                gemini_connect_failed=gemini_connect_failed,
-                duration_secs=duration_secs,
-                greeting_done=greeting_done,
-                user_speech_ms=user_speech_ms,
-                wrong_opener_detected=wrong_opener_detected,
-                transcript_source=analysis_transcript_source,
-            ),
-            generate_b2b_score(transcript, http_session),
-        )
-        analysis["analysis_transcript_source"] = analysis_transcript_source
-        flags = quality_flags(doc, transcript)
-        if flags:
-            analysis["quality_flags"] = flags
-        record_call_event(
-            "analysis_succeeded",
-            "success",
-            "Post-call analysis succeeded",
-            event_context,
-            {
-                "doc_id": str(doc_id),
-                "outcome": analysis.get("call_outcome", ""),
-                "confidence": analysis.get("confidence", ""),
-                "quality_flags": analysis.get("quality_flags", []),
-                "analysis_transcript_source": analysis_transcript_source,
-            },
-        )
-    except Exception as e:
-        logger.warning(f"[WORKER] Analysis failed for doc {doc_id}: {e} — using fallback")
-        record_call_event(
-            "analysis_failed",
-            "error",
-            "Post-call analysis failed; fallback analysis used",
-            event_context,
-            {"doc_id": str(doc_id), "error_type": type(e).__name__, "error": str(e)},
-        )
-        analysis = fallback_analysis(status)
-        b2b_score = {"deal_value": "", "lead_intent_score": "", "urgency_flag": "no"}
+        is_business_flag = int(_buyer.get("is_business_flag")) if _buyer.get("is_business_flag") is not None else None
+    except (ValueError, TypeError):
+        is_business_flag = None
 
-    saved_analysis = {
-        "call_outcome": analysis.get("call_outcome", ""),
-        "call_outcome_description": analysis.get("call_outcome_description", ""),
-        "call_summary": analysis.get("call_summary", ""),
-        "is_business": analysis.get("is_business", ""),
-        "business_name": analysis.get("business_name", ""),
-        "business_city": analysis.get("business_city", ""),
-        "qna": analysis.get("qna") or [],
-        "product_change": analysis.get("product_change") or {},
-        "rescheduled_to": analysis.get("rescheduled_to", "") or "",
-        "deal_value": b2b_score.get("deal_value", ""),
-        "lead_intent_score": b2b_score.get("lead_intent_score", ""),
-        "urgency_flag": b2b_score.get("urgency_flag", "no"),
-    }
-    # Persist analysis immediately — regardless of callback outcome so it's never lost on retry.
-    await loop.run_in_executor(None, lambda: collection.update_one(
-        {"_id": doc_id},
-        {"$set": {"analysis": saved_analysis}},
-    ))
+    existing_analysis = doc.get("analysis")
+    if existing_analysis:
+        # A prior attempt already ran (and paid for) the LLM analysis for this doc — a
+        # retry only needs to resend the callback, not recompute it.
+        logger.info(f"[WORKER] Reusing previously persisted analysis for doc {doc_id} | lead_id={lead_id!r}")
+        analysis = {
+            k: existing_analysis.get(k, "")
+            for k in (
+                "call_outcome", "call_outcome_description", "call_summary", "is_business",
+                "business_intent", "b2b_user", "business_name", "business_city",
+                "rescheduled_to",
+            )
+        }
+        analysis["qna"] = existing_analysis.get("qna") or []
+        analysis["product_change"] = existing_analysis.get("product_change") or {}
+        b2b_score = {
+            "deal_value": existing_analysis.get("deal_value", ""),
+            "lead_intent_score": existing_analysis.get("lead_intent_score", ""),
+            "urgency_flag": existing_analysis.get("urgency_flag", "no"),
+        }
+    else:
+        transcript = doc.get("transcript") or []
+        muted_transcript = doc.get("muted_transcript") or []
+        gemini_connect_failed = bool(doc.get("gemini_connect_failed"))
+        duration_secs = doc.get("call_duration_sec")
+        greeting_done = bool(doc.get("greeting_done", True))  # default True for older docs
+        user_speech_ms = int(doc.get("user_speech_ms") or 0)
+        wrong_opener_detected = bool(doc.get("wrong_opener_detected", False))
+        try:
+            analysis, b2b_score = await asyncio.gather(
+                generate_call_analysis(transcript, status, schema, http_session, muted_transcript=muted_transcript, gemini_connect_failed=gemini_connect_failed, duration_secs=duration_secs, greeting_done=greeting_done, user_speech_ms=user_speech_ms, wrong_opener_detected=wrong_opener_detected, is_business_flag=is_business_flag),
+                generate_b2b_score(transcript, http_session),
+            )
+        except Exception as e:
+            logger.warning(f"[WORKER] Analysis failed for doc {doc_id}: {e} — using fallback")
+            analysis = fallback_analysis(status)
+            b2b_score = {"deal_value": "", "lead_intent_score": "", "urgency_flag": "no"}
+
+        saved_analysis = {
+            "call_outcome": analysis.get("call_outcome", ""),
+            "call_outcome_description": analysis.get("call_outcome_description", ""),
+            "call_summary": analysis.get("call_summary", ""),
+            "is_business": analysis.get("is_business", ""),
+            "business_intent": analysis.get("business_intent", ""),
+            "b2b_user": analysis.get("b2b_user", ""),
+            "business_name": analysis.get("business_name", ""),
+            "business_city": analysis.get("business_city", ""),
+            "qna": analysis.get("qna") or [],
+            "product_change": analysis.get("product_change") or {},
+            "rescheduled_to": analysis.get("rescheduled_to", "") or "",
+            "deal_value": b2b_score.get("deal_value", ""),
+            "lead_intent_score": b2b_score.get("lead_intent_score", ""),
+            "urgency_flag": b2b_score.get("urgency_flag", "no"),
+        }
+        # Persist analysis immediately — regardless of callback outcome so it's never lost on retry.
+        await loop.run_in_executor(None, lambda: collection.update_one(
+            {"_id": doc_id},
+            {"$set": {"analysis": saved_analysis}},
+        ))
 
     payload = build_callback_payload(doc, analysis, b2b_score)
-    ok = await send_callback(payload, http_session, CALLBACK_API_URL, event_context=event_context)
+    ok = await send_callback(payload, http_session, CALLBACK_API_URL)
 
     if ok:
         await loop.run_in_executor(None, lambda: collection.update_one(
             {"_id": doc_id},
-            {"$set": {
-                "tagged": True,
-                "tagged_at": datetime.utcnow(),
-                "analysis_result": analysis,
-                "b2b_score": b2b_score,
-                "transcript_quality_flags": analysis.get("quality_flags", quality_flags(doc, transcript)),
-                "analysis_transcript_source": analysis_transcript_source,
-            }},
+            {"$set": {"tagged": True, "tagged_at": datetime.now(timezone.utc)}, "$unset": {"processing": "", "claimed_at": ""}},
         ))
         logger.info(f"[WORKER] Tagged doc {doc_id} | lead_id={lead_id!r}")
-        record_call_event(
-            "transcript_tagged",
-            "success",
-            "Transcript tagged after callback delivery",
-            event_context,
-            {"doc_id": str(doc_id)},
-        )
-        _observability.event(
-            "callback_sent",
-            {
-                "doc_id": str(doc_id),
-                "lead_id": lead_id,
-                "call_id": doc.get("call_id", ""),
-                "bot_id": doc.get("bot_id", ""),
-                "bot_version_id": doc.get("bot_version_id", ""),
-                "campaign_id": doc.get("campaign_id", ""),
-            },
-        )
     else:
-        logger.warning(f"[WORKER] Callback failed for doc {doc_id} | lead_id={lead_id!r} — will retry next tick")
-        _observability.event(
-            "callback_failed",
-            {
-                "doc_id": str(doc_id),
-                "lead_id": lead_id,
-                "call_id": doc.get("call_id", ""),
-                "bot_id": doc.get("bot_id", ""),
-                "bot_version_id": doc.get("bot_version_id", ""),
-                "campaign_id": doc.get("campaign_id", ""),
-            },
-        )
+        attempts = int(doc.get("callback_attempts", 0)) + 1
+        update: dict = {
+            "callback_attempts": attempts,
+            "last_callback_error_at": datetime.now(timezone.utc),
+        }
+        unset: dict = {"processing": "", "claimed_at": ""}
+        if attempts >= DEAD_LETTER_THRESHOLD:
+            update["dead_letter"] = True
+            logger.error(
+                f"[WORKER] Doc {doc_id} | lead_id={lead_id!r} exceeded {DEAD_LETTER_THRESHOLD} "
+                "callback attempts — marking dead_letter, no further retries"
+            )
+        else:
+            logger.warning(
+                f"[WORKER] Callback failed for doc {doc_id} | lead_id={lead_id!r} "
+                f"(attempt {attempts}/{DEAD_LETTER_THRESHOLD}) — will retry next tick"
+            )
+        await loop.run_in_executor(None, lambda: collection.update_one(
+            {"_id": doc_id},
+            {"$set": update, "$unset": unset},
+        ))
+
+
+def _claim_one(collection) -> dict | None:
+    """Atomically claim a single untagged, non-dead-lettered doc that either isn't
+    currently being processed by another worker, or whose claim has gone stale (worker
+    crashed mid-process) — so two worker instances running concurrently never process the
+    same doc, and a crashed worker's claim doesn't strand a doc forever."""
+    now = datetime.now(timezone.utc)
+    stale_cutoff = now - LEASE_TIMEOUT
+    return collection.find_one_and_update(
+        {
+            "tagged": False,
+            "dead_letter": {"$ne": True},
+            "$or": [
+                {"processing": {"$ne": True}},
+                {"claimed_at": {"$lt": stale_cutoff}},
+            ],
+        },
+        {"$set": {"processing": True, "claimed_at": now}},
+        return_document=ReturnDocument.AFTER,
+    )
 
 
 async def _tick(collection, http_session: aiohttp.ClientSession) -> None:
     loop = asyncio.get_running_loop()
-    docs = await loop.run_in_executor(None, lambda: list(collection.find({"tagged": False}).limit(BATCH_LIMIT)))
-    if not docs:
-        return
-    logger.info(f"[WORKER] Processing {len(docs)} untagged doc(s)")
-    for doc in docs:
+    processed = 0
+    for _ in range(BATCH_LIMIT):
         if _stop.is_set():
             break
+        doc = await loop.run_in_executor(None, lambda: _claim_one(collection))
+        if doc is None:
+            break
+        processed += 1
         await _process_doc(doc, collection, http_session)
+    if processed:
+        logger.info(f"[WORKER] Processed {processed} untagged doc(s) this tick")
 
 
 async def main() -> None:
@@ -224,12 +204,9 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal)
 
-    logger.info(
-        f"[WORKER] Starting | mongo=<configured> | db={MONGO_DB} | "
-        f"collection={MONGO_COLLECTION} | poll={POLL_INTERVAL_SEC}s | batch={BATCH_LIMIT}"
-    )
+    logger.info(f"[WORKER] Starting | mongo={MONGO_URI} | db={MONGO_DB} | collection={MONGO_COLLECTION} | poll={POLL_INTERVAL_SEC}s | batch={BATCH_LIMIT}")
 
-    client = get_client()
+    client = MongoClient(MONGO_URI)
     collection = client[MONGO_DB][MONGO_COLLECTION]
 
     await loop.run_in_executor(None, lambda: collection.create_index(
@@ -248,8 +225,7 @@ async def main() -> None:
             except asyncio.TimeoutError:
                 pass
 
-    # Shared client is owned by voicebot_platform.mongo — leave it open for any
-    # in-process consumers; PyMongo cleans up on interpreter shutdown.
+    client.close()
     logger.info("[WORKER] Stopped cleanly")
 
 

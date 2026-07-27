@@ -1,4 +1,17 @@
-# Environment
+.claude-flow/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Env / secrets
 .env
 .env.*
 !.env.example
@@ -27,7 +40,8 @@ frontend/dist/
 frontend/.env.local
 frontend/.env.*.local
 
-# Logs
+# Logs / runtime
+logs/
 *.log
 /var/log/voicebot/
 
@@ -41,6 +55,20 @@ frontend/.env.*.local
 # Docs (local knowledge transfer, not source of truth)
 docs/
 
-# Claude / tooling
+# Agent tooling scratch (worktrees, local overrides, browser session logs)
+.claude/worktrees/
+.claude/settings.local.json
+.claude/proven-config.json
+.claude/.proven-config-version
 .claude/
 .gstack/
+DESIGN-IS-*/
+
+# Stray __pycache__-only scratch dir (no source files), not part of the project
+voicebot_platform/
+
+# Shell scripts
+start_param.sh
+
+# Backend generated files
+backend/requirements.txt
