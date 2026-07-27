@@ -1262,6 +1262,8 @@ dependencies = [
     { name = "langfuse" },
     { name = "livekit-agents", extra = ["google", "silero"] },
     { name = "livekit-api" },
+    { name = "livekit-plugins-deepgram" },
+    { name = "livekit-plugins-elevenlabs" },
     { name = "livekit-plugins-sarvam" },
     { name = "loguru" },
     { name = "pyjwt" },
@@ -1280,6 +1282,8 @@ requires-dist = [
     { name = "langfuse", specifier = ">=2.0" },
     { name = "livekit-agents", extras = ["google", "silero"], specifier = ">=1.0" },
     { name = "livekit-api", specifier = ">=0.7.0" },
+    { name = "livekit-plugins-deepgram", specifier = ">=1.0" },
+    { name = "livekit-plugins-elevenlabs", specifier = ">=1.0" },
     { name = "livekit-plugins-sarvam", specifier = ">=1.3.0" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pyjwt", specifier = ">=2.8" },
@@ -1288,6 +1292,32 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "requests", specifier = ">=2.34.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+]
+
+[[package]]
+name = "livekit-plugins-deepgram"
+version = "1.5.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c0/ef/c8b5aaffd05981c66b4a6fed901df832dcc4fdcb7a77d8eb65358c850f90/livekit_plugins_deepgram-1.5.9.tar.gz", hash = "sha256:7dd131124b259fca98e628e4bc918ffad1f0e1db871b0de3a0418e0d264368f9", size = 18281, upload-time = "2026-05-13T19:54:09.004Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/49/c2/28c2707d3255acd95a9208c6520ee2a4592c4ec61edba0cc92091d969ef3/livekit_plugins_deepgram-1.5.9-py3-none-any.whl", hash = "sha256:6172984c66d7854b2398457ffe1ea758ce63aab5c4e691c4e2d1a9191ebdc016", size = 22999, upload-time = "2026-05-13T19:54:07.505Z" },
+]
+
+[[package]]
+name = "livekit-plugins-elevenlabs"
+version = "1.5.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/07/71/ab66dda137abeb37e6e12c72daf5ce72e7e1db3635bd62d780784ef7c6c0/livekit_plugins_elevenlabs-1.5.9.tar.gz", hash = "sha256:bbd3c380febdc47d44184baef96add37962653beeecd73203543124fd7ffda9a", size = 17755, upload-time = "2026-05-13T19:54:01.201Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fc/29/75183f538186c2e8cd6f4551652f9c643fcd978e05dc2128d75ce2165a76/livekit_plugins_elevenlabs-1.5.9-py3-none-any.whl", hash = "sha256:3ae4e0b938298c4976e6bf47253fd1f0e6ea327194eaef01926076a6a68fbfc1", size = 20371, upload-time = "2026-05-13T19:54:00Z" },
 ]
 
 [[package]]
