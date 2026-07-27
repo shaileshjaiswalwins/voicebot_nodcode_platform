@@ -9,7 +9,15 @@ export function ProgressBar({ value, max, label }: {
   return (
     <div className="progress-bar-wrap">
       {label && <div className="progress-bar-label">{label}</div>}
-      <div className="progress-bar-track" role="progressbar" aria-valuenow={value} aria-valuemin={0} aria-valuemax={max}>
+      <div
+        className="progress-bar-track"
+        role="progressbar"
+        aria-label={label}
+        aria-valuenow={value}
+        aria-valuemin={0}
+        aria-valuemax={max}
+        aria-valuetext={`${value} of ${max} (${Math.round(pct)}%)`}
+      >
         <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
       </div>
     </div>
