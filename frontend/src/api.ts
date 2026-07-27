@@ -35,6 +35,8 @@ export class ApiError extends Error {
   }
 }
 
+const READ_TIMEOUT_MS = 8000;
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
@@ -43,7 +45,19 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const response = await fetch(apiUrl(path), { ...options, headers });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), READ_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(apiUrl(path), { ...options, headers, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError(0, `Request timed out after ${READ_TIMEOUT_MS}ms: ${path}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
   if (response.status === 401) {
     clearToken();
   }
