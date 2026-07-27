@@ -2402,7 +2402,12 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm_fnc,
-            agent_name=os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial-live-2"),
+            # Production pool, kept distinct from bot_dev_param's test-call pool
+            # (voice-bot-justdial-live-1, which the dashboard dispatches to). Reads its own
+            # env var, NOT the shared LIVEKIT_AGENT_NAME — a deploy that points
+            # LIVEKIT_AGENT_NAME at live-1 to route test calls must not also drag this
+            # worker into that pool. Set BOT_DEV_AGENT_NAME to override.
+            agent_name=os.getenv("BOT_DEV_AGENT_NAME", "voice-bot-justdial-live-2"),
             port=int(_BOT_PORT),
             num_idle_processes=3,
         )
