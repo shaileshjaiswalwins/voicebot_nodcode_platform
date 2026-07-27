@@ -32,8 +32,21 @@ export function CopyableId({ value, label }: { value?: string; label?: string })
       .then(flashCopied)
       .catch(() => { /* permission denied or insecure context — fail silently */ });
   }
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    handleCopy(e as unknown as React.MouseEvent);
+  }
   return (
-    <span className="copyable-id" title={`Click to copy: ${value}`} onClick={handleCopy}>
+    <span
+      className="copyable-id"
+      role="button"
+      tabIndex={0}
+      aria-label={copied ? `Copied ${safeValue}` : `Copy ${safeValue}`}
+      title={copied ? 'Copied' : `Click to copy: ${value}`}
+      onClick={handleCopy}
+      onKeyDown={handleKeyDown}
+    >
       <span className="copyable-id-text">{display}</span>
       <span className="copyable-id-icon">{copied ? <Check size={11} /> : <Copy size={11} />}</span>
     </span>

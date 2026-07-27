@@ -437,7 +437,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _mapped_config = resolve_agent_config(room_name=room_name)
     except Exception as _agent_exc:
         _log.warning(f"[AGENT] early lookup failed: {_agent_exc}")
-    _persona_gender = ((_mapped_config or {}).get("persona_gender") or "female").lower()
+    # Fall back to the metadata-loaded config (dashboard test calls, which have no number
+    # mapping) so persona/greeting reflect the chosen bot, not the hardcoded default.
+    _persona_gender = ((_mapped_config or _bot_config or {}).get("persona_gender") or "female").lower()
     _log.info(f"[AGENT] persona_gender={_persona_gender!r}")
 
     # ── 3c. Custom functions (from the bot's saved config) ──
@@ -2219,19 +2221,22 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             or ""
         )
 
-    # Reuse the config resolved early at step 4 (it drove the prompt + voice) so the
-    # greeting matches. _mapped_config is None when no agent is mapped → built-in persona.
+    # Greeting comes from the same config the prompt/functions used: the number→bot mapping
+    # for live calls, or the metadata-loaded config for dashboard test calls. Falls back to
+    # the built-in persona only when neither yields a greeting.
+    _greet_cfg = _mapped_config or _bot_config
     _greeting_text = ""
-    if _mapped_config:
-        _greeting_text = render_greeting(_mapped_config, product=_product_for(record))
+    if _greet_cfg:
+        _greeting_text = render_greeting(_greet_cfg, product=_product_for(record))
         _log.info(
-            f"[AGENT] mapped agent persona={_mapped_config.get('agent_name')!r} "
-            f"org={_mapped_config.get('organization_name')!r} gender={_persona_gender!r}"
+            f"[AGENT] persona={_greet_cfg.get('agent_name')!r} "
+            f"org={_greet_cfg.get('organization_name')!r} gender={_persona_gender!r} "
+            f"source={'number-map' if _mapped_config else 'config'}"
         )
 
     if not _greeting_text:
         _greeting_text = _build_greeting(record)
-        _log.info("[AGENT] no mapped agent for this number — built-in persona")
+        _log.info("[AGENT] no config greeting — built-in persona")
 
     # Fill {{variables}} from pre_call custom functions into the opening line (render_greeting
     # only fills the single-brace {agent_name}/{organization_name}/{product} tokens; the
