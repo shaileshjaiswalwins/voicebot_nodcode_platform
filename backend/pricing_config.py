@@ -58,12 +58,30 @@ def _default_config() -> PricingConfig:
     )
 
 
+def _backfill_new_catalog_entries(config: PricingConfig) -> PricingConfig:
+    """A saved doc is returned as-is, so a rate key added to pricing.py *after* an admin last
+    saved (e.g. today's IndicF5 "indic_f5") would silently never appear until someone manually
+    resets the whole config — appends any default entries missing from the saved lists,
+    without touching costs an admin already edited for existing keys."""
+    def _merge(saved: list[PricingModelEntry], defaults: list[PricingModelEntry]) -> list[PricingModelEntry]:
+        saved_keys = {e.key for e in saved}
+        return saved + [d for d in defaults if d.key not in saved_keys]
+
+    defaults = _default_config()
+    return PricingConfig(
+        stt=_merge(config.stt, defaults.stt),
+        llm=_merge(config.llm, defaults.llm),
+        tts=_merge(config.tts, defaults.tts),
+        telephony=_merge(config.telephony, defaults.telephony),
+    )
+
+
 def get_config() -> PricingConfig:
     doc = pricing_config.find_one({"_id": _DOC_ID})
     if not doc:
         return _default_config()
     doc.pop("_id", None)
-    return PricingConfig(**doc)
+    return _backfill_new_catalog_entries(PricingConfig(**doc))
 
 
 def update_config(payload: PricingConfig) -> PricingConfig:

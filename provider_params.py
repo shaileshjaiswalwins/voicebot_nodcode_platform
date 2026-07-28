@@ -147,6 +147,17 @@ GEMINI_LLM_SPEC: dict[str, ParamSpec] = {
     "thinking_config": ParamSpec("raw"),
 }
 
+# ── IndicF5 (our own in-house TTS, livekit_indic5_tts.py) ───────────────────
+INDIC5_TTS_SPEC: dict[str, ParamSpec] = {
+    "speaker": ParamSpec("str", "simran", legacy_key="tts_voice"),
+    "sample_rate": ParamSpec("int", 24000),
+    "nfe_step": ParamSpec("int", 16),
+    "style": ParamSpec("str", "auto"),
+    "transliterate": ParamSpec("bool", True),
+    "speed": ParamSpec("float", 1.0),
+    "fallback_speaker": ParamSpec("str", "simran"),
+}
+
 
 def build_sarvam_stt_kwargs(config: dict) -> dict[str, Any]:
     return _assemble(config, "stt_options", SARVAM_STT_SPEC)
@@ -158,3 +169,7 @@ def build_sarvam_tts_kwargs(config: dict) -> dict[str, Any]:
 
 def build_gemini_llm_kwargs(config: dict) -> dict[str, Any]:
     return _assemble(config, "llm_options", GEMINI_LLM_SPEC)
+
+
+def build_indic5_tts_kwargs(config: dict) -> dict[str, Any]:
+    return _assemble(config, "tts_options", INDIC5_TTS_SPEC)

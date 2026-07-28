@@ -73,6 +73,8 @@ from livekit.plugins import google, sarvam
 from bot import (
     # Config / data helpers
     fetch_bot_config,
+    record_fallback_event,
+    FALLBACK_REASON_NO_IDS,
     normalize_mobile,
     fetch_lead,
     _build_sample_from_search,
@@ -282,8 +284,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _assistant_id = _room_meta_raw.get("assistant_id", "")
     _bot_id_meta = _room_meta_raw.get("bot_id", "")
     _test_version_meta = _room_meta_raw.get("test_bot_version_id", "")
-    _bc = await fetch_bot_config(_bot_id_meta, _test_version_meta) if (_bot_id_meta and _test_version_meta) else None
+    if _bot_id_meta and _test_version_meta:
+        _bc, _fallback_reason = await fetch_bot_config(_bot_id_meta, _test_version_meta)
+    else:
+        _bc, _fallback_reason = None, FALLBACK_REASON_NO_IDS
     _bot_config: dict = _bc or _HARDCODED_BOT_CONFIG
+    if _bc is None:
+        record_fallback_event(
+            room_name=room_name, bot_id=_bot_id_meta, test_bot_version_id=_test_version_meta,
+            reason=_fallback_reason, worker=os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial-live-2"),
+        )
+        _log.warning(f"[CONFIG] Falling back to hardcoded assistant — reason={_fallback_reason!r}")
 
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
 

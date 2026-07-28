@@ -671,22 +671,38 @@ _HARDCODED_BOT_CONFIG: dict = {
 }
 
 
-async def fetch_bot_config(bot_id: str, test_bot_version_id: str) -> dict | None:
+# Reason codes for why fetch_bot_config fell back to _HARDCODED_BOT_CONFIG — used by
+# record_fallback_event() below so "why did this call get the hardcoded Simran bot" is a
+# queryable Mongo record instead of something only visible by grepping a worker's local log
+# file after the fact (which was exactly the problem the night this was added: three
+# different, unrelated causes — a stale duplicate worker process, a worker assignment
+# timeout, and this function's own None-returns — all produced the identical symptom, and
+# telling them apart required reading raw logs across two machines).
+FALLBACK_REASON_NO_IDS = "no_ids_in_room_metadata"
+FALLBACK_REASON_MALFORMED_IDS = "malformed_ids"
+FALLBACK_REASON_DB_UNREACHABLE = "platform_db_unreachable"
+FALLBACK_REASON_VERSION_NOT_FOUND = "version_not_found"
+FALLBACK_REASON_CONFIG_EMPTY = "version_doc_has_no_config"
+
+
+async def fetch_bot_config(bot_id: str, test_bot_version_id: str) -> tuple[dict | None, str]:
     """Resolve a specific bot version's config from the dashboard's config store, for
     dashboard "Test Call" runs only (see backend/routers/testcall.py, which is the only
     dispatch path that puts bot_id/test_bot_version_id into room metadata today).
 
-    Returns None (caller falls back to _HARDCODED_BOT_CONFIG) if either id is missing,
-    malformed, or no matching version is found — this keeps real production calls, whose
-    room metadata never carries these keys, completely unaffected."""
+    Returns (None, reason) — caller falls back to _HARDCODED_BOT_CONFIG — if either id is
+    missing, malformed, the platform DB is unreachable, or no matching version is found;
+    this keeps real production calls, whose room metadata never carries these keys,
+    completely unaffected. reason is one of the FALLBACK_REASON_* constants above, or ""
+    on success, so callers can record *why* without re-deriving it from log text."""
     if not bot_id or not test_bot_version_id:
-        return None
+        return None, FALLBACK_REASON_NO_IDS
     try:
         version_oid = ObjectId(test_bot_version_id)
         bot_oid = ObjectId(bot_id)
     except (InvalidId, TypeError):
         logger.warning(f"[CONFIG] Malformed bot_id/test_bot_version_id in room metadata: {bot_id!r}/{test_bot_version_id!r}")
-        return None
+        return None, FALLBACK_REASON_MALFORMED_IDS
 
     loop = asyncio.get_running_loop()
     try:
@@ -698,12 +714,35 @@ async def fetch_bot_config(bot_id: str, test_bot_version_id: str) -> dict | None
         )
     except Exception as exc:
         logger.warning(f"[CONFIG] Could not reach platform DB for bot_id={bot_id!r} version={test_bot_version_id!r}: {exc}")
-        return None
+        return None, FALLBACK_REASON_DB_UNREACHABLE
 
     if not version_doc:
         logger.warning(f"[CONFIG] No bot_version found for bot_id={bot_id!r} version={test_bot_version_id!r}")
-        return None
-    return version_doc.get("config") or None
+        return None, FALLBACK_REASON_VERSION_NOT_FOUND
+    config = version_doc.get("config") or None
+    if config is None:
+        return None, FALLBACK_REASON_CONFIG_EMPTY
+    return config, ""
+
+
+def record_fallback_event(
+    *, room_name: str, bot_id: str, test_bot_version_id: str, reason: str, worker: str,
+) -> None:
+    """Best-effort, queryable audit trail for every call that ran on _HARDCODED_BOT_CONFIG
+    instead of the dashboard-configured bot — surfaced via GET /api/diagnostics/fallback-events
+    (backend/routers/diagnostics.py). Never raises: a logging failure must not affect the call
+    it's describing, and this fires from inside the hot call-setup path on every worker."""
+    try:
+        _get_platform_db()["tbl_ai_vb_bot_config_fallback_events"].insert_one({
+            "room_name": room_name,
+            "bot_id": bot_id,
+            "test_bot_version_id": test_bot_version_id,
+            "reason": reason,
+            "worker": worker,
+            "created_at": datetime.now(timezone.utc),
+        })
+    except Exception as exc:
+        logger.warning(f"[CONFIG] record_fallback_event failed (non-fatal): {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -1680,8 +1719,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # 2. Resolve bot config and settings
     _bot_id_meta = _room_meta_raw.get("bot_id", "")
     _test_version_meta = _room_meta_raw.get("test_bot_version_id", "")
-    _bc = await fetch_bot_config(_bot_id_meta, _test_version_meta) if (_bot_id_meta and _test_version_meta) else None
+    if _bot_id_meta and _test_version_meta:
+        _bc, _fallback_reason = await fetch_bot_config(_bot_id_meta, _test_version_meta)
+    else:
+        _bc, _fallback_reason = None, FALLBACK_REASON_NO_IDS
     _bot_config: dict = _bc or _HARDCODED_BOT_CONFIG
+    if _bc is None:
+        record_fallback_event(
+            room_name=room_name, bot_id=_bot_id_meta, test_bot_version_id=_test_version_meta,
+            reason=_fallback_reason, worker=os.getenv("LIVEKIT_AGENT_NAME", ""),
+        )
+        _log.warning(f"[CONFIG] Falling back to hardcoded assistant — reason={_fallback_reason!r}")
 
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
 

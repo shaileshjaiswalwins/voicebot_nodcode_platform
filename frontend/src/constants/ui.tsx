@@ -66,6 +66,16 @@ export const SARVAM_TTS_VOICES: string[] = [
   'shruti', 'suhani', 'mohit', 'kavitha', 'rehan', 'soham', 'rupali',
 ];
 
+// Maps a bot's tts_provider to the pricing-catalog key (backend/pricing.py's TTS_RATES) so
+// the Agent Builder's cost estimate (agentCost.ts, keyed off tts_model) matches whichever TTS
+// actually runs the call instead of silently defaulting to Sarvam's rate for every provider.
+export const TTS_PROVIDER_MODEL_KEY: Record<string, string> = {
+  '': 'sarvam_bulbul_v3',
+  sarvam: 'sarvam_bulbul_v3',
+  elevenlabs: 'elevenlabs_turbo',
+  justdial: 'indic_f5',
+};
+
 export const SARVAM_TTS_LANGUAGES: { id: string; label: string }[] = [
   { id: 'hi-IN', label: 'Hindi' },
   { id: 'en-IN', label: 'English (India)' },

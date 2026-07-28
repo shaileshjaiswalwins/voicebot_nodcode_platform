@@ -405,6 +405,11 @@ class _BaseWorkflowAgent(Agent):
     """Shared guard: never generate once the call is already ending."""
 
     async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
+        # Diagnostic: this file previously had no per-turn logging at all (unlike bot.py's
+        # extensive instrumentation), which made a "bot only speaks its first line" report
+        # impossible to diagnose without a live reproduction — this confirms whether STT/turn
+        # detection ever hands the user's speech to the agent in the first place.
+        logger.info(f"[Workflow] user turn completed on node={getattr(self, '_node', {}).get('id', '?')!r}: {getattr(new_message, 'text_content', None) or new_message!r}")
         state = getattr(self, "_state", None)
         if state is not None and state.ended_naturally:
             raise StopResponse()
@@ -455,7 +460,10 @@ class ConversationAgent(_BaseWorkflowAgent):
         transition_id = transition.get("id")
 
         async def go(ctx: RunContext) -> Agent:
-            return await graph.resolve(node["id"], transition_id, state, chat_ctx=ctx.session.history)
+            logger.info(f"[Workflow] transition tool fired: node={node['id']!r} transition={transition_id!r} key={transition.get('key')!r}")
+            next_agent = await graph.resolve(node["id"], transition_id, state, chat_ctx=ctx.session.history)
+            logger.info(f"[Workflow] resolved to next agent: {type(next_agent).__name__} node={getattr(next_agent, '_node', {}).get('id', '<terminal>')!r}")
+            return next_agent
 
         return function_tool(
             go,
@@ -509,6 +517,7 @@ class ConversationAgent(_BaseWorkflowAgent):
         )
 
     async def on_enter(self) -> None:
+        logger.info(f"[Workflow] entered conversation node={self._node['id']!r} opening_line={bool(self._opening_line)}")
         if self._opening_line:
             # "exactly this greeting" alone fights the transliteration hint already
             # present in `instructions` (compile_instructions, set at construction) —

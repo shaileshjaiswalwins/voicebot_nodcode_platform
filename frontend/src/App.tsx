@@ -189,8 +189,18 @@ function AppShell() {
 
   // ── Diagnostics ─────────────────────────────────────────────────────
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
+  const DIAGNOSTIC_AUTO_DISMISS_MS = 6000;
   function pushDiagnostic(scope: string, error: unknown, action?: string, severity: Diagnostic['severity'] = 'error') {
-    setDiagnostics((prev) => [buildDiagnostic(scope, error, action, severity), ...prev].slice(0, 20));
+    const diagnostic = buildDiagnostic(scope, error, action, severity);
+    setDiagnostics((prev) => [diagnostic, ...prev].slice(0, 20));
+    // Transient hiccups (warning/info — a slow endpoint, a background refresh) shouldn't sit
+    // on screen forever like a real errors do; auto-clear them the way toasts normally behave.
+    // Errors stay until the user dismisses or retries, since those usually need action.
+    if (severity !== 'error') {
+      setTimeout(() => {
+        setDiagnostics((prev) => prev.filter((d) => d.id !== diagnostic.id));
+      }, DIAGNOSTIC_AUTO_DISMISS_MS);
+    }
   }
 
   const { toasts, showToast, dismissToast } = useToasts();

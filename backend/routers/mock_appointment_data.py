@@ -52,3 +52,22 @@ async def mock_book_appointment(payload: dict) -> dict:
         "business_name": business_name,
         "booking_ref": f"APT-{abs(hash((business_name, requested_time))) % 100000:05d}",
     }
+
+
+@router.post("/api/mock/crm/category-change")
+async def mock_category_change(payload: dict) -> dict:
+    """Zero-code action webhook demo target — a CRM/category-change call a bot can make
+    mid-call via a during_call custom function (backend/seed_demo_showcase_bots.py's
+    "Zero-Code Action Webhooks" bot), rather than the LLM just claiming it did something.
+    THROWAWAY TEST DATA — always succeeds; a real CRM integration would validate the
+    requested category against the vendor's actual listing and could reject it."""
+    lead_id = (payload or {}).get("lead_id", "").strip()
+    new_category = (payload or {}).get("new_category", "").strip()
+    if not new_category:
+        return {"status": "rejected", "reason": "new_category is required"}
+    return {
+        "status": "updated",
+        "lead_id": lead_id or "unknown",
+        "new_category": new_category,
+        "change_ref": f"CAT-{abs(hash((lead_id, new_category))) % 100000:05d}",
+    }

@@ -299,6 +299,16 @@ export type AuditLogEntry = {
   created_at: string;
 };
 
+export type FallbackEvent = {
+  _id: string;
+  room_name: string;
+  bot_id: string;
+  test_bot_version_id: string;
+  reason: string;
+  worker: string;
+  created_at: string;
+};
+
 export type TranscriptTurn = { role: string; text?: string; created_at?: string; interrupted?: boolean; event_type?: string };
 
 export type Transcript = {
@@ -842,6 +852,13 @@ export const api = {
   auditLog(params: { resource_type?: string; action?: string; actor?: string; limit?: number; offset?: number } = {}): Promise<{ items: AuditLogEntry[]; total: number }> {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => [k, String(v)]));
     return request(`/api/audit-log?${qs.toString()}`);
+  },
+
+  // bot-config fallback events — every call that ran on the hardcoded default assistant
+  // instead of the dashboard-configured bot, with why (see bot.py's record_fallback_event)
+  fallbackEvents(params: { limit?: number; offset?: number } = {}): Promise<{ items: FallbackEvent[]; total: number }> {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]));
+    return request(`/api/diagnostics/fallback-events?${qs.toString()}`);
   },
 
   // transcripts

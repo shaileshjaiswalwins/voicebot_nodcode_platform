@@ -59,29 +59,42 @@ def _serialize_version(doc: dict) -> dict:
     return doc
 
 
-def _version_summary(bot: dict) -> dict:
-    """Agent name + bot type off the same version doc (published version preferred, else
-    draft) — one lookup covers both fields the list view needs, so this doesn't cost a
-    second round-trip per bot."""
-    version_id = bot.get("active_version_id") or bot.get("draft_version_id")
-    if not version_id:
-        return {"agent_name": "", "bot_type": "standard"}
-    try:
-        version = bot_versions.find_one({"_id": ObjectId(version_id)})
-    except Exception:
-        return {"agent_name": "", "bot_type": "standard"}
-    config = (version or {}).get("config") or {}
-    return {
-        "agent_name": config.get("agent_name", ""),
-        "bot_type": config.get("bot_type") or "standard",
-    }
+def _empty_summary() -> dict:
+    return {"agent_name": "", "bot_type": "standard"}
 
 
 @router.get("")
 def list_bots(_: dict = Depends(require_user)) -> list[dict]:
+    bot_docs = list(bots.find({"status": {"$ne": "deleted"}}))
+
+    # Agent name + bot type live on the version doc, not the bot doc. Batch-fetch every
+    # referenced version in one query instead of one find_one() per bot — with N bots that
+    # was N+1 round-trips to Mongo (which runs on a remote host here), not N+1 queries against
+    # a local DB, so each one adds real network latency to the page load.
+    version_ids = []
+    for b in bot_docs:
+        vid = b.get("active_version_id") or b.get("draft_version_id")
+        if vid:
+            try:
+                version_ids.append(ObjectId(vid))
+            except Exception:
+                pass
+    summary_by_version_id = {}
+    if version_ids:
+        for v in bot_versions.find(
+            {"_id": {"$in": version_ids}}, {"config.agent_name": 1, "config.bot_type": 1}
+        ):
+            config = v.get("config") or {}
+            summary_by_version_id[str(v["_id"])] = {
+                "agent_name": config.get("agent_name", ""),
+                "bot_type": config.get("bot_type") or "standard",
+            }
+
     out = []
-    for b in bots.find({"status": {"$ne": "deleted"}}):
-        summary = _version_summary(b)
+    for b in bot_docs:
+        vid = b.get("active_version_id") or b.get("draft_version_id")
+        summary = summary_by_version_id.get(str(vid)) if vid else None
+        summary = summary or _empty_summary()
         b = _serialize_bot(b)
         b["agent_name"] = summary["agent_name"]  # spoken persona, distinct from the display name above
         b["bot_type"] = summary["bot_type"]

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AlertTriangle, Save, Settings, SlidersHorizontal } from 'lucide-react';
 import type { PlatformSettings, RuntimeSettings } from '../api';
 import { StatusPill } from '../components/StatusPill';
+import { FallbackEventsPanel } from '../components/FallbackEventsPanel';
 import { isValidUrl } from '../utils/validation';
 import { FEEDBACK_TIMEOUT_MS } from '../constants/ui';
 
@@ -161,6 +162,8 @@ export function SettingsView({
           </div>
         </div>
       </div>
+
+      <FallbackEventsPanel />
 
       {/* ── Admin Tools ── */}
       <div className="panel">
