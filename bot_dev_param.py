@@ -153,6 +153,7 @@ from bot import (
     _build_sample_from_search,
     _execute_function_call,
     call_configured_function,
+    _get_http_session,
     save_call_log_to_backend,
     build_system_prompt,
     build_transcript_from_session,
@@ -173,7 +174,13 @@ from bot import (
 )
 import bot as _bot_module
 from agent_resolver import render_greeting, resolve_agent_config
-from custom_functions import interpolate_vars, run_lifecycle_functions
+from custom_functions import (
+    apply_store_variables,
+    build_http_call,
+    interpolate_vars,
+    resolve_timeout_seconds,
+    run_lifecycle_functions,
+)
 from custom_function_tools import build_during_call_tools
 
 # Override bot.py globals so all calls in this process use the parameterised values
@@ -453,10 +460,18 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # Pre-call custom functions: run before the greeting; their store_variables land in
     # call_state["vars"] for {{var}} interpolation into the prompt AND the opening line.
     # Guarded so a misconfigured API never fails the call.
+    # Seed the call's variable bag with the identifiers both lifecycle hooks and during-call
+    # tools need. setdefault, not assignment: a pre_call function's store_variables may later
+    # overwrite these, and re-seeding must never clobber that.
+    _call_vars = call_state.setdefault("vars", {})
+    _call_vars.setdefault("lead_id", _lead_id_meta or (call_state.get("record_id") or ""))
+    _call_vars.setdefault("mobile", _room_mobile)
+    _call_vars.setdefault("call_id", call_state.get("call_id") or room_name)
+
     _pre_call_params = {
-        "lead_id": _lead_id_meta or (call_state.get("record_id") or ""),
-        "mobile": _room_mobile,
-        "call_id": call_state.get("call_id") or room_name,
+        "lead_id": _call_vars["lead_id"],
+        "mobile": _call_vars["mobile"],
+        "call_id": _call_vars["call_id"],
     }
     try:
         _pre_results = await run_lifecycle_functions(
@@ -1218,6 +1233,73 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             _log.warning(f"[STALE-PARTIAL] force-inject failed: {e}")
 
     # ── 7. Function tools ──
+    def _interpolate_cfg(value, variables: dict):
+        """Recursively fill {{var}} placeholders in a config value (str / dict / list)."""
+        if isinstance(value, str):
+            return interpolate_vars(value, variables)
+        if isinstance(value, dict):
+            return {k: _interpolate_cfg(v, variables) for k, v in value.items()}
+        if isinstance(value, list):
+            return [_interpolate_cfg(v, variables) for v in value]
+        return value
+
+    async def _execute_custom_function_call(
+        fn_name: str, fn_args: dict, functions: list[dict], call_state: dict
+    ) -> dict:
+        """During-call twin of call_configured_function.
+
+        bot.py's _execute_function_call hand-rolls its request and drops `custom_body`
+        entirely, so a dashboard-configured static body never reaches the API. This routes
+        during-call tools through the same build_http_call/timeout/store_variables path the
+        pre_call hook uses, and adds {{var}} interpolation so a URL, header or body field can
+        reference identifiers and values stored by earlier functions.
+
+        Built-ins (FetchLead / FetchCategorySchema) deliberately keep bot.py's handler — it
+        does product-change bookkeeping this must not duplicate.
+        """
+        fn_cfg = next((f for f in functions or [] if f.get("name") == fn_name), None)
+        if not fn_cfg:
+            return {"error": f"Function {fn_name!r} not configured"}
+
+        variables = call_state.setdefault("vars", {})
+        cfg = dict(fn_cfg)
+
+        # Legacy configs stored custom_body as a JSON string; normalize before merging.
+        body = cfg.get("custom_body")
+        if isinstance(body, str):
+            try:
+                cfg["custom_body"] = json.loads(body)
+            except Exception:
+                cfg["custom_body"] = {}
+
+        for field in ("url", "headers", "query_params", "custom_body"):
+            if field in cfg:
+                cfg[field] = _interpolate_cfg(cfg[field], variables)
+
+        # Unlike the pre_call path, falsy args are NOT filtered out: the LLM passing
+        # quantity=0 mid-call means zero, not "unset".
+        call = build_http_call(cfg, _interpolate_cfg(fn_args or {}, variables))
+        timeout = aiohttp.ClientTimeout(total=resolve_timeout_seconds(cfg, default=8.0))
+        _log.info(
+            f"[FnCall/custom] {call['method']} {call['url']} | args={fn_args} "
+            f"| timeout={timeout.total}s"
+        )
+        try:
+            http = _get_http_session()
+            async with http.request(
+                call["method"], call["url"], headers=call["headers"],
+                params=call["params"], json=call["json"], data=call["data"], timeout=timeout,
+            ) as resp:
+                result = await resp.json(content_type=None)
+        except Exception as exc:
+            _log.error(f"[FnCall/custom] {fn_name} failed: {exc}")
+            return {"error": str(exc)}
+
+        stored = apply_store_variables(cfg.get("store_variables"), result, variables)
+        if stored:
+            _log.info(f"[FnCall/custom] {fn_name} stored vars: {list(stored)}")
+        return result
+
     def _play_hold_message(tool_ctx: RunContext):
         if not _HOLD_FRAMES:
             return None
@@ -1297,14 +1379,19 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     tools = [FetchCategorySchema, FetchLead] if _function_calling else []
 
-    # Register user-defined during_call custom functions as LLM tools (from config.functions),
-    # via the shared builder — same code path as bot_dev.py. Delegates to _execute_function_call.
-    if _function_calling:
-        _dynamic_tools = build_during_call_tools(_functions, _execute_function_call, call_state)
+    # Register user-defined during_call custom functions as LLM tools (from config.functions).
+    # Gated on _functions alone, NOT _function_calling: that flag toggles the built-in MIS
+    # tools above, and a bot with custom functions but the flag off used to register nothing
+    # while its pre_call hooks still ran — silently, with no log line to explain it.
+    if _functions:
+        _dynamic_tools = build_during_call_tools(_functions, _execute_custom_function_call, call_state)
         if _dynamic_tools:
             _log.info(f"[FnCall] registered {len(_dynamic_tools)} custom during-call tool(s): "
                       f"{[t.info.name for t in _dynamic_tools]}")
             tools += _dynamic_tools
+        else:
+            _log.info(f"[FnCall] no during-call tools registered from {len(_functions)} "
+                      f"configured function(s) — check trigger/enabled/name")
 
     _TTS_SPEAKABLE_RE = re.compile(r"[A-Za-z0-9ऀ-ॿ]")
 
