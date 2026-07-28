@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Database } from 'lucide-react';
 import type { RuntimeConfig, CustomFunction, FunctionTestResult } from '../types';
 import type { LanguageOption, PricingConfig, PricingModelEntry } from '../api';
@@ -7,11 +7,12 @@ import { CustomFunctionsEditor } from './CustomFunctionsEditor';
 import { CloseMarkersEditor } from './CloseMarkersEditor';
 import { ProviderOptionsEditor } from './ProviderOptionsEditor';
 import { CostEstimateStrip } from './CostEstimateStrip';
+import { WorkflowBuilderView } from '../views/WorkflowBuilderView';
 import { SARVAM_STT_FIELDS, SARVAM_TTS_FIELDS, GEMINI_LLM_FIELDS } from '../constants/providerParams';
 import type { ParamField } from '../constants/providerParams';
 import type { AgentCostEstimate } from '../utils/agentCost';
 
-export type BuilderTab = 'agent' | 'speed' | 'stt' | 'tts' | 'llm' | 'functions' | 'advanced';
+export type BuilderTab = 'agent' | 'speed' | 'stt' | 'tts' | 'llm' | 'functions' | 'workflow' | 'advanced';
 
 const TABS: { id: BuilderTab; label: string }[] = [
   { id: 'agent', label: 'Agent' },
@@ -20,6 +21,7 @@ const TABS: { id: BuilderTab; label: string }[] = [
   { id: 'tts', label: 'TTS' },
   { id: 'llm', label: 'LLM' },
   { id: 'functions', label: 'Functions' },
+  { id: 'workflow', label: 'Workflow' },
   { id: 'advanced', label: 'Advanced' },
 ];
 
@@ -53,6 +55,41 @@ export function BotConfigTabs({
   pricing?: PricingConfig | null;
 }) {
   const [tab, setTab] = useState<BuilderTab>('agent');
+  // Scoped JSON editor for just the `workflow` graph field (rather than the whole bot's
+  // Developer JSON below) — local text state so an operator can type transiently-invalid
+  // JSON without it being force-parsed on every keystroke, matching the Developer JSON
+  // editor's own pattern. No visual drag-and-drop editor for this schema exists yet
+  // (see plans/07-nocode-platform-demo-readiness.md) — this is the interim authoring path.
+  const [workflowText, setWorkflowText] = useState(() => JSON.stringify(value.workflow || { nodes: [], edges: [] }, null, 2));
+  const [workflowJsonError, setWorkflowJsonError] = useState<string | undefined>(undefined);
+  const [workflowJsonOpen, setWorkflowJsonOpen] = useState(false);
+  // Resync the local draft when switching bots (parent identifies this via botId) — matches
+  // BuilderView.tsx's own configText/editingVersionId resync pattern, so this scoped editor
+  // doesn't carry stale text from a previously-viewed bot across a switch.
+  useEffect(() => {
+    setWorkflowText(JSON.stringify(value.workflow || { nodes: [], edges: [] }, null, 2));
+    setWorkflowJsonError(undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [botId]);
+  // The canvas above edits `value.workflow` directly (not through this textarea), so resync
+  // the JSON draft whenever the panel opens — otherwise it'd show whatever was there the last
+  // time it was opened rather than the canvas's current graph.
+  useEffect(() => {
+    if (!workflowJsonOpen) return;
+    setWorkflowText(JSON.stringify(value.workflow || { nodes: [], edges: [] }, null, 2));
+    setWorkflowJsonError(undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflowJsonOpen]);
+  const handleWorkflowTextChange = (text: string) => {
+    setWorkflowText(text);
+    try {
+      const parsed = JSON.parse(text);
+      setWorkflowJsonError(undefined);
+      onUpdateConfig('workflow', parsed);
+    } catch (e) {
+      setWorkflowJsonError(e instanceof Error ? e.message : String(e));
+    }
+  };
   // Only companies whose provider is actually wired into pipeline_providers.py may surface
   // as selectable models here — the pricing catalog also carries catalog-only companies
   // (Google TTS/STT, Cartesia, Anthropic, ...) that would silently no-op on a real call.
@@ -108,6 +145,17 @@ export function BotConfigTabs({
       {tab === 'agent' && (
         <div role="tabpanel">
           <div className="form-grid">
+            <label title="'Workflow' bots are a real state-machine graph (see the Workflow tab) driven entirely by workflow_engine.py, bypassing System prompt/Opening line/Closing line below. 'Standard' is the existing fixed-assistant pipeline.">
+              Bot type
+              <select
+                value={String(value.bot_type || 'standard')}
+                onChange={(e) => onUpdateConfig('bot_type', e.target.value)}
+              >
+                <option value="standard">Standard (system prompt)</option>
+                <option value="workflow">Workflow (visual graph)</option>
+              </select>
+              <small>Workflow bots use the Workflow tab's graph instead of the fields below.</small>
+            </label>
             <label title="The name the bot introduces itself with. Used in the opening line and system prompt.">
               Persona name
               <input value={String(value.agent_name || '')} placeholder="e.g. Tarun, Priya, Aman" onChange={(e) => onUpdateConfig('agent_name', e.target.value)} />
@@ -352,6 +400,64 @@ export function BotConfigTabs({
             }}
             onTest={botId ? onTestFunction : undefined}
           />
+        </div>
+      )}
+
+      {tab === 'workflow' && (
+        <div role="tabpanel">
+          {value.bot_type !== 'workflow' && (
+            <div className="notice" style={{ marginBottom: '0.75rem' }}>
+              This bot's type is "Standard" (Agent tab) — the graph below is saved but
+              ignored at call time until you switch Bot type to "Workflow".
+            </div>
+          )}
+          <label className="full">
+            Global prompt
+            <textarea
+              className="prompt-editor"
+              value={String(value.global_prompt || '')}
+              onChange={(e) => onUpdateConfig('global_prompt', e.target.value)}
+              placeholder="Shared persona/context prepended to every conversation node's instructions."
+            />
+            <small>Prepended to every node's compiled instructions — each node is otherwise its own independent agent.</small>
+          </label>
+          <div style={{ marginTop: '1rem' }}>
+            <WorkflowBuilderView
+              workflow={value.workflow || { nodes: [], edges: [] }}
+              onChange={(wf) => onUpdateConfig('workflow', wf)}
+            />
+          </div>
+
+          <div style={{ marginTop: '1rem' }}>
+            <button
+              type="button"
+              onClick={() => setWorkflowJsonOpen((v) => !v)}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }}
+            >
+              <Database size={14} /> {workflowJsonOpen ? 'Hide' : 'Show'} raw graph JSON (advanced)
+            </button>
+            {workflowJsonOpen && (
+              <div style={{ marginTop: '0.6rem' }}>
+                <p style={{ fontSize: '0.78rem', color: 'var(--muted)', margin: '0 0 0.4rem' }}>
+                  Same graph as the canvas above, as raw nodes/edges JSON consumed by
+                  workflow_engine.py — see backend/models.py's WorkflowGraphDef for the exact
+                  shape. Editing here updates the canvas immediately; the two stay in sync.
+                </p>
+                <textarea
+                  className="json-editor"
+                  value={workflowText}
+                  onChange={(e) => handleWorkflowTextChange(e.target.value)}
+                  spellCheck={false}
+                  aria-invalid={!!workflowJsonError}
+                />
+                {workflowJsonError && (
+                  <div className="notice error" role="alert" style={{ marginTop: '0.5rem' }}>
+                    <AlertTriangle size={16} /> Invalid JSON — fix before saving: {workflowJsonError}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

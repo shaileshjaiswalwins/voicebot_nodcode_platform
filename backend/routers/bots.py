@@ -59,26 +59,33 @@ def _serialize_version(doc: dict) -> dict:
     return doc
 
 
-def _persona_name(bot: dict) -> str:
-    """The agent's spoken name (config.agent_name). Prefers the published version, falls
-    back to the draft so a just-created (draft-only) bot still shows its name."""
+def _version_summary(bot: dict) -> dict:
+    """Agent name + bot type off the same version doc (published version preferred, else
+    draft) — one lookup covers both fields the list view needs, so this doesn't cost a
+    second round-trip per bot."""
     version_id = bot.get("active_version_id") or bot.get("draft_version_id")
     if not version_id:
-        return ""
+        return {"agent_name": "", "bot_type": "standard"}
     try:
         version = bot_versions.find_one({"_id": ObjectId(version_id)})
     except Exception:
-        return ""
-    return ((version or {}).get("config") or {}).get("agent_name", "")
+        return {"agent_name": "", "bot_type": "standard"}
+    config = (version or {}).get("config") or {}
+    return {
+        "agent_name": config.get("agent_name", ""),
+        "bot_type": config.get("bot_type") or "standard",
+    }
 
 
 @router.get("")
 def list_bots(_: dict = Depends(require_user)) -> list[dict]:
     out = []
     for b in bots.find({"status": {"$ne": "deleted"}}):
-        agent_name = _persona_name(b)
+        summary = _version_summary(b)
         b = _serialize_bot(b)
-        b["agent_name"] = agent_name  # spoken persona, distinct from the display name above
+        b["agent_name"] = summary["agent_name"]  # spoken persona, distinct from the display name above
+        b["bot_type"] = summary["bot_type"]
+        b["published"] = bool(b.get("active_version_id"))
         out.append(b)
     return out
 

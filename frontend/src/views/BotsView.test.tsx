@@ -78,10 +78,14 @@ describe('BotsView', () => {
     await user.click(screen.getByText('Sales Bot'));
     expect(onSelect).toHaveBeenCalledWith('bot-1');
 
-    await user.click(screen.getAllByRole('button', { name: /edit/i })[0]);
+    // Edit/Delete now live behind a single per-row "⋮" menu rather than as always-visible
+    // buttons — open it before each action is clickable.
+    await user.click(screen.getByRole('button', { name: /row actions/i }));
+    await user.click(screen.getByRole('menuitem', { name: /edit/i }));
     expect(onEdit).toHaveBeenCalledWith('bot-1');
 
-    await user.click(screen.getAllByRole('button', { name: /delete/i })[0]);
+    await user.click(screen.getByRole('button', { name: /row actions/i }));
+    await user.click(screen.getByRole('menuitem', { name: /delete/i }));
     expect(onDelete).toHaveBeenCalledWith(bot);
   });
 
@@ -102,8 +106,9 @@ describe('BotsView', () => {
         onNew={vi.fn()}
       />
     );
-    // Only the one transcript belonging to bot-1 should be counted.
-    expect(screen.getByText('1')).toBeInTheDocument();
+    // Only the one transcript belonging to bot-1 should be counted — both in the table's own
+    // Calls column and the right-hand profile panel's "Calls stored" detail.
+    expect(screen.getAllByText('1').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: /edit agent/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /delete agent/i })).toBeInTheDocument();
   });

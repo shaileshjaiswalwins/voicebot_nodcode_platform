@@ -4,8 +4,8 @@ import type { Bot as BotType, Campaign, LanguageOption } from '../api';
 import type { Transcript } from '../api';
 import { OPENING_LINE_BY_GENDER } from '../constants/ui';
 import { StatusPill } from '../components/StatusPill';
-import { CopyableId } from '../components/CopyableId';
 import { TimeAgo } from '../components/TimeAgo';
+import { RowActionsMenu } from '../components/RowActionsMenu';
 import { Detail } from '../components/Detail';
 import { SkeletonTableBody } from '../components/SkeletonTableBody';
 import { EmptyState } from '../components/EmptyState';
@@ -37,13 +37,13 @@ export function BotsView({ bots, selectedBot, transcripts, loading, onSelect, on
         </div>
         <div className="table-scroll"><table>
           <thead>
-            <tr><th>Name</th><th>Status</th><th>Assistant</th><th>Updated</th><th>Actions</th></tr>
+            <tr><th>Name</th><th>Type</th><th>Lifecycle</th><th>Calls</th><th>Updated</th><th></th></tr>
           </thead>
           <tbody>
             {loading && !bots.length ? (
-              <SkeletonTableBody cols={5} rows={4} />
+              <SkeletonTableBody cols={6} rows={4} />
             ) : bots.length === 0 ? (
-              <tr><td colSpan={5}>
+              <tr><td colSpan={6}>
                 <EmptyState
                   icon={<Bot size={32} />}
                   heading="No agents yet"
@@ -55,16 +55,21 @@ export function BotsView({ bots, selectedBot, transcripts, loading, onSelect, on
               <tr key={bot._id} onClick={() => onSelect(bot._id)} className={bot._id === selectedBot?._id ? 'selected-row' : ''}>
                 <td>
                   <strong>{bot.name}</strong>
-                  <small>{bot.description || 'Prompt + settings agent'}</small>
+                  <small>{bot.agent_name ? `${bot.agent_name} — ` : ''}{bot.description || 'Prompt + settings agent'}</small>
                 </td>
-                <td><StatusPill value={bot.status} /></td>
-                <td><CopyableId value={bot.assistant_id} /></td>
+                <td>
+                  <span className="pill">{bot.bot_type === 'workflow' ? 'Workflow' : 'Standard'}</span>
+                </td>
+                <td><StatusPill value={bot.published ? 'published' : 'draft'} /></td>
+                <td>{transcripts.filter((item) => item.bot_id === bot._id).length}</td>
                 <td><TimeAgo value={bot.updated_at} /></td>
                 <td>
-                  <div className="table-actions">
-                    <button onClick={(event) => { event.stopPropagation(); onEdit(bot._id); }}><Pencil size={13} /> Edit</button>
-                    <button className="danger-button" onClick={(event) => { event.stopPropagation(); onDelete(bot); }}><Trash2 size={14} /> Delete</button>
-                  </div>
+                  <RowActionsMenu
+                    actions={[
+                      { label: 'Edit', icon: <Pencil size={13} />, onClick: () => onEdit(bot._id) },
+                      { label: 'Delete', icon: <Trash2 size={13} />, onClick: () => onDelete(bot), danger: true },
+                    ]}
+                  />
                 </td>
               </tr>
             ))}

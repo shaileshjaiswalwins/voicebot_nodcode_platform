@@ -1,4 +1,4 @@
-import type { CallEvent, Transcript, Bot, Campaign, PhraseCategory, Flow } from './api';
+import type { CallEvent, Transcript, Bot, Campaign, PhraseCategory, Flow, WorkflowGraphDef } from './api';
 
 export type View = 'bots' | 'builder' | 'flow' | 'campaigns' | 'phone_numbers' | 'number_mapping' | 'test' | 'transcripts' | 'analytics' | 'observability' | 'library' | 'settings' | 'audit_log' | 'admin';
 export type AgentWorkspaceMode = 'list' | 'builder';
@@ -116,6 +116,17 @@ export type RuntimeConfig = {
   functions?: CustomFunction[];
   close_markers?: string[];
   flow?: Flow;
+  /** "standard" = this fixed-assistant pipeline (system_prompt/flow above). "workflow" =
+   * a real state-machine bot (workflow_engine.py) driven by the `workflow` graph below,
+   * bypassing the rest of this config's fields entirely at call time. Defaults to
+   * "standard" — every existing bot is unaffected. */
+  bot_type?: 'standard' | 'workflow';
+  workflow?: WorkflowGraphDef;
+  /** Prepended to every conversation node's compiled instructions — shared context/persona
+   * across the whole graph, since each node is otherwise its own independent LiveKit Agent. */
+  global_prompt?: string;
+  /** "How easily can a caller interrupt the bot" — see interruption_presets.py. */
+  interruption_sensitivity?: '' | 'patient' | 'balanced' | 'responsive';
   /** Config-surface only — see backend/models.py BotConfig for pipeline-wiring status. */
   backchanneling_enabled?: boolean;
   noise_filter_sensitivity?: 'low' | 'medium' | 'high';

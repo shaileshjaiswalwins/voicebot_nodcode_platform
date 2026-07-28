@@ -45,6 +45,7 @@ export function PhoneNumbersView({
   onReassign,
   reassignState,
   onDelete,
+  onGoToNumberMapping,
 }: {
   phoneNumbers: PhoneNumber[];
   bots: BotType[];
@@ -56,6 +57,9 @@ export function PhoneNumbersView({
   onReassign: (id: string, botId: string) => void;
   reassignState?: Record<string, 'idle' | 'running' | 'failed'>;
   onDelete: (id: string) => void;
+  /** Jumps to the Number Mapping view — used by the "does not control inbound routing" notice
+   * below, since that's the page which actually does. */
+  onGoToNumberMapping?: () => void;
 }) {
   const botById = useMemo(() => new Map(bots.map((b) => [b._id, b])), [bots]);
   const [envFilter, setEnvFilter] = useState<EnvFilter>('all');
@@ -139,7 +143,21 @@ export function PhoneNumbersView({
         <div className="panel-header">
           <div>
             <h2>Phone numbers</h2>
-            <p>Map a real phone number to a bot and environment. Reassign hot-swaps which bot answers the next call.</p>
+            <p>Telephony/SIP provisioning per number, plus which bot outbound batch campaigns dial through it.</p>
+            <p className="muted" style={{ fontSize: '0.8rem', marginTop: '0.2rem' }}>
+              This does <strong>not</strong> control which bot answers an inbound call — that's set per-agent on{' '}
+              {onGoToNumberMapping ? (
+                <button
+                  type="button"
+                  onClick={onGoToNumberMapping}
+                  style={{ border: 'none', background: 'none', padding: 0, minHeight: 0, font: 'inherit', color: 'var(--accent)', textDecoration: 'underline', cursor: 'pointer' }}
+                >
+                  Number Mapping
+                </button>
+              ) : (
+                <strong>Number Mapping</strong>
+              )}.
+            </p>
           </div>
           <button className="primary" onClick={() => setShowAddModal(true)}>
             <Plus size={14} /> Add number
@@ -163,7 +181,14 @@ export function PhoneNumbersView({
 
         <div className="table-scroll"><table>
           <thead>
-            <tr><th>Number</th><th>Name</th><th>Environment</th><th>Assigned bot</th><th>Status</th><th>Actions</th></tr>
+            <tr><th>Number</th><th>Name</th><th>Environment</th><th>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                Batch-call bot
+                <Tooltip label="The bot used when an outbound batch campaign dials through this number's service ID — this does not affect inbound call routing (see Number Mapping).">
+                  <HelpCircle size={12} style={{ color: 'var(--muted)', cursor: 'help' }} />
+                </Tooltip>
+              </span>
+            </th><th>Status</th><th>Actions</th></tr>
           </thead>
           <tbody>
             {loading && !filtered.length ? (
@@ -173,7 +198,7 @@ export function PhoneNumbersView({
                 <EmptyState
                   icon={<Phone size={32} />}
                   heading="No phone numbers yet"
-                  description="Add a phone number and assign it to a published bot to enable inbound routing."
+                  description="Add a phone number to provision its SIP trunk details and, optionally, which bot outbound batch campaigns dial through it."
                 />
               </td></tr>
             ) : filtered.map((phone) => (
@@ -326,7 +351,12 @@ export function PhoneNumbersView({
         >
           <div className="form-grid">
             <label>
-              Assigned bot
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                Batch-call bot
+                <Tooltip label="Used by outbound batch campaigns dialing through this number's service ID — does not affect inbound call routing (see Number Mapping).">
+                  <HelpCircle size={12} style={{ color: 'var(--muted)', cursor: 'help' }} />
+                </Tooltip>
+              </span>
               <select value={editBotId} onChange={(e) => setEditBotId(e.target.value)}>
                 <option value="">— unassigned —</option>
                 {bots.map((b) => <option key={b._id} value={b._id}>{b.name}</option>)}

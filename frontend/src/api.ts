@@ -102,6 +102,12 @@ export type Bot = {
   description?: string;
   assistant_id?: string;
   status: BotStatus;
+  /** "standard" = fixed-assistant pipeline, "workflow" = visual-graph state machine — read
+   * off the bot's active (or draft) version config by GET /api/bots. */
+  bot_type?: 'standard' | 'workflow';
+  /** Whether this bot has ever been published (active_version_id set) — more informative
+   * than `status`, which reads "active" for every non-deleted bot regardless of lifecycle. */
+  published?: boolean;
   updated_at: string;
   created_at?: string;
   active_version_id?: string | null;
@@ -397,6 +403,73 @@ export type FlowEdge = {
   source_handle?: string;
 };
 export type Flow = { nodes: FlowNode[]; edges: FlowEdge[] };
+
+/** Mirrors backend/models.py's Workflow* models exactly — the real state-machine graph
+ * consumed by workflow_engine.py's WorkflowGraph (distinct from Flow/FlowNode above,
+ * which is prompt-compiled by flow_compiler.py and only instructs, not enforces). */
+export type WorkflowNodeKind = 'start' | 'conversation' | 'condition' | 'function' | 'end_call' | 'global';
+
+export type WorkflowVariableSpec = {
+  name: string;
+  type?: 'string' | 'number' | 'boolean';
+  required?: boolean;
+  description?: string;
+};
+
+export type WorkflowTransitionSpec = {
+  id: string;
+  key?: string;
+  label?: string;
+  condition?: string;
+};
+
+export type WorkflowConditionSpec = {
+  id: string;
+  path?: string;
+  op?: 'eq' | 'ne' | 'gt' | 'lt' | 'contains' | 'exists';
+  value?: unknown;
+  is_fallback?: boolean;
+};
+
+export type WorkflowFunctionSpec = {
+  url?: string;
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  headers?: Record<string, string>;
+  query_params?: Record<string, string>;
+  body_format?: 'json' | 'form';
+  custom_body?: string;
+};
+
+export type WorkflowNodeData = {
+  kind: WorkflowNodeKind;
+  label?: string;
+  first_message?: string;
+  prompt?: string;
+  variables?: WorkflowVariableSpec[];
+  transitions?: WorkflowTransitionSpec[];
+  conditions?: WorkflowConditionSpec[];
+  function?: WorkflowFunctionSpec;
+  output_key?: string;
+  closing_message?: string;
+  trigger_description?: string;
+  action?: 'end_call' | 'continue' | 'transfer';
+  transfer_number?: string;
+};
+
+export type WorkflowNode = {
+  id: string;
+  position?: { x: number; y: number };
+  data: WorkflowNodeData;
+};
+
+export type WorkflowEdge = {
+  id?: string;
+  source: string;
+  target: string;
+  sourceHandle?: string;
+};
+
+export type WorkflowGraphDef = { nodes: WorkflowNode[]; edges: WorkflowEdge[] };
 
 export type LanguageOption = { id: string; label: string };
 export type VoiceOption = { id: string; label: string; gender?: string };

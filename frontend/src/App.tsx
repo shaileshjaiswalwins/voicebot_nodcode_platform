@@ -1317,6 +1317,7 @@ function AppShell() {
               onReassign={handleReassignPhoneNumber}
               reassignState={reassignPhoneNumberState}
               onDelete={handleDeletePhoneNumber}
+              onGoToNumberMapping={() => setView('number_mapping')}
             />
           )}
 
@@ -1327,6 +1328,7 @@ function AppShell() {
               loading={loadingNumberMappings}
               onMap={handleMapNumberToAgent}
               mapState={mapAgentState}
+              onGoToPhoneNumbers={() => setView('phone_numbers')}
             />
           )}
 

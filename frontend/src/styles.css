@@ -246,6 +246,51 @@ tr:hover td { background: var(--surface-2); }
 tr.selected-row td { background: var(--primary-bg); }
 .table-actions { display: flex; gap: 0.4rem; }
 .table-actions button { min-height: 2rem; padding: 0.4rem 0.7rem; }
+
+.row-actions-menu { position: relative; display: inline-block; }
+.row-actions-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  border: 1px solid transparent;
+}
+.row-actions-trigger:hover { background: var(--surface-2); border-color: var(--border); }
+.row-actions-dropdown {
+  /* position/top/right are set inline (RowActionsMenu.tsx) as `fixed`, computed from the
+     trigger's own bounding rect — needed so the menu escapes any scrollable ancestor
+     (e.g. .table-scroll's overflow-x: auto) instead of being clipped by it. */
+  min-width: 150px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 0.3rem;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.row-actions-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm, 4px);
+  font-size: 0.83rem;
+  text-align: left;
+  color: var(--text);
+  min-height: 0;
+}
+.row-actions-item:hover { background: var(--surface-2); }
+.row-actions-item.danger { color: var(--danger); }
 small { color: var(--muted); font-size: 0.78rem; display: block; }
 
 /* ── Status pills / badges ── */
@@ -787,6 +832,14 @@ kbd.kbd { display: inline-flex; align-items: center; justify-content: center; mi
   word-break: break-word;
   white-space: normal;
   min-height: 1.2em;
+  /* Clamp to a fixed number of lines so a long prompt can't blow up the card's height and
+     overlap whatever's laid out below it on the canvas — full text is still in the node
+     inspector on the right when the card is selected. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-height: 4.2em;
 }
 .flow-graph-node .react-flow__handle {
   width: 9px;

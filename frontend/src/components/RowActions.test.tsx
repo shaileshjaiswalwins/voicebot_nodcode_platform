@@ -7,8 +7,14 @@ type Item = { id: string; name: string };
 
 const item: Item = { id: '1', name: 'Alpha' };
 
+// RowActions now renders through the shared "⋮" RowActionsMenu (matching BotsView) rather than
+// always-visible titled buttons — every test opens that menu first, then targets the menu item.
+function openMenu() {
+  fireEvent.click(screen.getByRole('button', { name: /row actions/i }));
+}
+
 describe('RowActions', () => {
-  it('renders Edit and Delete buttons', () => {
+  it('renders Edit and Delete menu items', () => {
     render(
       <RowActions
         item={item}
@@ -18,8 +24,9 @@ describe('RowActions', () => {
         deleteDescription={(i) => `"${i.name}" will be removed.`}
       />
     );
-    expect(screen.getByTitle('Edit')).toBeInTheDocument();
-    expect(screen.getByTitle('Delete item?')).toBeInTheDocument();
+    openMenu();
+    expect(screen.getByRole('menuitem', { name: /^edit$/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /delete item/i })).toBeInTheDocument();
   });
 
   it('clicking Delete opens confirm dialog', () => {
@@ -31,7 +38,8 @@ describe('RowActions', () => {
         deleteDescription={(i) => `"${i.name}" will be removed.`}
       />
     );
-    fireEvent.click(screen.getByTitle('Delete item?'));
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: /delete item/i }));
     expect(screen.getByText('"Alpha" will be removed.')).toBeInTheDocument();
   });
 
@@ -45,7 +53,8 @@ describe('RowActions', () => {
         deleteDescription={(i) => `"${i.name}" will be removed.`}
       />
     );
-    fireEvent.click(screen.getByTitle('Delete item?'));
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: /delete item/i }));
     fireEvent.click(screen.getByText('Delete'));
     await waitFor(() => expect(onDelete).toHaveBeenCalledWith(item));
   });
@@ -60,7 +69,8 @@ describe('RowActions', () => {
         deleteDescription={(i) => `"${i.name}" will be removed.`}
       />
     );
-    fireEvent.click(screen.getByTitle('Delete item?'));
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: /delete item/i }));
     fireEvent.click(screen.getByText('Cancel'));
     expect(onDelete).not.toHaveBeenCalled();
     expect(screen.queryByText('"Alpha" will be removed.')).not.toBeInTheDocument();
@@ -77,7 +87,8 @@ describe('RowActions', () => {
         deleteDescription={(i) => `"${i.name}" will be removed.`}
       />
     );
-    fireEvent.click(screen.getByTitle('Delete item?'));
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: /delete item/i }));
     fireEvent.click(screen.getByText('Delete'));
     await waitFor(() => {
       expect(screen.getByText('Cancel')).toBeDisabled();

@@ -49,5 +49,10 @@ export function timeAgo(value?: string): string {
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)} min ago`;
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} hr ago`;
   if (diffSec < 172800) return 'yesterday';
-  return formatDate(value);
+  // Beyond "yesterday" a PM cares about roughly how long ago, not the exact clock time —
+  // the exact date is still one hover away via this span's title attribute (see TimeAgo.tsx).
+  if (diffSec < 604800) return `${Math.floor(diffSec / 86400)} days ago`;
+  if (diffSec < 2592000) return `${Math.floor(diffSec / 604800)} week${Math.floor(diffSec / 604800) > 1 ? 's' : ''} ago`;
+  if (diffSec < 31536000) return `${Math.floor(diffSec / 2592000)} month${Math.floor(diffSec / 2592000) > 1 ? 's' : ''} ago`;
+  return `${Math.floor(diffSec / 31536000)} year${Math.floor(diffSec / 31536000) > 1 ? 's' : ''} ago`;
 }

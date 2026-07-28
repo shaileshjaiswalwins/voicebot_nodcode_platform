@@ -86,6 +86,8 @@ import aiohttp
 
 from livekit.plugins import google, sarvam
 
+from workflow_engine import run_workflow_call
+
 # ---------------------------------------------------------------------------
 # ── Env-var config block — all parameters live here ──────────────────────────
 # ---------------------------------------------------------------------------
@@ -373,6 +375,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _bot_config: dict = _bc or _HARDCODED_BOT_CONFIG
 
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
+
+    # ── Workflow bots (visual graph, backend/routers/workflow_bots.py) bypass the
+    # rest of this fixed-assistant entrypoint entirely — run_workflow_call builds
+    # its own AgentSession from bot_config["workflow"] and drives the whole call. ──
+    if (_bot_config or {}).get("bot_type") == "workflow":
+        await run_workflow_call(
+            ctx, _bot_config, _prefetched_lead, room_name=room_name,
+        )
+        return
 
     _api_urls = _bot_config.get("api_urls") or {}
     _mis_api_base = _api_urls.get("mis_api_base") or MIS_API_BASE

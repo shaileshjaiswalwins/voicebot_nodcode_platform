@@ -115,6 +115,111 @@ class CustomFunction(BaseModel):
     custom_body: dict[str, Any] = Field(default_factory=dict)
 
 
+class WorkflowVariableSpec(BaseModel):
+    """One piece of information a conversation node should extract from the caller
+    during that step (workflow_engine.py's ConversationAgent turns this into part of
+    the compiled instructions + reads it back via the set_variable tool)."""
+
+    name: str
+    type: Literal["string", "number", "boolean"] = "string"
+    required: bool = False
+    description: str = ""
+
+
+class WorkflowTransitionSpec(BaseModel):
+    """One outgoing branch of a `conversation` node — becomes a dynamically-built
+    LiveKit function-tool in workflow_engine.py; calling it triggers an agent handoff
+    to whichever node the matching edge (same id as this transition's id, via
+    edge.sourceHandle) points to."""
+
+    id: str
+    key: str = ""
+    label: str = ""
+    condition: str = ""
+
+
+class WorkflowConditionSpec(BaseModel):
+    """One deterministic branch of a `condition` node — evaluated against collected
+    variables (workflow_engine.py's _eval_condition), no LLM turn involved."""
+
+    id: str
+    path: str = ""
+    op: Literal["eq", "ne", "gt", "lt", "contains", "exists"] = "eq"
+    value: Any = None
+    is_fallback: bool = False
+
+
+class WorkflowFunctionSpec(BaseModel):
+    """A `function` node's webhook call (workflow_engine.py's _run_function_node) —
+    no LLM turn, response stored at `output_key` for later {{var}} interpolation or
+    condition-node evaluation."""
+
+    url: str = ""
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
+    headers: dict[str, str] = Field(default_factory=dict)
+    query_params: dict[str, str] = Field(default_factory=dict)
+    body_format: Literal["json", "form"] = "json"
+    custom_body: str = ""
+
+
+class WorkflowNodeData(BaseModel):
+    """Every field any workflow node kind might use — kept as one permissive shape
+    (rather than a tagged union) so the frontend can freely add/remove fields per kind
+    without a backend schema change; workflow_engine.py only ever reads the fields
+    relevant to a given node's own `kind`, ignoring the rest.
+
+    `kind` mirrors JD-Dashboard's workflow-canvas node types (start / conversation /
+    condition / function / end_call / global) — see workflow_engine.py's module
+    docstring for the full node-kind → runtime-behavior mapping this must match.
+    """
+
+    kind: Literal["start", "conversation", "condition", "function", "end_call", "global"] = "conversation"
+    label: str = ""
+    # start
+    first_message: str = ""
+    # conversation
+    prompt: str = ""
+    variables: list[WorkflowVariableSpec] = Field(default_factory=list)
+    transitions: list[WorkflowTransitionSpec] = Field(default_factory=list)
+    # condition
+    conditions: list[WorkflowConditionSpec] = Field(default_factory=list)
+    # function
+    function: WorkflowFunctionSpec = Field(default_factory=WorkflowFunctionSpec)
+    output_key: str = ""
+    # end_call
+    closing_message: str = ""
+    # global
+    trigger_description: str = ""
+    action: Literal["end_call", "continue", "transfer"] = "continue"
+    transfer_number: str = ""
+
+
+class WorkflowNode(BaseModel):
+    id: str
+    position: dict[str, float] = Field(default_factory=lambda: {"x": 0, "y": 0})
+    data: WorkflowNodeData = Field(default_factory=WorkflowNodeData)
+
+
+class WorkflowEdge(BaseModel):
+    id: str = ""
+    source: str
+    target: str
+    # Which of the source node's named outcomes (transition/condition-branch id) this
+    # edge is attached to — matched against WorkflowTransitionSpec.id / WorkflowConditionSpec.id
+    # by workflow_engine.py's WorkflowGraph._target_of(). Empty for start/function nodes,
+    # which have exactly one, unnamed, outgoing edge.
+    sourceHandle: str = ""
+
+
+class WorkflowGraphDef(BaseModel):
+    """The visual workflow-bot graph — a real deterministic state machine at call time
+    (workflow_engine.py), distinct from the prompt-compiled `Flow` above (flow_compiler.py,
+    "Phase A": the model is instructed to follow it but can skip/reorder steps)."""
+
+    nodes: list[WorkflowNode] = Field(default_factory=list)
+    edges: list[WorkflowEdge] = Field(default_factory=list)
+
+
 class BotConfig(BaseModel):
     """Mirrors RuntimeConfig in frontend/src/types.ts — the fields a PM can edit.
 
@@ -144,6 +249,19 @@ class BotConfig(BaseModel):
     max_call_duration: int = 600
     flow: Flow = Field(default_factory=Flow)
 
+    # "standard" = the existing fixed-assistant pipeline (system_prompt/flow above,
+    # compiled/instructed but not deterministically enforced). "workflow" = a real
+    # state-machine bot (workflow_engine.py) driven entirely by the `workflow` graph
+    # below — bot_dev_param.py's entrypoint dispatches to run_workflow_call() for these,
+    # bypassing the rest of the fixed-assistant flow. Additive: every existing bot
+    # defaults to "standard" and is completely unaffected.
+    bot_type: Literal["standard", "workflow"] = "standard"
+    workflow: WorkflowGraphDef = Field(default_factory=WorkflowGraphDef)
+    # Prepended to every conversation node's compiled instructions (workflow_engine.py's
+    # WorkflowGraph.compile_instructions) — shared context/persona across the whole graph,
+    # since each node is otherwise its own independent LiveKit Agent.
+    global_prompt: str = ""
+
     # Real bot_pipeline.py runtime knobs (backend/evals.py:307-323).
     temperature: float = 0.4
     function_calling: bool = False
@@ -165,12 +283,21 @@ class BotConfig(BaseModel):
     stt_provider: Literal["", "sarvam", "deepgram"] = ""
     stt_model: str = ""
     stt_language: str = ""
-    tts_provider: Literal["", "sarvam", "elevenlabs"] = ""
+    # "justdial" = our own in-house IndicF5 TTS (livekit_indic5_tts.py); only relevant to
+    # bot_type="workflow" today (workflow_engine.py's run_workflow_call), which treats
+    # anything other than "sarvam" as the IndicF5 path — added here so a workflow bot's
+    # saved config round-trips through BotConfig without this field being silently dropped.
+    tts_provider: Literal["", "sarvam", "elevenlabs", "justdial"] = ""
     tts_model: str = ""
     tts_voice: str = ""
     tts_language: str = ""
     llm_provider: Literal["", "gemini", "openai"] = ""
     llm_model: str = ""
+    # PM-facing "how easily can a caller interrupt the bot" knob — see
+    # interruption_presets.py for the concrete parameters each preset resolves to.
+    # "" (default) resolves to "balanced", matching every pre-existing bot's actual
+    # behavior (see resolve_interruption_preset).
+    interruption_sensitivity: Literal["", "patient", "balanced", "responsive"] = ""
 
     # Full per-provider parameter surface — see provider_params.py for the assembled kwargs
     # and the exact keys each accepts. These free-form dicts let a PM tune every relevant
