@@ -8,6 +8,7 @@ from pymongo.errors import PyMongoError
 
 from .analysis_prompts import seed_default_analysis_prompts
 from .auth import ensure_default_admin
+from .db import start_db_watchdog
 from .routers import analytics, audit, auth, bots, campaigns, custom_functions, dialer_webhooks, diagnostics, evals, library, mock_appointment_data, number_mapping, phone_numbers, pricing, runtime, settings, testcall, transcripts
 
 _log = logging.getLogger("voicebot_admin")
@@ -63,6 +64,7 @@ async def _unhandled_error_handler(_: Request, exc: Exception) -> JSONResponse:
 def on_startup() -> None:
     ensure_default_admin()
     seed_default_analysis_prompts()
+    start_db_watchdog()
 
 
 @app.get("/health")
