@@ -494,6 +494,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         "mobile": _call_vars["mobile"],
         "call_id": _call_vars["call_id"],
     }
+    # Test-call only: tester-seeded overrides for query_params this bot's own pre_call
+    # functions define beyond the fixed lead_id/mobile/call_id trio above (dashboard's
+    # dynamic "Test Call Parameters" modal). Real production calls never carry this
+    # metadata key, so this is a no-op for them.
+    _extra_pre_call_params = _room_meta_raw.get("pre_call_params")
+    if isinstance(_extra_pre_call_params, dict):
+        _pre_call_params = {**_pre_call_params, **_extra_pre_call_params}
     try:
         _pre_results = await run_lifecycle_functions(
             _functions, "pre_call", _pre_call_params,

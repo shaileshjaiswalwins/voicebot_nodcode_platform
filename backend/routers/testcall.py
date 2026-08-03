@@ -42,6 +42,7 @@ async def start_test_call(payload: TestCallStartRequest, user: dict = Depends(re
             "buyer_name": payload.buyer_name,
             "city": payload.city,
             "custom_lead_json": payload.custom_lead_json,
+            "pre_call_params": payload.pre_call_params,
             "test_mode": True,
         }
     )

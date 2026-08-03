@@ -1,20 +1,28 @@
+import csv
+import io
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 
 from ..audit import log_audit
 from ..auth import require_user
-from ..db import bot_versions, bots
+from ..db import bot_versions, bots, transcripts
+from ..llm_chat import bot_reply, simulate_turn
 from ..models import (
     BotConfig,
     BotCreate,
     BotUpdateConfig,
     CompileFlowPreviewRequest,
     FunctionTestRequest,
+    GeneratePromptRequest,
+    LlmChatReplyRequest,
+    LlmChatSimulateRequest,
 )
+from ..prompt_assist import generate_prompt
 
 # flow_compiler.py lives at the repo root (shared with bot.py/bot_pipeline.py/bot_dev.py),
 # not inside the backend/ package. Import defensively: in a deployment that only ships
@@ -60,12 +68,13 @@ def _serialize_version(doc: dict) -> dict:
 
 
 def _empty_summary() -> dict:
-    return {"agent_name": "", "bot_type": "standard"}
+    return {"agent_name": "", "bot_type": "standard", "tags": []}
 
 
-@router.get("")
-def list_bots(_: dict = Depends(require_user)) -> list[dict]:
-    bot_docs = list(bots.find({"status": {"$ne": "deleted"}}))
+def _list_bots_by_status(status_filter: dict) -> list[dict]:
+    """Shared by the active list and the Recently Deleted panel — same version/call-count
+    enrichment either way, just a different Mongo status filter."""
+    bot_docs = list(bots.find(status_filter).sort("updated_at", -1))
 
     # Agent name + bot type live on the version doc, not the bot doc. Batch-fetch every
     # referenced version in one query instead of one find_one() per bot — with N bots that
@@ -82,25 +91,122 @@ def list_bots(_: dict = Depends(require_user)) -> list[dict]:
     summary_by_version_id = {}
     if version_ids:
         for v in bot_versions.find(
-            {"_id": {"$in": version_ids}}, {"config.agent_name": 1, "config.bot_type": 1}
+            {"_id": {"$in": version_ids}}, {"config.agent_name": 1, "config.bot_type": 1, "config.tags": 1}
         ):
             config = v.get("config") or {}
             summary_by_version_id[str(v["_id"])] = {
                 "agent_name": config.get("agent_name", ""),
                 "bot_type": config.get("bot_type") or "standard",
+                "tags": config.get("tags") or [],
             }
+
+    bot_ids = [str(b["_id"]) for b in bot_docs]
+
+    # Call counts (all-time), one aggregation instead of the frontend filtering whatever page
+    # of transcripts it happened to have loaded (that count was silently capped at the
+    # transcripts view's own fetch limit and wrong for every bot with more calls than that).
+    call_counts: dict[str, int] = {}
+    for row in transcripts.aggregate([
+        {"$match": {"bot_id": {"$in": bot_ids}}},
+        {"$group": {"_id": "$bot_id", "count": {"$sum": 1}}},
+    ]):
+        call_counts[row["_id"]] = row["count"]
+
+    # Today's call count + average call duration, grouped by bot — created_at is stored as
+    # an ISO string (see Transcript.created_at), so a string-prefix match against today's
+    # date avoids needing a real date type on every historical transcript doc.
+    today_str = datetime.now(timezone.utc).date().isoformat()
+    calls_today: dict[str, int] = {}
+    avg_duration: dict[str, float] = {}
+    for row in transcripts.aggregate([
+        {"$match": {"bot_id": {"$in": bot_ids}}},
+        {
+            "$group": {
+                "_id": "$bot_id",
+                "avg_duration_sec": {"$avg": "$call_duration_sec"},
+                "calls_today": {
+                    "$sum": {
+                        "$cond": [
+                            {"$eq": [{"$substrCP": ["$created_at", 0, 10]}, today_str]},
+                            1,
+                            0,
+                        ]
+                    }
+                },
+            }
+        },
+    ]):
+        calls_today[row["_id"]] = row["calls_today"]
+        avg_duration[row["_id"]] = row.get("avg_duration_sec") or 0
 
     out = []
     for b in bot_docs:
         vid = b.get("active_version_id") or b.get("draft_version_id")
         summary = summary_by_version_id.get(str(vid)) if vid else None
         summary = summary or _empty_summary()
+        bot_id = str(b["_id"])
         b = _serialize_bot(b)
         b["agent_name"] = summary["agent_name"]  # spoken persona, distinct from the display name above
         b["bot_type"] = summary["bot_type"]
+        b["tags"] = summary["tags"]
         b["published"] = bool(b.get("active_version_id"))
+        b["call_count"] = call_counts.get(bot_id, 0)
+        b["calls_today"] = calls_today.get(bot_id, 0)
+        b["avg_duration_sec"] = round(avg_duration.get(bot_id, 0) or 0, 1)
         out.append(b)
     return out
+
+
+@router.get("")
+def list_bots(_: dict = Depends(require_user)) -> list[dict]:
+    return _list_bots_by_status({"status": {"$ne": "deleted"}})
+
+
+@router.get("/deleted")
+def list_deleted_bots(_: dict = Depends(require_user)) -> list[dict]:
+    """Recently Deleted panel — bots are soft-deleted (status='deleted', see delete_bot
+    below), never actually removed, so this is just the mirror-image filter of list_bots."""
+    return _list_bots_by_status({"status": "deleted"})
+
+
+@router.post("/{bot_id}/restore")
+def restore_bot(bot_id: str, user: dict = Depends(require_user)) -> dict:
+    result = bots.update_one(
+        {"_id": _oid(bot_id), "status": "deleted"},
+        {"$set": {"status": "active"}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(404, "Deleted bot not found")
+    log_audit(user, "restore", "bot", bot_id)
+    return {"ok": True}
+
+
+@router.get("/export")
+def export_bots(_: dict = Depends(require_user)) -> Response:
+    """CSV export of every active (non-deleted) agent — name, type, lifecycle, tags, calls,
+    last updated. Mirrors list_bots' own enrichment so the export always matches what the
+    Agents page currently shows."""
+    rows = _list_bots_by_status({"status": {"$ne": "deleted"}})
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["Name", "Agent name", "Type", "Published", "Tags", "Calls (total)", "Calls (today)", "Avg duration (s)", "Last updated"])
+    for b in rows:
+        writer.writerow([
+            b.get("name", ""),
+            b.get("agent_name", ""),
+            b.get("bot_type", "standard"),
+            "yes" if b.get("published") else "no",
+            "|".join(b.get("tags") or []),
+            b.get("call_count", 0),
+            b.get("calls_today", 0),
+            b.get("avg_duration_sec", 0),
+            b.get("updated_at", ""),
+        ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=agents.csv"},
+    )
 
 
 @router.post("")
@@ -145,6 +251,52 @@ def get_bot(bot_id: str, _: dict = Depends(require_user)) -> dict:
         raise HTTPException(404, "Bot not found")
     versions = list(bot_versions.find({"bot_id": _oid(bot_id)}).sort("version", -1))
     return {"bot": _serialize_bot(bot), "versions": [_serialize_version(v) for v in versions]}
+
+
+@router.post("/{bot_id}/generate-prompt")
+def generate_bot_prompt(bot_id: str, payload: GeneratePromptRequest, _: dict = Depends(require_user)) -> dict:
+    """AI-assist for the Prompt tab: mode='generate' writes a system_prompt from scratch off a
+    free-text description; mode='refine' applies only the described change to the existing
+    system_prompt, leaving the rest untouched. Bot lookup is just an existence/auth check —
+    the actual prompt text lives in payload, not in a stored version."""
+    if not bots.find_one({"_id": _oid(bot_id)}):
+        raise HTTPException(404, "Bot not found")
+    if payload.mode == "refine" and not payload.current_prompt.strip():
+        raise HTTPException(400, "current_prompt is required for mode='refine'")
+    try:
+        result = generate_prompt(payload.mode, payload.instruction, payload.current_prompt)
+    except Exception as exc:
+        raise HTTPException(502, f"Prompt generation failed: {exc}") from exc
+    return {"system_prompt": result}
+
+
+@router.post("/{bot_id}/llm-chat/reply")
+def llm_chat_reply(bot_id: str, payload: LlmChatReplyRequest, _: dict = Depends(require_user)) -> dict:
+    """Test LLM > Manual Chat: one text reply from the bot's LLM, no LiveKit/voice involved.
+    Stateless — the tester's client resends the full history each call."""
+    if not bots.find_one({"_id": _oid(bot_id)}):
+        raise HTTPException(404, "Bot not found")
+    try:
+        text = bot_reply(payload.system_prompt, payload.history, payload.dynamic_variables, payload.function_mocks)
+    except Exception as exc:
+        raise HTTPException(502, f"LLM chat failed: {exc}") from exc
+    return {"text": text}
+
+
+@router.post("/{bot_id}/llm-chat/simulate-turn")
+def llm_chat_simulate_turn(bot_id: str, payload: LlmChatSimulateRequest, _: dict = Depends(require_user)) -> dict:
+    """Test LLM > AI Simulated Chat: advances the LLM-vs-LLM simulation by one caller-then-bot
+    turn per call, so the frontend can render each pair live instead of waiting for a full
+    transcript like evals.run_scenario does."""
+    if not bots.find_one({"_id": _oid(bot_id)}):
+        raise HTTPException(404, "Bot not found")
+    try:
+        result = simulate_turn(
+            payload.system_prompt, payload.caller_persona, payload.history, payload.dynamic_variables, payload.function_mocks
+        )
+    except Exception as exc:
+        raise HTTPException(502, f"Simulated chat failed: {exc}") from exc
+    return result
 
 
 @router.get("/{bot_id}/functions")

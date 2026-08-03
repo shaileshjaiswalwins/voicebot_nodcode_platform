@@ -235,6 +235,8 @@ class BotConfig(BaseModel):
 
     organization_name: str = ""
     agent_name: str = ""
+    # Agents-page filter/organization only — never read by the call pipeline.
+    tags: list[str] = Field(default_factory=list)
     # Persona gender. Hindi conjugates first-person verbs by speaker gender, so this drives
     # both the opening line's verb (बोल रही हूँ / बोल रहा हूँ) and the prompt's gender rule.
     persona_gender: Literal["female", "male"] = "female"
@@ -574,6 +576,10 @@ class TestCallStartRequest(BaseModel):
     city: str = ""
     test_worker_agent_name: str = ""
     custom_lead_json: str = ""
+    # Tester-seeded overrides for the bot's own pre_call functions' query_params, keyed by
+    # param name (flat across all pre_call functions — matches how bot.py's _pre_call_params
+    # already merges lead_id/mobile/call_id into every pre_call function's request args).
+    pre_call_params: dict[str, str] = Field(default_factory=dict)
 
 
 class TestCallStopRequest(BaseModel):
@@ -596,6 +602,41 @@ class EvalScenario(BaseModel):
 class EvalRunRequest(BaseModel):
     version_id: str = ""  # empty = current draft
     scenarios: list[EvalScenario] = Field(default_factory=list)  # empty = built-in defaults
+
+
+class GeneratePromptRequest(BaseModel):
+    mode: Literal["generate", "refine"]
+    instruction: str
+    current_prompt: str = ""  # only used/required when mode == "refine"
+
+
+class ChatTurn(BaseModel):
+    role: Literal["user", "bot"]
+    text: str
+
+
+class LlmChatReplyRequest(BaseModel):
+    """Manual Chat: tester talks to the bot's LLM directly (no LiveKit/voice). Stateless —
+    the full turn history is resent by the client every call, so nothing is persisted
+    server-side."""
+
+    system_prompt: str
+    history: list[ChatTurn] = Field(default_factory=list)
+    dynamic_variables: dict[str, str] = Field(default_factory=dict)
+    function_mocks: dict[str, str] = Field(default_factory=dict)
+
+
+class LlmChatSimulateRequest(BaseModel):
+    """AI Simulated Chat: one call advances the LLM-vs-LLM simulation by exactly one
+    caller-then-bot turn, so the frontend can render each pair as it arrives instead of
+    waiting for the whole conversation to finish (see evals.run_scenario, which only
+    returns a full transcript at the end — this is the turn-by-turn sibling of that)."""
+
+    system_prompt: str
+    caller_persona: str
+    history: list[ChatTurn] = Field(default_factory=list)
+    dynamic_variables: dict[str, str] = Field(default_factory=dict)
+    function_mocks: dict[str, str] = Field(default_factory=dict)
 
 
 PhoneEnvironment = Literal["dev", "preprod", "prod"]
