@@ -264,6 +264,16 @@ class BotConfig(BaseModel):
     # since each node is otherwise its own independent LiveKit Agent.
     global_prompt: str = ""
 
+    # Optional per-bot override of the global post-call analysis prompt
+    # (backend/analysis_prompts.py's CALL_ANALYSIS_KEY template, edited by default on the
+    # Library page). Empty string (the default) means "use the global prompt" — this is
+    # NOT a supplementary note, it fully replaces the template for this bot's calls, so it
+    # must still satisfy every REQUIRED_PLACEHOLDERS[CALL_ANALYSIS_KEY] placeholder and
+    # emit the same JSON schema the callback worker parses. Validated with the exact same
+    # rules as the global editor at save time (backend/routers/bots.py's update_version) —
+    # never validate this yourself elsewhere, call analysis_prompts.validate_prompt_template.
+    analysis_prompt: str = ""
+
     # Real bot_pipeline.py runtime knobs (backend/evals.py:307-323).
     temperature: float = 0.4
     function_calling: bool = False
@@ -608,6 +618,15 @@ class GeneratePromptRequest(BaseModel):
     mode: Literal["generate", "refine"]
     instruction: str
     current_prompt: str = ""  # only used/required when mode == "refine"
+    # Which field this powers — system_prompt (default, back-compat), closing_line, or
+    # analysis_prompt. See prompt_assist.generate_prompt for the per-target framing.
+    target: Literal["system_prompt", "closing_line", "analysis_prompt"] = "system_prompt"
+
+
+class GenerateAgentRequest(BaseModel):
+    """Create Agent > Create with AI: a free-text description of the agent to build."""
+
+    description: str
 
 
 class ChatTurn(BaseModel):

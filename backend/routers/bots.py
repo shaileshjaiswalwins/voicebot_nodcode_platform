@@ -1,13 +1,14 @@
 import csv
 import io
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
+from ..analysis_prompts import CALL_ANALYSIS_KEY, validate_prompt_template
 from ..audit import log_audit
 from ..auth import require_user
 from ..db import bot_versions, bots, transcripts
@@ -18,11 +19,12 @@ from ..models import (
     BotUpdateConfig,
     CompileFlowPreviewRequest,
     FunctionTestRequest,
+    GenerateAgentRequest,
     GeneratePromptRequest,
     LlmChatReplyRequest,
     LlmChatSimulateRequest,
 )
-from ..prompt_assist import generate_prompt
+from ..prompt_assist import generate_agent_from_description, generate_prompt
 
 # flow_compiler.py lives at the repo root (shared with bot.py/bot_pipeline.py/bot_dev.py),
 # not inside the backend/ package. Import defensively: in a deployment that only ships
@@ -47,6 +49,19 @@ except ImportError:
     build_http_call = None
 
 router = APIRouter(prefix="/api/bots", tags=["bots"])
+
+
+def _validate_config_analysis_prompt(config: BotConfig) -> None:
+    """A per-bot analysis_prompt override fully replaces the global template (not a
+    supplement), so a bad one silently breaks post-call analysis for every future call
+    on that bot. Enforce the same required-placeholder/JSON-schema contract the global
+    Library editor enforces, at every site a BotConfig gets saved."""
+    if not config.analysis_prompt.strip():
+        return
+    try:
+        validate_prompt_template(CALL_ANALYSIS_KEY, config.analysis_prompt)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(400, f"Invalid analysis_prompt: {e}")
 
 
 def _oid(id_str: str) -> ObjectId:
@@ -173,7 +188,7 @@ def list_deleted_bots(_: dict = Depends(require_user)) -> list[dict]:
 def restore_bot(bot_id: str, user: dict = Depends(require_user)) -> dict:
     result = bots.update_one(
         {"_id": _oid(bot_id), "status": "deleted"},
-        {"$set": {"status": "active"}},
+        {"$set": {"status": "active"}, "$unset": {"deleted_at": ""}},
     )
     if result.matched_count == 0:
         raise HTTPException(404, "Deleted bot not found")
@@ -214,6 +229,7 @@ def create_bot(payload: BotCreate, user: dict = Depends(require_user)) -> dict:
     name = payload.name.strip()
     if not name:
         raise HTTPException(400, "Name is required")
+    _validate_config_analysis_prompt(payload.config)
 
     now = datetime.now(timezone.utc).isoformat()
     bot_doc = {
@@ -244,6 +260,20 @@ def create_bot(payload: BotCreate, user: dict = Depends(require_user)) -> dict:
     return _serialize_bot(bot_doc)
 
 
+@router.post("/generate-agent")
+def generate_agent(payload: GenerateAgentRequest, _: dict = Depends(require_user)) -> dict:
+    """Create Agent > Create with AI: derives agent_name/initial_message/system_prompt from a
+    free-text description, before any bot exists yet — no bot_id lookup needed. The caller
+    (frontend) merges the result into defaultConfig and calls the normal create_bot endpoint."""
+    if not payload.description.strip():
+        raise HTTPException(400, "description is required")
+    try:
+        result = generate_agent_from_description(payload.description)
+    except Exception as exc:
+        raise HTTPException(502, f"Agent generation failed: {exc}") from exc
+    return result
+
+
 @router.get("/{bot_id}")
 def get_bot(bot_id: str, _: dict = Depends(require_user)) -> dict:
     bot = bots.find_one({"_id": _oid(bot_id)})
@@ -261,13 +291,16 @@ def generate_bot_prompt(bot_id: str, payload: GeneratePromptRequest, _: dict = D
     the actual prompt text lives in payload, not in a stored version."""
     if not bots.find_one({"_id": _oid(bot_id)}):
         raise HTTPException(404, "Bot not found")
-    if payload.mode == "refine" and not payload.current_prompt.strip():
+    # analysis_prompt has no from-scratch mode (see prompt_assist.generate_prompt's docstring)
+    # — it always refines current_prompt (or the shared default template if that's blank), so
+    # the mode=='refine'-only guard below doesn't apply to it.
+    if payload.mode == "refine" and payload.target != "analysis_prompt" and not payload.current_prompt.strip():
         raise HTTPException(400, "current_prompt is required for mode='refine'")
     try:
-        result = generate_prompt(payload.mode, payload.instruction, payload.current_prompt)
+        result = generate_prompt(payload.mode, payload.instruction, payload.current_prompt, payload.target)
     except Exception as exc:
         raise HTTPException(502, f"Prompt generation failed: {exc}") from exc
-    return {"system_prompt": result}
+    return {"text": result}
 
 
 @router.post("/{bot_id}/llm-chat/reply")
@@ -359,6 +392,7 @@ def save_draft(bot_id: str, payload: BotUpdateConfig, _: dict = Depends(require_
     bot = bots.find_one({"_id": _oid(bot_id)})
     if not bot:
         raise HTTPException(404, "Bot not found")
+    _validate_config_analysis_prompt(payload.config)
     version_id = _fork_new_draft(bot_id, payload.config.model_dump())
     return {"draft_version_id": version_id}
 
@@ -372,8 +406,14 @@ def update_version(bot_id: str, version_id: str, payload: BotUpdateConfig, _: di
         raise HTTPException(404, "Version not found")
     if version["state"] != "draft":
         raise HTTPException(400, "Cannot edit a published version in place — use rollback to fork a new draft")
+    _validate_config_analysis_prompt(payload.config)
     now = datetime.now(timezone.utc).isoformat()
     bot_versions.update_one({"_id": _oid(version_id)}, {"$set": {"config": payload.config.model_dump(), "updated_at": now}})
+    # Editing a draft's config is the most common "edit a bot" action but only touches the
+    # bot_versions doc — bump the parent bots doc too so "sort agents by last updated"
+    # (list_bots' .sort("updated_at", -1)) reflects config-only edits, not just
+    # rename/publish/unpublish actions that already set this field elsewhere.
+    bots.update_one({"_id": _oid(bot_id)}, {"$set": {"updated_at": now}})
     return {"draft_version_id": version_id}
 
 
@@ -542,12 +582,129 @@ async def test_custom_function(
     return result
 
 
+@router.get("/{bot_id}/metrics")
+def bot_metrics(bot_id: str, days: int = 7, _: dict = Depends(require_user)) -> dict:
+    """Per-bot metrics for the builder's Metrics tab.
+
+    success_rate_pct definition: "% of calls where status == 'completed'" — there is no
+    clean stored pass/fail field on a transcript, so this mirrors the same status-based
+    "ended naturally" heuristic already used by analytics.outcome_analytics()
+    (backend/routers/analytics.py: `doc.get("call_end_reason") == "natural" or
+    status == "completed"`), simplified to just the status check since call_end_reason
+    isn't consistently populated across bots. This is a first-pass definition, not a
+    guaranteed business-accurate "success" metric.
+    """
+    if not bots.find_one({"_id": _oid(bot_id)}):
+        raise HTTPException(404, "Bot not found")
+    if days not in (7, 30):
+        days = 7
+
+    now = datetime.now(timezone.utc)
+    today_str = now.date().isoformat()
+    window_start = now - timedelta(days=days)
+    prev_window_start = now - timedelta(days=days * 2)
+
+    def _count_and_success(start, end) -> tuple[int, int]:
+        match = {"bot_id": bot_id, "created_at": {"$gte": start.isoformat()}}
+        if end is not None:
+            match["created_at"]["$lt"] = end.isoformat()
+        total = 0
+        completed = 0
+        for row in transcripts.aggregate([
+            {"$match": match},
+            {"$group": {
+                "_id": None,
+                "total": {"$sum": 1},
+                "completed": {"$sum": {"$cond": [{"$eq": ["$status", "completed"]}, 1, 0]}},
+            }},
+        ]):
+            total = row.get("total", 0)
+            completed = row.get("completed", 0)
+        return total, completed
+
+    total_calls_all_time = transcripts.count_documents({"bot_id": bot_id})
+    calls_today = transcripts.count_documents({"bot_id": bot_id, "created_at": {"$gte": today_str}})
+    calls_this_week = transcripts.count_documents({"bot_id": bot_id, "created_at": {"$gte": (now - timedelta(days=7)).isoformat()}})
+    calls_this_month = transcripts.count_documents({"bot_id": bot_id, "created_at": {"$gte": (now - timedelta(days=30)).isoformat()}})
+
+    window_total, window_completed = _count_and_success(window_start, None)
+    prev_total, prev_completed = _count_and_success(prev_window_start, window_start)
+
+    success_rate_pct = round((window_completed / window_total) * 100, 1) if window_total else 0.0
+    prev_success_rate_pct = round((prev_completed / prev_total) * 100, 1) if prev_total else 0.0
+
+    def _trend_pct(current: float, previous: float) -> float | None:
+        if not previous:
+            return None
+        return round(((current - previous) / previous) * 100, 1)
+
+    trend_total_calls_pct = _trend_pct(window_total, prev_total)
+    trend_success_rate_pct = _trend_pct(success_rate_pct, prev_success_rate_pct)
+
+    avg_duration_sec = 0.0
+    for row in transcripts.aggregate([
+        {"$match": {"bot_id": bot_id, "created_at": {"$gte": window_start.isoformat()}}},
+        {"$group": {"_id": None, "avg_duration_sec": {"$avg": "$call_duration_sec"}}},
+    ]):
+        avg_duration_sec = round(row.get("avg_duration_sec") or 0, 1)
+
+    # Per-day volume + avg duration over the window, for the two trend charts.
+    daily_volume_by_date: dict[str, int] = {}
+    daily_duration_by_date: dict[str, float] = {}
+    for row in transcripts.aggregate([
+        {"$match": {"bot_id": bot_id, "created_at": {"$gte": window_start.isoformat()}}},
+        {"$group": {
+            "_id": {"$substrCP": ["$created_at", 0, 10]},
+            "count": {"$sum": 1},
+            "avg_duration_sec": {"$avg": "$call_duration_sec"},
+        }},
+    ]):
+        daily_volume_by_date[row["_id"]] = row["count"]
+        daily_duration_by_date[row["_id"]] = round(row.get("avg_duration_sec") or 0, 1)
+
+    daily_volume = []
+    daily_avg_duration = []
+    for i in range(days):
+        d = (window_start + timedelta(days=i)).date().isoformat()
+        daily_volume.append({"date": d, "count": daily_volume_by_date.get(d, 0)})
+        daily_avg_duration.append({"date": d, "avg_duration_sec": daily_duration_by_date.get(d, 0.0)})
+
+    outcome_breakdown = []
+    for row in transcripts.aggregate([
+        {"$match": {"bot_id": bot_id, "created_at": {"$gte": window_start.isoformat()}}},
+        {"$group": {"_id": {"$ifNull": ["$analysis.call_outcome", "unclassified"]}, "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+    ]):
+        outcome_breakdown.append({"outcome": row["_id"] or "unclassified", "count": row["count"]})
+
+    return {
+        "total_calls": total_calls_all_time,
+        "calls_today": calls_today,
+        "calls_this_week": calls_this_week,
+        "calls_this_month": calls_this_month,
+        "avg_duration_sec": avg_duration_sec,
+        "success_rate_pct": success_rate_pct,
+        "trend_vs_previous_pct": {
+            "total_calls": trend_total_calls_pct,
+            "success_rate": trend_success_rate_pct,
+        },
+        "daily_volume": daily_volume,
+        "daily_avg_duration": daily_avg_duration,
+        "outcome_breakdown": outcome_breakdown,
+    }
+
+
 @router.delete("/{bot_id}")
 def delete_bot(bot_id: str, user: dict = Depends(require_user)) -> dict:
     """Soft delete only — never removes the bot or its transcripts (audit item 6/22)."""
     result = bots.update_one(
         {"_id": _oid(bot_id)},
-        {"$set": {"status": "deleted", "active_version_id": None, "draft_version_id": None}},
+        {"$set": {
+            "status": "deleted",
+            "active_version_id": None,
+            "draft_version_id": None,
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
+        }},
     )
     if result.matched_count == 0:
         raise HTTPException(404, "Bot not found")
