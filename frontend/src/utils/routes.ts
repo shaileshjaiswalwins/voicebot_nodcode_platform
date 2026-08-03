@@ -1,6 +1,7 @@
 import type { View } from '../types';
 
 export type RouteState =
+  | { view: 'dashboard' }
   | { view: 'bots'; botId: string }
   | { view: 'flow' }
   | { view: 'campaigns'; campaignKey: string }
@@ -9,13 +10,13 @@ export type RouteState =
   | { view: 'test' }
   | { view: 'transcripts'; transcriptId: string }
   | { view: 'analytics' }
-  | { view: 'observability' }
   | { view: 'library' }
   | { view: 'settings' }
   | { view: 'audit_log' }
   | { view: 'admin' };
 
 const VIEW_TO_SEGMENT: Record<View, string> = {
+  dashboard: 'dashboard',
   bots: 'agents',
   builder: 'agents',
   flow: 'flow',
@@ -25,7 +26,6 @@ const VIEW_TO_SEGMENT: Record<View, string> = {
   test: 'test',
   transcripts: 'transcripts',
   analytics: 'analytics',
-  observability: 'observability',
   library: 'library',
   settings: 'settings',
   audit_log: 'audit-log',
@@ -33,6 +33,7 @@ const VIEW_TO_SEGMENT: Record<View, string> = {
 };
 
 const SEGMENT_TO_VIEW: Record<string, View> = {
+  dashboard: 'dashboard',
   agents: 'bots',
   flow: 'flow',
   campaigns: 'campaigns',
@@ -41,7 +42,6 @@ const SEGMENT_TO_VIEW: Record<string, View> = {
   test: 'test',
   transcripts: 'transcripts',
   analytics: 'analytics',
-  observability: 'observability',
   library: 'library',
   settings: 'settings',
   'audit-log': 'audit_log',

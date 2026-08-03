@@ -5,11 +5,9 @@ import {
   BookOpen,
   Bot,
   CheckCircle2,
-  ClipboardList,
   Clock3,
   FileText,
-  IndianRupee,
-  Link2,
+  LayoutDashboard,
   Megaphone,
   Phone,
   PhoneCall,
@@ -117,24 +115,23 @@ export const STATUS_ICONS: Record<string, React.ReactNode> = {
 export type CmdKViewResult = { kind: 'view'; view: View; label: string; icon: React.ReactNode; description?: string };
 
 export const CMD_VIEWS: CmdKViewResult[] = [
+  { kind: 'view', view: 'dashboard',     label: 'Dashboard',     icon: <LayoutDashboard size={15} />, description: 'Landing overview across all agents' },
   { kind: 'view', view: 'bots',          label: 'Agents',        icon: <Bot size={15} />,          description: 'Manage voice agents' },
   { kind: 'view', view: 'campaigns',     label: 'Campaigns',     icon: <Megaphone size={15} />,    description: 'Campaign mappings' },
-  { kind: 'view', view: 'phone_numbers', label: 'Phone Numbers', icon: <Phone size={15} />,        description: 'Number-to-bot routing' },
-  { kind: 'view', view: 'number_mapping', label: 'Number Mapping', icon: <Link2 size={15} />,      description: 'Map agents to numbers' },
-  { kind: 'view', view: 'test',          label: 'Test Call',     icon: <PhoneCall size={15} />,    description: 'Run a browser call' },
+  { kind: 'view', view: 'phone_numbers', label: 'Numbers',       icon: <Phone size={15} />,        description: 'Number-to-bot routing and mapping' },
+  // Test Call is deliberately absent: testing an agent now happens in that agent's
+  // workspace (a docked rail beside the prompt), not on a separate screen you have to
+  // navigate to and re-select the agent on. /test still resolves — it redirects there.
   { kind: 'view', view: 'transcripts',   label: 'Transcripts',   icon: <FileText size={15} />,     description: 'Browse call transcripts' },
   { kind: 'view', view: 'analytics',     label: 'Analytics',     icon: <BarChart2 size={15} />,    description: 'Outcomes and quality' },
   { kind: 'view', view: 'library',       label: 'Library',       icon: <BookOpen size={15} />,     description: 'Phrase library' },
-  { kind: 'view', view: 'settings',      label: 'Settings',      icon: <Settings size={15} />,     description: 'Runtime settings' },
-  { kind: 'view', view: 'audit_log',     label: 'Audit Log',     icon: <ClipboardList size={15} />, description: 'Admin mutation history' },
-  { kind: 'view', view: 'admin',         label: 'Admin',         icon: <IndianRupee size={15} />,  description: 'Model pricing (₹/min)' },
+  { kind: 'view', view: 'settings',      label: 'Settings',      icon: <Settings size={15} />,     description: 'Runtime settings, diagnostics, audit log, admin' },
 ];
 
 export const SHORTCUT_MAP: Array<{ key: string; view: View; label: string }> = [
   { key: 'b', view: 'bots',          label: 'Go to Agents' },
   { key: 'c', view: 'campaigns',     label: 'Go to Campaigns' },
-  { key: 'p', view: 'phone_numbers', label: 'Go to Phone Numbers' },
-  { key: 't', view: 'test',          label: 'Go to Test Call' },
+  { key: 'p', view: 'phone_numbers', label: 'Go to Numbers' },
   { key: 'x', view: 'transcripts',   label: 'Go to Transcripts' },
   { key: 'a', view: 'analytics',     label: 'Go to Analytics' },
 ];

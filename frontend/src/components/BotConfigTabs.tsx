@@ -1,10 +1,14 @@
-import React, { useEffect, useState } from 'react';
-import { AlertTriangle, Database } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Activity, AlertTriangle, Database, Sparkles } from 'lucide-react';
 import type { RuntimeConfig, CustomFunction, FunctionTestResult } from '../types';
-import type { LanguageOption, PricingConfig, PricingModelEntry } from '../api';
+import type { BotMetrics, LanguageOption, PricingConfig, PricingModelEntry } from '../api';
+import { api } from '../api';
+import { EmptyState } from './EmptyState';
+import { MiniBarChart, MiniLineChart } from './MiniCharts';
 import { SARVAM_TTS_VOICES, SARVAM_TTS_LANGUAGES, TTS_PROVIDER_MODEL_KEY } from '../constants/ui';
 import { CustomFunctionsEditor } from './CustomFunctionsEditor';
 import { CloseMarkersEditor } from './CloseMarkersEditor';
+import { ChipListEditor } from './ChipListEditor';
 import { ProviderOptionsEditor } from './ProviderOptionsEditor';
 import { CostEstimateStrip } from './CostEstimateStrip';
 import { WorkflowBuilderView } from '../views/WorkflowBuilderView';
@@ -12,9 +16,10 @@ import { SARVAM_STT_FIELDS, SARVAM_TTS_FIELDS, GEMINI_LLM_FIELDS } from '../cons
 import type { ParamField } from '../constants/providerParams';
 import type { AgentCostEstimate } from '../utils/agentCost';
 
-export type BuilderTab = 'agent' | 'speed' | 'stt' | 'tts' | 'llm' | 'functions' | 'workflow' | 'advanced';
+export type BuilderTab = 'metrics' | 'agent' | 'speed' | 'stt' | 'tts' | 'llm' | 'functions' | 'workflow' | 'advanced';
 
 const TABS: { id: BuilderTab; label: string }[] = [
+  { id: 'metrics', label: 'Metrics' },
   { id: 'agent', label: 'Agent' },
   { id: 'speed', label: 'Speed' },
   { id: 'stt', label: 'STT' },
@@ -25,8 +30,221 @@ const TABS: { id: BuilderTab; label: string }[] = [
   { id: 'advanced', label: 'Advanced' },
 ];
 
-/** Tabbed bot settings (retell.ai-style): Agent · Speed · STT · TTS · LLM · Functions ·
- * Advanced. Every field is per-bot and versioned via the parent's onUpdateConfig. */
+/** Metrics tab content — per-bot call performance over a selectable window. Needs a saved
+ * bot_id (transcripts are keyed by it), so it shows a "save this agent first" notice for a
+ * not-yet-created bot, matching how other botId-dependent features in this file degrade
+ * (see the Functions tab's `botId` guard below). */
+function MetricsTab({ botId }: { botId?: string }) {
+  const [days, setDays] = useState<7 | 30>(7);
+  const [metrics, setMetrics] = useState<BotMetrics | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!botId) return;
+    let cancelled = false;
+    setLoading(true);
+    setError('');
+    api.botMetrics(botId, days)
+      .then((m) => { if (!cancelled) setMetrics(m); })
+      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load metrics.'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [botId, days]);
+
+  if (!botId) {
+    return (
+      <div role="tabpanel">
+        <div className="notice" style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
+          <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
+          <span>Save this agent first — metrics need a saved agent ID to look up call history.</span>
+        </div>
+      </div>
+    );
+  }
+
+  const fmtTrend = (v: number | null) => v === null ? '—' : `${v >= 0 ? '+' : ''}${v}% vs previous ${days}d`;
+
+  return (
+    <div role="tabpanel">
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.75rem' }}>
+        <select value={days} onChange={(e) => setDays(Number(e.target.value) as 7 | 30)}>
+          <option value={7}>Last 7 Days</option>
+          <option value={30}>Last 30 Days</option>
+        </select>
+      </div>
+
+      {error && <div className="notice error" role="alert">{error}</div>}
+      {loading && !metrics && <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading…</p>}
+
+      {metrics && metrics.total_calls === 0 ? (
+        <EmptyState
+          icon={<Activity size={32} />}
+          heading="No calls yet"
+          description="This agent hasn't been called yet — metrics will appear here once it has."
+        />
+      ) : metrics && (
+        <>
+          <div className="metric-board" style={{ marginBottom: '12px' }}>
+            <div className="metric">
+              <span>Total calls</span>
+              <strong>{metrics.total_calls}</strong>
+              <small style={{ fontWeight: 400, fontSize: '0.75rem' }}>{fmtTrend(metrics.trend_vs_previous_pct.total_calls)}</small>
+            </div>
+            <div className="metric">
+              <span>Success rate</span>
+              <strong>{metrics.success_rate_pct}%</strong>
+              <small style={{ fontWeight: 400, fontSize: '0.75rem' }}>{fmtTrend(metrics.trend_vs_previous_pct.success_rate)}</small>
+            </div>
+            <div className="metric">
+              <span>Avg duration</span>
+              <strong>{metrics.avg_duration_sec}s</strong>
+            </div>
+          </div>
+          <div className="metric-board" style={{ marginBottom: '16px' }}>
+            <div className="metric"><span>Calls today</span><strong>{metrics.calls_today}</strong></div>
+            <div className="metric"><span>Calls this week</span><strong>{metrics.calls_this_week}</strong></div>
+            <div className="metric"><span>Calls this month</span><strong>{metrics.calls_this_month}</strong></div>
+          </div>
+
+          <div className="content-grid two-col" style={{ marginBottom: '16px' }}>
+            <div className="panel">
+              <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Volume Trends</h3>
+              <MiniBarChart data={metrics.daily_volume.map(d => ({ label: d.date.slice(5), value: d.count }))} />
+            </div>
+            <div className="panel">
+              <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Duration Trends</h3>
+              <MiniLineChart data={metrics.daily_avg_duration.map(d => ({ label: d.date.slice(5), value: d.avg_duration_sec }))} unit="s" />
+            </div>
+          </div>
+
+          {metrics.outcome_breakdown.length > 0 && (
+            <>
+              <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Success Analysis</h3>
+              <div className="detail-list">
+                {metrics.outcome_breakdown.map(({ outcome, count }) => {
+                  const total = metrics.outcome_breakdown.reduce((s, o) => s + o.count, 0) || 1;
+                  return (
+                    <div key={outcome} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ minWidth: '140px', fontSize: '0.82rem' }}>{outcome}</span>
+                      <div style={{ flex: 1, background: 'var(--bg-tertiary)', borderRadius: '3px', height: '8px', overflow: 'hidden' }}>
+                        <div style={{ width: `${(count / total) * 100}%`, background: 'var(--success)', height: '100%', transition: 'width 0.3s' }} />
+                      </div>
+                      <span style={{ fontSize: '0.82rem', minWidth: '40px', textAlign: 'right' }}>{count}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+type PromptAssistTarget = 'system_prompt' | 'closing_line' | 'analysis_prompt';
+
+/** The Sparkles trigger + popover for "Generate/Refine with AI" — originally built just for
+ * System prompt, generalized so Closing line and Analysis prompt override can reuse the exact
+ * same interaction (click Sparkles, describe the change, apply) against their own backend
+ * framing (see backend/prompt_assist.py's per-target instructions). */
+function PromptAssistButton({
+  target,
+  currentText,
+  onGenerate,
+  onApply,
+  generateLabel,
+  refineLabel,
+  generatePlaceholder,
+  refinePlaceholder,
+}: {
+  target: PromptAssistTarget;
+  currentText: string;
+  onGenerate: (mode: 'generate' | 'refine', instruction: string, currentText: string, target: PromptAssistTarget) => Promise<{ text: string }>;
+  onApply: (text: string) => void;
+  generateLabel: string;
+  refineLabel: string;
+  generatePlaceholder: string;
+  refinePlaceholder: string;
+}) {
+  const [instruction, setInstruction] = useState('');
+  const [state, setState] = useState<'idle' | 'running' | 'failed'>('idle');
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  // analysis_prompt always refines (even from blank — see backend docstring); the other two
+  // generate from scratch until there's existing text, then switch to refine.
+  const hasExisting = target === 'analysis_prompt' || Boolean(currentText.trim());
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  const handleGenerate = async () => {
+    if (!instruction.trim()) return;
+    setState('running');
+    setError('');
+    try {
+      const mode = hasExisting ? 'refine' : 'generate';
+      const result = await onGenerate(mode, instruction.trim(), currentText, target);
+      onApply(result.text);
+      setInstruction('');
+      setState('idle');
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Generation failed.');
+      setState('failed');
+    }
+  };
+
+  return (
+    <div className="prompt-assist" ref={ref}>
+      <button
+        type="button"
+        className="prompt-assist-trigger"
+        title={hasExisting ? refineLabel : generateLabel}
+        aria-label={hasExisting ? refineLabel : generateLabel}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Sparkles size={14} />
+      </button>
+      {open && (
+        <div className="prompt-assist-popover">
+          <textarea
+            rows={2}
+            autoFocus
+            placeholder={hasExisting ? refinePlaceholder : generatePlaceholder}
+            value={instruction}
+            disabled={state === 'running'}
+            onChange={(e) => setInstruction(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleGenerate(); } }}
+          />
+          <button type="button" className="primary" disabled={state === 'running' || !instruction.trim()} onClick={handleGenerate}>
+            <Sparkles size={13} /> {state === 'running' ? 'Working…' : hasExisting ? refineLabel : generateLabel}
+          </button>
+          {state === 'failed' && <div className="notice error" role="alert">{error}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Tabbed bot settings (retell.ai-style): Metrics · Agent · Speed · STT · TTS · LLM ·
+ * Functions · Workflow · Advanced. Every field is per-bot and versioned via the parent's
+ * onUpdateConfig, except Metrics which is read-only reporting. */
 export function BotConfigTabs({
   value,
   onUpdateConfig,
@@ -53,7 +271,12 @@ export function BotConfigTabs({
   configError?: string;
   botId?: string;
   onTestFunction?: (fn: CustomFunction, args: Record<string, unknown>) => Promise<FunctionTestResult>;
-  onGeneratePrompt?: (mode: 'generate' | 'refine', instruction: string, currentPrompt: string) => Promise<{ system_prompt: string }>;
+  onGeneratePrompt?: (
+    mode: 'generate' | 'refine',
+    instruction: string,
+    currentPrompt: string,
+    target: 'system_prompt' | 'closing_line' | 'analysis_prompt',
+  ) => Promise<{ text: string }>;
   costEstimate?: AgentCostEstimate | null;
   pricing?: PricingConfig | null;
   /** Lets the workspace shell know when the Workflow tab is active, so it can drop the
@@ -66,25 +289,6 @@ export function BotConfigTabs({
     setTabState(next);
     onTabChange?.(next);
   }
-  const [promptInstruction, setPromptInstruction] = useState('');
-  const [promptAssistState, setPromptAssistState] = useState<'idle' | 'running' | 'failed'>('idle');
-  const [promptAssistError, setPromptAssistError] = useState('');
-  const hasExistingPrompt = Boolean(String(value.system_prompt || '').trim());
-  const handleGeneratePrompt = async () => {
-    if (!onGeneratePrompt || !promptInstruction.trim()) return;
-    setPromptAssistState('running');
-    setPromptAssistError('');
-    try {
-      const mode = hasExistingPrompt ? 'refine' : 'generate';
-      const result = await onGeneratePrompt(mode, promptInstruction.trim(), String(value.system_prompt || ''));
-      onUpdateConfig('system_prompt', result.system_prompt);
-      setPromptInstruction('');
-      setPromptAssistState('idle');
-    } catch (err) {
-      setPromptAssistError(err instanceof Error ? err.message : 'Prompt generation failed.');
-      setPromptAssistState('failed');
-    }
-  };
   // Scoped JSON editor for just the `workflow` graph field (rather than the whole bot's
   // Developer JSON below) — local text state so an operator can type transiently-invalid
   // JSON without it being force-parsed on every keystroke, matching the Developer JSON
@@ -195,6 +399,8 @@ export function BotConfigTabs({
         })}
       </div>
 
+      {tab === 'metrics' && <MetricsTab botId={botId} />}
+
       {tab === 'agent' && (
         <div role="tabpanel">
           <div className="form-grid">
@@ -214,15 +420,16 @@ export function BotConfigTabs({
               <input value={String(value.agent_name || '')} placeholder="e.g. Tarun, Priya, Aman" onChange={(e) => onUpdateConfig('agent_name', e.target.value)} />
               <small>The name the bot introduces itself with — appears in the opening line and system prompt.</small>
             </label>
-            <label title="Free-form labels for organizing/filtering agents on the Agents page — has no effect on call behavior.">
-              Tags
-              <input
-                value={(value.tags as string[] | undefined || []).join(', ')}
-                placeholder="e.g. Hindi, Justdial, Qualification"
-                onChange={(e) => onUpdateConfig('tags', e.target.value.split(',').map((t) => t.trim()).filter(Boolean))}
-              />
-              <small>Comma-separated. Used to filter the Agents page — no effect on the bot itself.</small>
-            </label>
+          </div>
+          <div title="Free-form labels for organizing/filtering agents on the Agents page — has no effect on call behavior.">
+            <ChipListEditor
+              label="Tags"
+              helpText="Used to filter/group the Agents page — no effect on the bot itself. Press Enter to add a tag."
+              placeholder="e.g. Hindi, Justdial, Qualification"
+              emptyText="No tags yet"
+              items={Array.isArray(value.tags) ? (value.tags as string[]) : []}
+              onChange={(v) => onUpdateConfig('tags', v)}
+            />
           </div>
           {isWorkflow && (
             <InertNotice>
@@ -234,44 +441,50 @@ export function BotConfigTabs({
           )}
           <label className="full" style={isWorkflow ? inertFieldStyle : undefined}>
             System prompt
-            {onGeneratePrompt && (
-              <div className="prompt-assist">
-                <input
-                  type="text"
-                  placeholder={hasExistingPrompt ? "Describe the change to make, e.g. \"make the tone more casual\"" : 'Describe the bot you want, e.g. "a friendly agent that qualifies real estate leads"'}
-                  value={promptInstruction}
-                  disabled={promptAssistState === 'running'}
-                  onChange={(e) => setPromptInstruction(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleGeneratePrompt(); } }}
+            <div className="prompt-editor-wrap">
+              <textarea className="prompt-editor prompt-editor-main" value={String(value.system_prompt || '')} onChange={(e) => onUpdateConfig('system_prompt', e.target.value)} />
+              {onGeneratePrompt && (
+                <PromptAssistButton
+                  target="system_prompt"
+                  currentText={String(value.system_prompt || '')}
+                  onGenerate={onGeneratePrompt}
+                  onApply={(text) => onUpdateConfig('system_prompt', text)}
+                  generateLabel="Generate prompt"
+                  refineLabel="Refine prompt"
+                  generatePlaceholder='Describe the bot you want, e.g. "a friendly agent that qualifies real estate leads"'
+                  refinePlaceholder='Describe the change to make, e.g. "make the tone more casual"'
                 />
-                <button
-                  type="button"
-                  disabled={promptAssistState === 'running' || !promptInstruction.trim()}
-                  onClick={handleGeneratePrompt}
-                >
-                  {promptAssistState === 'running' ? 'Working…' : hasExistingPrompt ? 'Refine prompt' : 'Generate prompt'}
-                </button>
-              </div>
-            )}
-            {promptAssistState === 'failed' && (
-              <div className="notice error" role="alert" style={{ marginTop: '0.4rem' }}>{promptAssistError}</div>
-            )}
-            <textarea className="prompt-editor" value={String(value.system_prompt || '')} onChange={(e) => onUpdateConfig('system_prompt', e.target.value)} />
+              )}
+            </div>
           </label>
           <label className="full">
             Analysis prompt override (optional)
-            <textarea
-              className="prompt-editor"
-              placeholder="Leave blank to use the global post-call analysis prompt (Settings → Library)."
-              value={String(value.analysis_prompt || '')}
-              onChange={(e) => onUpdateConfig('analysis_prompt', e.target.value)}
-            />
+            <div className="prompt-editor-wrap">
+              <textarea
+                className="prompt-editor"
+                placeholder="Leave blank to use the global post-call analysis prompt (Settings → Library)."
+                value={String(value.analysis_prompt || '')}
+                onChange={(e) => onUpdateConfig('analysis_prompt', e.target.value)}
+              />
+              {onGeneratePrompt && (
+                <PromptAssistButton
+                  target="analysis_prompt"
+                  currentText={String(value.analysis_prompt || '')}
+                  onGenerate={onGeneratePrompt}
+                  onApply={(text) => onUpdateConfig('analysis_prompt', text)}
+                  generateLabel="Refine analysis prompt"
+                  refineLabel="Refine analysis prompt"
+                  generatePlaceholder='Describe the rule to add or change, e.g. "add a disposition for callback requests"'
+                  refinePlaceholder='Describe the rule to add or change, e.g. "add a disposition for callback requests"'
+                />
+              )}
+            </div>
             <small>
               Runs once after each call ends, to classify the outcome from the saved transcript — unrelated to
               the system prompt above, which only drives the live conversation. Applies to both standard and
-              workflow bots. Leave blank to use the shared default. If set, it fully replaces that default for
-              this bot, so it must still return the exact same JSON fields — same required placeholders as the
-              global editor, enforced on save.
+              workflow bots. Leave blank to use the shared default (AI-assist edits a copy of that default when
+              this field is empty, so the required placeholders/JSON schema are always preserved — enforced on
+              save either way).
             </small>
           </label>
           <div className="form-grid">
@@ -282,7 +495,21 @@ export function BotConfigTabs({
             </label>
             <label title="The bot says this right before hanging up normally." style={isWorkflow ? inertFieldStyle : undefined}>
               Closing line
-              <input value={String(value.call_end_text || '')} placeholder="e.g. Thank you, have a great day!" onChange={(e) => onUpdateConfig('call_end_text', e.target.value)} />
+              <div className="prompt-editor-wrap prompt-editor-wrap-inline">
+                <input value={String(value.call_end_text || '')} placeholder="e.g. Thank you, have a great day!" onChange={(e) => onUpdateConfig('call_end_text', e.target.value)} />
+                {onGeneratePrompt && (
+                  <PromptAssistButton
+                    target="closing_line"
+                    currentText={String(value.call_end_text || '')}
+                    onGenerate={onGeneratePrompt}
+                    onApply={(text) => onUpdateConfig('call_end_text', text)}
+                    generateLabel="Generate closing line"
+                    refineLabel="Refine closing line"
+                    generatePlaceholder='Describe the tone, e.g. "warm and brief, in Hinglish"'
+                    refinePlaceholder="Describe the change, e.g. &quot;mention we'll call back within 24 hours&quot;"
+                  />
+                )}
+              </div>
               <small>Spoken just before the bot ends the call normally.</small>
             </label>
             <label style={isWorkflow ? inertFieldStyle : undefined}>

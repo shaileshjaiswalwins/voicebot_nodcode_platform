@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  AlertTriangle, ChevronRight, Database, GitBranch, Pencil, Plus,
-  Rocket, Save, ShieldCheck
+  AlertTriangle, ChevronRight, Database, GitBranch, History, Info, Pencil, PhoneCall, Plus,
+  Rocket, Save, ShieldCheck, X
 } from 'lucide-react';
 import type { Bot as BotType, BotVersion, LanguageOption, PricingConfig } from '../api';
 import type { RuntimeConfig, BuilderMode } from '../types';
@@ -51,7 +51,7 @@ export function BuilderView({
   liveCallsByVersion,
   builderMode,
   onToggleMode,
-  onConfigTabChange
+  testPanelSlot
 }: {
   selectedBot?: BotType;
   versions: BotVersion[];
@@ -83,7 +83,11 @@ export function BuilderView({
   liveCallsByVersion?: Record<string, number>;
   builderMode?: BuilderMode;
   onToggleMode?: (mode: BuilderMode) => void;
-  onConfigTabChange?: (tab: BuilderConfigTab) => void;
+  /** The Test Audio/Test LLM rail's JSX, built and state-owned by App.tsx (testForm,
+   * testPanelMode, dynamicVariables, etc. all live there already) — passed in as an element
+   * rather than lifting that state up here, so the drawer can host it without duplicating
+   * where that state lives. */
+  testPanelSlot?: React.ReactNode;
 }) {
   const value = config.ok ? config.value : defaultConfig;
   const isAdvanced = builderMode === 'advanced';
@@ -169,14 +173,29 @@ export function BuilderView({
     setRecoveryDraft(null);
   }
 
-  // The Workflow tab's graph canvas is unusable squeezed into a narrow shared column —
-  // when it's active, drop the right-rail (agent details/versions) so it gets full width.
-  const [configTab, setConfigTab] = useState<BuilderConfigTab>('agent');
-  function handleConfigTabChange(next: BuilderConfigTab) {
-    setConfigTab(next);
-    onConfigTabChange?.(next);
-  }
-  const isWorkflowTab = configTab === 'workflow';
+  // Test Agent and Version history are two independent triggers sharing one slide-over
+  // slot — opening either one always closes the other (a single "which content" state
+  // makes that automatic, rather than two independent booleans that could both be true).
+  // Agent details/Cost moved to a separate small info popover instead, since it's a quick
+  // glance, not something you'd want a full panel width for.
+  const [sidePanel, setSidePanel] = useState<'none' | 'test' | 'versions'>('none');
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!detailsOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (detailsRef.current && !detailsRef.current.contains(e.target as Node)) setDetailsOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setDetailsOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [detailsOpen]);
 
   // Auto-save to localStorage (debounced 2s)
   useEffect(() => {
@@ -271,10 +290,63 @@ export function BuilderView({
           >
             <Rocket size={15} /> {publishState === 'failed' ? 'Retry' : publishState === 'running' ? 'Publishing…' : 'Publish'}
           </button>
+          <div className="details-popover-anchor" ref={detailsRef}>
+            <button className={detailsOpen ? 'primary' : ''} onClick={() => setDetailsOpen((v) => !v)} title="Agent details" aria-label="Agent details">
+              <Info size={15} />
+            </button>
+            {detailsOpen && (
+              <div className="details-popover">
+                <div className="panel-header-inline">
+                  <h2>Agent details</h2>
+                  {selectedBot && <CopyableId value={selectedBot._id} label="ID" />}
+                </div>
+                <div className="detail-list">
+                  <Detail label="Owner" value={selectedBot?.owner || 'Unknown'} />
+                  {costEstimate ? (
+                    <>
+                      <CostBreakdownPopover estimate={costEstimate}>
+                        <div className="detail dotted-underline-row">
+                          <span>Cost</span>
+                          <strong className="dotted-underline">₹{costEstimate.totalCostInrPerMin.toFixed(2)}/min</strong>
+                        </div>
+                      </CostBreakdownPopover>
+                      <Detail
+                        label="Latency"
+                        value={
+                          costEstimate.latencyMinMs != null && costEstimate.latencyMaxMs != null
+                            ? `${costEstimate.latencyMinMs}-${costEstimate.latencyMaxMs}ms`
+                            : '-'
+                        }
+                      />
+                      <Detail
+                        label="Tokens"
+                        value={
+                          costEstimate.tokensMin != null && costEstimate.tokensMax != null
+                            ? `${costEstimate.tokensMin} - ${costEstimate.tokensMax >= 1000 ? `${(costEstimate.tokensMax / 1000).toFixed(costEstimate.tokensMax % 1000 === 0 ? 0 : 1)}k` : costEstimate.tokensMax}`
+                            : '-'
+                        }
+                      />
+                    </>
+                  ) : (
+                    <Detail label="Cost" value="Loading…" />
+                  )}
+                  <Detail label="Published versions" value={publishedCount.toString()} />
+                  <Detail label="Active version" value={activeVersion ? `v${activeVersion.version}` : '-'} />
+                  <Detail label="Latest draft" value={latestDraft ? `v${latestDraft.version}` : 'None'} />
+                </div>
+              </div>
+            )}
+          </div>
+          <button className={sidePanel === 'versions' ? 'primary' : ''} onClick={() => setSidePanel((p) => (p === 'versions' ? 'none' : 'versions'))} title="Version history" aria-label="Version history">
+            <History size={15} />
+          </button>
+          <button className={sidePanel === 'test' ? 'primary' : ''} onClick={() => setSidePanel((p) => (p === 'test' ? 'none' : 'test'))}>
+            <PhoneCall size={15} /> Test Agent
+          </button>
         </div>
       </div>
 
-      <div className={isWorkflowTab ? 'builder-main workflow-fullscreen' : 'builder-main'}>
+      <div className="builder-main">
         <div className="panel">
           <div className="panel-header">
             <div>
@@ -341,63 +413,29 @@ export function BuilderView({
               }
               onGeneratePrompt={
                 selectedBot?._id
-                  ? (mode, instruction, currentPrompt) => api.generatePrompt(selectedBot!._id, mode, instruction, currentPrompt)
+                  ? (mode, instruction, currentPrompt, target) => api.generatePrompt(selectedBot!._id, mode, instruction, currentPrompt, target)
                   : undefined
               }
-              onTabChange={handleConfigTabChange}
             />
           </div>
         </div>
-        <aside className="right-rail" style={isWorkflowTab ? { display: 'none' } : undefined}>
-          {selectedBot && (
-            <div className="panel compact">
-              <div className="panel-header-inline">
-                <h2>Agent details</h2>
-                <CopyableId value={selectedBot._id} label="ID" />
-              </div>
-              <div className="detail-list">
-                <Detail label="Owner" value={selectedBot.owner || 'Unknown'} />
-                {costEstimate ? (
-                  <>
-                    <CostBreakdownPopover estimate={costEstimate}>
-                      <div className="detail dotted-underline-row">
-                        <span>Cost</span>
-                        <strong className="dotted-underline">₹{costEstimate.totalCostInrPerMin.toFixed(2)}/min</strong>
-                      </div>
-                    </CostBreakdownPopover>
-                    <Detail
-                      label="Latency"
-                      value={
-                        costEstimate.latencyMinMs != null && costEstimate.latencyMaxMs != null
-                          ? `${costEstimate.latencyMinMs}-${costEstimate.latencyMaxMs}ms`
-                          : '-'
-                      }
-                    />
-                    <Detail
-                      label="Tokens"
-                      value={
-                        costEstimate.tokensMin != null && costEstimate.tokensMax != null
-                          ? `${costEstimate.tokensMin} - ${costEstimate.tokensMax >= 1000 ? `${(costEstimate.tokensMax / 1000).toFixed(costEstimate.tokensMax % 1000 === 0 ? 0 : 1)}k` : costEstimate.tokensMax}`
-                          : '-'
-                      }
-                    />
-                  </>
-                ) : (
-                  <Detail label="Cost" value="Loading…" />
-                )}
-              </div>
-            </div>
-          )}
-          <div className="panel compact">
-            <h2>Publishing</h2>
-            <div className="detail-list">
-              <Detail label="Published versions" value={publishedCount.toString()} />
-              <Detail label="Active version" value={activeVersion ? `v${activeVersion.version}` : '-'} />
-              <Detail label="Latest draft" value={latestDraft ? `v${latestDraft.version}` : 'None'} />
-            </div>
+      </div>
+
+      {sidePanel !== 'none' && <div className="side-panel-backdrop" onClick={() => setSidePanel('none')} />}
+      <aside className={sidePanel !== 'none' ? 'side-panel open' : 'side-panel'} aria-hidden={sidePanel === 'none'}>
+        <div className="side-panel-header">
+          <h2 style={{ margin: 0, fontSize: '0.95rem' }}>{sidePanel === 'versions' ? 'Version history' : 'Test Agent'}</h2>
+          <button className="modal-close" onClick={() => setSidePanel('none')} aria-label="Close"><X size={16} /></button>
+        </div>
+
+        {sidePanel === 'test' && (
+          <div className="side-panel-body">
+            {testPanelSlot}
           </div>
-          <div className="panel compact right-rail-versions">
-            <h2>Version history</h2>
+        )}
+
+        {sidePanel === 'versions' && (
+          <div className="side-panel-body">
             <div className="version-list">
               {versions.map((version, i) => {
                 const isActive = version._id === selectedBot?.active_version_id;
@@ -447,8 +485,8 @@ export function BuilderView({
               })}
             </div>
           </div>
-        </aside>
-      </div>
+        )}
+      </aside>
     </section>
   );
 }

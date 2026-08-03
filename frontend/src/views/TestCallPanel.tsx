@@ -17,6 +17,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 export function titleFor(view: import('../types').View) {
   return {
+    dashboard: 'Dashboard',
     bots: 'Agents',
     builder: 'Agents',
     flow: 'Flow Builder',
@@ -35,6 +36,7 @@ export function titleFor(view: import('../types').View) {
 
 export function subtitleFor(view: import('../types').View) {
   return {
+    dashboard: 'A live snapshot of every agent — volume, minutes, and performance leaders.',
     bots: 'Manage, edit, publish, and safely delete voice agents.',
     builder: 'Manage, edit, publish, and safely delete voice agents.',
     flow: 'Design the conversation as a visual graph — named nodes, conditionals, and transfers.',

@@ -1,21 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
 import {
-  Activity, BarChart2, BookOpen, Bot as BotIcon, ClipboardList, FileText, Gauge, GitBranch,
-  IndianRupee, Keyboard, Link2, Megaphone, Menu, Phone, PhoneCall, Settings as SettingsIcon, X
+  Activity, BarChart2, BookOpen, Bot as BotIcon, ChevronLeft, ChevronRight, ClipboardList, FileText, GitBranch,
+  IndianRupee, Keyboard, LayoutDashboard, Link2, Megaphone, Menu, Phone, PhoneCall, Settings as SettingsIcon, X
 } from 'lucide-react';
 
 import { api, ApiError, getToken, setToken, API_BASE } from './api';
 import type {
-  AnalysisPromptEntry, AnalysisPromptKey, Bot, BotVersion, Campaign, CallEvent, EvalRun, LangfuseSettings, LanguageOption,
+  AnalysisPromptEntry, AnalysisPromptKey, Bot, BotVersion, Campaign, CallEvent, EvalRun, LanguageOption,
   LanguageSettings, LibraryPhrase, NumberMapping, OutcomeEntry, PhoneNumber, PhoneNumberEnvironment,
   PlatformSettings, RuntimeSettings, Transcript, TestRecordingLookup, DialingStrategy, PricingConfig
 } from './api';
-import type { AgentWorkspaceMode, BuilderMode, CmdKExtra, Diagnostic, RuntimeConfig, TestForm, View } from './types';
+import type { AgentWorkspaceMode, BuilderMode, CmdKExtra, Diagnostic, RuntimeConfig, TestCallStatus, TestForm, View } from './types';
 
 import { CMD_VIEWS, SHORTCUT_MAP, defaultConfig } from './constants/ui';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { parseConfig } from './utils/config';
+import { shortId } from './utils/formatting';
 import { buildDiagnostic, friendlyApiError, friendlyTestError } from './utils/errors';
 import { buildPath, parsePath } from './utils/routes';
 
@@ -28,24 +29,28 @@ import { useToasts } from './hooks/useToasts';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { ResilientPanel } from './components/ResilientPanel';
 import { PageSummary } from './components/PageSummary';
+import { Breadcrumbs } from './components/Breadcrumbs';
+import type { Crumb } from './components/Breadcrumbs';
 import { PublishConfirmModal } from './components/PublishConfirmModal';
-import { EvalsPanel } from './components/EvalsPanel';
 import { VersionDiffModal } from './components/VersionDiffModal';
 
 import { BotsView, NewAgentWizard, DeleteAgentDialog } from './views/BotsView';
+import { CreateAgentPicker } from './components/CreateAgentPicker';
+import { CreateWithAI } from './components/CreateWithAI';
+import { TemplateGallery } from './components/TemplateGallery';
+import type { AgentTemplate } from './constants/agentTemplates';
 import { BuilderView } from './views/BuilderView';
-import { FlowBuilderView } from './views/FlowBuilderView';
 import { CampaignsView } from './views/CampaignsView';
-import { PhoneNumbersView } from './views/PhoneNumbersView';
-import { NumberMappingView } from './views/NumberMappingView';
+import { NumbersView } from './views/NumbersView';
 import { LibraryView } from './views/LibraryView';
 import { TranscriptsView } from './views/TranscriptsView';
 import { AnalyticsView } from './views/AnalyticsView';
-import { ObservabilityView } from './views/ObservabilityView';
-import { TestCallPanel, titleFor, subtitleFor } from './views/TestCallPanel';
+import { DashboardView } from './views/DashboardView';
+import { TestCallPanel, titleFor } from './views/TestCallPanel';
+import { TestLLMPanel } from './views/TestLLMPanel';
+import { TestInputsModal } from './components/TestInputsModal';
+import type { DynamicVariables, FunctionMocks } from './components/TestInputsModal';
 import { SettingsView } from './views/SettingsView';
-import { AuditLogView } from './views/AuditLogView';
-import { AdminView } from './views/AdminView';
 
 // Real WebRTC test-call connection is owned by <LiveKitRoom> inside
 // components/LiveKitTestSession.tsx, not managed manually here.
@@ -53,6 +58,7 @@ import { AdminView } from './views/AdminView';
 type AsyncState = 'idle' | 'running' | 'failed';
 
 const NAV_ICONS: Record<View, React.ReactNode> = {
+  dashboard: <LayoutDashboard size={17} />,
   bots: <BotIcon size={17} />,
   builder: <BotIcon size={17} />,
   flow: <GitBranch size={17} />,
@@ -62,7 +68,6 @@ const NAV_ICONS: Record<View, React.ReactNode> = {
   test: <PhoneCall size={17} />,
   transcripts: <FileText size={17} />,
   analytics: <BarChart2 size={17} />,
-  observability: <Gauge size={17} />,
   library: <BookOpen size={17} />,
   settings: <SettingsIcon size={17} />,
   audit_log: <ClipboardList size={17} />,
@@ -80,6 +85,7 @@ const EMPTY_TEST_FORM: TestForm = {
   test_worker_agent_name: '',
   test_bot_version_id: '',
   custom_lead_json: '',
+  pre_call_params: {},
 };
 
 // Hindi only — the runtime (bot_dev_param.py) hardcodes HINDI_LANG_CONFIG and Sarvam
@@ -186,6 +192,21 @@ function AppShell() {
   const [showCmdK, setShowCmdK] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
+    () => localStorage.getItem('sidebarCollapsed') === '1'
+  );
+  function toggleSidebarCollapsed() {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem('sidebarCollapsed', next ? '1' : '0');
+      return next;
+    });
+  }
+  function handleGoHome() {
+    setView('bots');
+    setWorkspaceMode('list');
+    setMobileNavOpen(false);
+  }
 
   // ── Diagnostics ─────────────────────────────────────────────────────
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
@@ -213,7 +234,6 @@ function AppShell() {
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [platformSettings, setPlatformSettings] = useState<PlatformSettings | null>(null);
   const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings | null>(null);
-  const [langfuseSettings, setLangfuseSettings] = useState<LangfuseSettings | null>(null);
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
   const [phrases, setPhrases] = useState<LibraryPhrase[]>([]);
   const [outcomes, setOutcomes] = useState<OutcomeEntry[]>([]);
@@ -250,7 +270,12 @@ function AppShell() {
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
   const [diffPair, setDiffPair] = useState<{ a: BotVersion; b: BotVersion } | null>(null);
 
-  const [showNewAgent, setShowNewAgent] = useState(false);
+  // Create Agent is a small flow, not one modal: picker (AI / template / scratch) first,
+  // then whichever path the user picked. Replaces the old behavior of jumping straight into
+  // a blank form, which gave a non-technical user nothing to work from.
+  const [createAgentStep, setCreateAgentStep] = useState<'closed' | 'picker' | 'ai' | 'template' | 'scratch'>('closed');
+  const [aiCreateBusy, setAiCreateBusy] = useState(false);
+  const [aiCreateError, setAiCreateError] = useState('');
   const [newAgentBusy, setNewAgentBusy] = useState(false);
   const [newAgentForm, setNewAgentForm] = useState<{
     name: string; description: string; agent_name: string; organization_name: string;
@@ -263,6 +288,32 @@ function AppShell() {
   const [deleteBusy, setDeleteBusy] = useState(false);
 
   const selectedBot = bots.find((b) => b._id === selectedBotId);
+
+  // ── Test Audio / Test LLM panel — now rendered inside BuilderView's Test Agent drawer
+  // (see testPanelSlot below) rather than a permanently docked column. ──
+  const [testPanelMode, setTestPanelMode] = useState<'audio' | 'llm'>('audio');
+  const [testInputsOpen, setTestInputsOpen] = useState(false);
+  const [dynamicVariables, setDynamicVariables] = useState<DynamicVariables>({});
+  const [functionMocks, setFunctionMocks] = useState<FunctionMocks>({});
+  const testInputsKey = selectedBotId ? `test-inputs:${selectedBotId}` : '';
+  useEffect(() => {
+    if (!testInputsKey) { setDynamicVariables({}); setFunctionMocks({}); return; }
+    try {
+      const saved = JSON.parse(localStorage.getItem(testInputsKey) || '{}');
+      setDynamicVariables(saved.dynamicVariables || {});
+      setFunctionMocks(saved.functionMocks || {});
+    } catch {
+      setDynamicVariables({});
+      setFunctionMocks({});
+    }
+  }, [testInputsKey]);
+  function saveTestInputs(nextVariables: DynamicVariables, nextMocks: FunctionMocks) {
+    setDynamicVariables(nextVariables);
+    setFunctionMocks(nextMocks);
+    if (testInputsKey) {
+      localStorage.setItem(testInputsKey, JSON.stringify({ dynamicVariables: nextVariables, functionMocks: nextMocks }));
+    }
+  }
 
   // ── Campaigns ───────────────────────────────────────────────────────
   const [selectedCampaignKey, setSelectedCampaignKey] = useState<string>('');
@@ -281,6 +332,7 @@ function AppShell() {
   const [transcriptFilters, setTranscriptFilters] = useState({
     status: '', outcome: '', campaign_id: '', bot_id: '', start_date: '', end_date: ''
   });
+  const [transcriptSource, setTranscriptSource] = useState<'' | 'web_test' | 'batch'>('');
   const [callEvents, setCallEvents] = useState<CallEvent[]>([]);
   const [localRecordingByRoom, setLocalRecordingByRoom] = useState<Record<string, TestRecordingLookup>>({});
 
@@ -345,10 +397,9 @@ function AppShell() {
   // ── Test call (LiveKit) ─────────────────────────────────────────────
   const [testBotId, setTestBotId] = useState<string>('');
   const [testForm, setTestForm] = useState<TestForm>(EMPTY_TEST_FORM);
-  const [testStatus, setTestStatus] = useState('Idle');
+  const [testStatus, setTestStatus] = useState<TestCallStatus>('Idle');
   const [testError, setTestError] = useState('');
   const [testCloseNote, setTestCloseNote] = useState('');
-  const [chatMessage, setChatMessage] = useState('');
   const [micEnabled, setMicEnabled] = useState(false);
   const [roomName, setRoomName] = useState('');
   const [remoteAudioReady, setRemoteAudioReady] = useState(false);
@@ -367,6 +418,26 @@ function AppShell() {
       setTestBotId(bots[0]._id);
     }
   }, [bots, testBotId]);
+
+  // The test rail lives inside the agent workspace, so it must always target the agent
+  // currently being edited — otherwise "Talk to it" would dispatch whichever bot the
+  // standalone /test screen happened to leave in testBotId.
+  useEffect(() => {
+    if (workspaceMode === 'builder' && selectedBotId && selectedBotId !== testBotId) {
+      setTestBotId(selectedBotId);
+    }
+  }, [workspaceMode, selectedBotId, testBotId]);
+
+  // /test no longer has its own screen — testing an agent happens in that agent's
+  // workspace. Old bookmarks and the Cmd+K history still resolve, so send them into the
+  // workspace of the last-tested agent rather than 404-ing or showing an empty page.
+  useEffect(() => {
+    if (view !== 'test') return;
+    const target = testBotId || bots[0]?._id || '';
+    if (target) handleEditBot(target);
+    setView('bots');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, testBotId, bots]);
 
   // ── Data loading ─────────────────────────────────────────────────────
   const loadBots = useCallback(async () => {
@@ -418,22 +489,21 @@ function AppShell() {
   const loadTranscripts = useCallback(async () => {
     setLoadingTranscripts(true);
     try {
-      setTranscripts(await api.transcripts({ text: transcriptSearchText || undefined, limit: 200 }));
+      setTranscripts(await api.transcripts({ text: transcriptSearchText || undefined, source: transcriptSource || undefined, limit: 200 }));
     } catch (err) {
       pushDiagnostic('Transcripts', err, 'Retry loading transcripts', 'warning');
     } finally {
       setLoadingTranscripts(false);
     }
-  }, [transcriptSearchText]);
+  }, [transcriptSearchText, transcriptSource]);
 
   const loadSettings = useCallback(async () => {
     try {
-      const [platform, runtime, langfuse] = await Promise.all([
-        api.platformSettings(), api.runtimeSettings(), api.langfuseSettings()
+      const [platform, runtime] = await Promise.all([
+        api.platformSettings(), api.runtimeSettings()
       ]);
       setPlatformSettings(platform);
       setRuntimeSettings(runtime);
-      setLangfuseSettings(langfuse);
     } catch (err) {
       pushDiagnostic('Settings', err, 'Retry loading settings', 'warning');
     }
@@ -487,7 +557,7 @@ function AppShell() {
     const id = window.setTimeout(() => { loadTranscripts(); }, 300);
     return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transcriptSearchText, authed]);
+  }, [transcriptSearchText, transcriptSource, authed]);
 
   // Load bot versions when a bot is selected / edited
   const loadBotVersions = useCallback(async (botId: string) => {
@@ -566,9 +636,6 @@ function AppShell() {
   );
 
   // ── Bots: callbacks ───────────────────────────────────────────────────
-  function handleSelectBot(botId: string) {
-    setSelectedBotId(botId);
-  }
 
   function handleEditBot(botId: string) {
     setSelectedBotId(botId);
@@ -582,11 +649,18 @@ function AppShell() {
   }
 
   function handleNewAgent() {
-    setNewAgentForm({
-      name: '', description: '', agent_name: '', organization_name: '',
-      persona_gender: 'female', language: 'hindi', initial_message: defaultConfig.initial_message || ''
-    });
-    setShowNewAgent(true);
+    setCreateAgentStep('picker');
+  }
+
+  // Shared by all three creation paths (scratch/AI/template) — lands the user *inside* the
+  // agent they just created rather than back on the list, so there's no extra hunt-and-click
+  // before they can start testing it.
+  async function createAgentAndEnter(name: string, description: string, config: RuntimeConfig) {
+    const bot = await api.createBot({ name, description, config });
+    setCreateAgentStep('closed');
+    await loadBots();
+    handleEditBot(bot._id);
+    return bot;
   }
 
   async function confirmNewAgent() {
@@ -600,14 +674,79 @@ function AppShell() {
         language: newAgentForm.language,
         initial_message: newAgentForm.initial_message,
       };
-      const bot = await api.createBot({ name: newAgentForm.name, description: newAgentForm.description, config });
-      setShowNewAgent(false);
-      await loadBots();
-      setSelectedBotId(bot._id);
+      await createAgentAndEnter(newAgentForm.name, newAgentForm.description, config);
     } catch (err) {
       pushDiagnostic('New agent', err, 'Retry creating agent', 'error');
     } finally {
       setNewAgentBusy(false);
+    }
+  }
+
+  async function handleCreateWithAI(description: string) {
+    setAiCreateBusy(true);
+    setAiCreateError('');
+    try {
+      const generated = await api.generateAgent(description);
+      const config: RuntimeConfig = {
+        ...defaultConfig,
+        agent_name: generated.agent_name || defaultConfig.agent_name,
+        initial_message: generated.initial_message || defaultConfig.initial_message,
+        system_prompt: generated.system_prompt || defaultConfig.system_prompt,
+      };
+      // Bot name: fall back to the persona name (or a generic label) since "Create with AI"
+      // never asks for one separately — asking would defeat the point of a one-box flow.
+      const name = generated.agent_name ? `${generated.agent_name} — AI-generated` : 'New AI-generated agent';
+      await createAgentAndEnter(name, description.slice(0, 200), config);
+    } catch (err) {
+      setAiCreateError(err instanceof Error ? err.message : 'Agent generation failed.');
+    } finally {
+      setAiCreateBusy(false);
+    }
+  }
+
+  async function handleUseTemplate(template: AgentTemplate) {
+    setNewAgentBusy(true);
+    try {
+      const config: RuntimeConfig = {
+        ...defaultConfig,
+        agent_name: template.agent_name,
+        initial_message: template.initial_message,
+        system_prompt: template.system_prompt,
+      };
+      await createAgentAndEnter(template.name, template.description, config);
+    } catch (err) {
+      pushDiagnostic('New agent', err, 'Retry creating agent', 'error');
+    } finally {
+      setNewAgentBusy(false);
+    }
+  }
+
+  const [duplicatingBotId, setDuplicatingBotId] = useState<string>('');
+
+  async function handleDuplicateBot(bot: Bot) {
+    setDuplicatingBotId(bot._id);
+    try {
+      // Clone whatever config is actually running: the active published version if there
+      // is one, else the latest draft. Falls back to defaultConfig only if the bot
+      // somehow has neither (shouldn't happen, but a duplicate should never 400).
+      const { bot: fullBot, versions } = await api.bot(bot._id);
+      const sourceVersion =
+        versions.find((v) => v._id === fullBot.active_version_id) ||
+        versions.find((v) => v.state === 'draft') ||
+        versions[0];
+      const config = (sourceVersion?.config as RuntimeConfig) || defaultConfig;
+      const created = await api.createBot({
+        name: `${bot.name} (copy)`,
+        description: bot.description,
+        config,
+      });
+      await loadBots();
+      showToast(`Duplicated as "${created.name}"`);
+      handleEditBot(created._id);
+    } catch (err) {
+      pushDiagnostic('Duplicate agent', err, 'Retry duplicating agent', 'error');
+    } finally {
+      setDuplicatingBotId('');
     }
   }
 
@@ -1024,11 +1163,6 @@ function AppShell() {
     }
   }
 
-  function handleUpdateLangfuse(payload: Partial<LangfuseSettings>) {
-    api.updateLangfuseSettings(payload)
-      .then((updated) => { setLangfuseSettings(updated); showToast('Observability settings saved'); })
-      .catch((err) => pushDiagnostic('Langfuse settings', err, 'Retry save', 'error'));
-  }
 
   // ── Test call: LiveKit wiring ───────────────────────────────────────────
   // The actual room connection (connect, mic publish, track subscribe, disconnect) is
@@ -1052,6 +1186,7 @@ function AppShell() {
         city: testForm.city || undefined,
         test_worker_agent_name: testForm.test_worker_agent_name || undefined,
         custom_lead_json: testForm.custom_lead_json || undefined,
+        pre_call_params: Object.keys(testForm.pre_call_params || {}).length ? testForm.pre_call_params : undefined,
       };
       const result = await api.startTestCall(payload);
       setRoomName(result.room_name);
@@ -1117,24 +1252,117 @@ function AppShell() {
     return <LoginForm onLoggedIn={() => setAuthed(true)} ssoError={ssoError} />;
   }
 
+  const breadcrumbs: Crumb[] = (() => {
+    if (view === 'bots' || view === 'builder') {
+      const crumbs: Crumb[] = [{ label: 'Agents', onClick: () => { setView('bots'); setWorkspaceMode('list'); } }];
+      if (workspaceMode === 'builder' && selectedBot) crumbs.push({ label: selectedBot.name });
+      return crumbs;
+    }
+    if (view === 'campaigns') {
+      const crumbs: Crumb[] = [{ label: 'Campaigns', onClick: () => { setCampaignWorkspaceMode('list'); setSelectedCampaignKey(''); } }];
+      if (campaignWorkspaceMode !== 'list' && selectedCampaignKey) crumbs.push({ label: selectedCampaignKey });
+      return crumbs;
+    }
+    if (view === 'transcripts') {
+      const crumbs: Crumb[] = [{ label: 'Transcripts', onClick: () => setSelectedTranscriptId('') }];
+      if (selectedTranscript) crumbs.push({ label: shortId(selectedTranscript._id) });
+      return crumbs;
+    }
+    return [{ label: titleFor(view) }];
+  })();
+
+  // Rendered inside BuilderView's "Test Agent" drawer (testPanelSlot prop) — state stays
+  // owned here since it's already threaded through handleStartTestCall/handleStopTestCall
+  // and the LiveKit connection callbacks below; only the JSX placement moved.
+  const testPanelSlot = (
+    <>
+      <div className="test-rail-tabs">
+        <div className="mode-toggle" role="tablist">
+          <button role="tab" aria-selected={testPanelMode === 'audio'} className={testPanelMode === 'audio' ? 'mode-btn active' : 'mode-btn'} onClick={() => setTestPanelMode('audio')}>
+            Test Audio
+          </button>
+          <button role="tab" aria-selected={testPanelMode === 'llm'} className={testPanelMode === 'llm' ? 'mode-btn active' : 'mode-btn'} onClick={() => setTestPanelMode('llm')}>
+            Test LLM
+          </button>
+        </div>
+        <button title="Test Inputs" onClick={() => setTestInputsOpen(true)}>{'{ }'}</button>
+      </div>
+
+      {testPanelMode === 'audio' && (
+        <TestCallPanel
+          variant="rail"
+          bots={bots}
+          selectedBot={selectedBot}
+          selectedBotId={selectedBotId}
+          onSelectBot={setTestBotId}
+          runtimeSettings={runtimeSettings}
+          functions={parsedConfig.ok ? (parsedConfig.value.functions || []) : []}
+          form={testForm}
+          setForm={setTestForm}
+          status={testStatus}
+          error={testError}
+          closeNote={testCloseNote}
+          micEnabled={micEnabled}
+          roomName={roomName}
+          remoteAudioReady={remoteAudioReady}
+          livekitUrl={testLivekitUrl}
+          livekitToken={testLivekitToken}
+          onStart={handleStartTestCall}
+          onStop={handleStopTestCall}
+          onLiveKitConnected={handleLiveKitConnected}
+          onLiveKitDisconnected={handleLiveKitDisconnected}
+          onLiveKitError={handleLiveKitError}
+          onMicChange={setMicEnabled}
+          onAudioReady={setRemoteAudioReady}
+        />
+      )}
+
+      {testPanelMode === 'llm' && selectedBot && (
+        <TestLLMPanel
+          botId={selectedBot._id}
+          systemPrompt={parsedConfig.ok ? String(parsedConfig.value.system_prompt || '') : ''}
+          dynamicVariables={dynamicVariables}
+          functionMocks={functionMocks}
+        />
+      )}
+
+      {testInputsOpen && (
+        <TestInputsModal
+          open={testInputsOpen}
+          onClose={() => setTestInputsOpen(false)}
+          functions={parsedConfig.ok ? (parsedConfig.value.functions || []) : []}
+          dynamicVariables={dynamicVariables}
+          onChangeDynamicVariables={(v) => saveTestInputs(v, functionMocks)}
+          functionMocks={functionMocks}
+          onChangeFunctionMocks={(v) => saveTestInputs(dynamicVariables, v)}
+        />
+      )}
+    </>
+  );
+
   return (
     <div className="app-shell">
       <div className="mobile-topbar">
         <button onClick={() => setMobileNavOpen(true)} aria-label="Open navigation">
           <Menu size={18} />
         </button>
-        <div className="sidebar-brand" style={{ padding: 0 }}>
+        <button className="sidebar-brand sidebar-brand-btn" style={{ padding: 0 }} onClick={handleGoHome} aria-label="Go to home">
           <img src="/justdial-logo.png" alt="Justdial" className="sidebar-logo" />
           <span className="sidebar-brand-subtitle">Voice AI Platform</span>
-        </div>
+        </button>
       </div>
 
       {mobileNavOpen && <div className="sidebar-backdrop" onClick={() => setMobileNavOpen(false)} />}
 
-      <aside className={mobileNavOpen ? 'sidebar open' : 'sidebar'}>
+      <aside className={mobileNavOpen ? 'sidebar open' : sidebarCollapsed ? 'sidebar collapsed' : 'sidebar'}>
         <div className="sidebar-brand">
-          <img src="/justdial-logo.png" alt="Justdial" className="sidebar-logo" />
-          <span className="sidebar-brand-subtitle">Voice AI Platform</span>
+          <div className="sidebar-brand-text">
+            <button className="sidebar-brand-btn" onClick={handleGoHome} aria-label="Go to home" title="Home">
+              <img src="/justdial-logo.png" alt="Justdial" className="sidebar-logo sidebar-logo-full" />
+              <img src="/favicon.jpeg" alt="Justdial" className="sidebar-logo sidebar-logo-mono" />
+            </button>
+            <span className="sidebar-brand-subtitle">Voice AI Platform</span>
+          </div>
           <button
             onClick={() => setMobileNavOpen(false)}
             aria-label="Close navigation"
@@ -1159,8 +1387,16 @@ function AppShell() {
             />
           ))}
         </SidebarNav>
-        <button className="nav-item shortcuts-btn" onClick={() => setShowShortcuts(true)}>
+        <button className="nav-item shortcuts-btn" onClick={() => setShowShortcuts(true)} title="Shortcuts">
           <Keyboard size={17} /><span>Shortcuts</span>
+        </button>
+        <button
+          className="nav-item sidebar-collapse-btn"
+          onClick={toggleSidebarCollapsed}
+          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {sidebarCollapsed ? <ChevronRight size={17} /> : <><ChevronLeft size={17} /><span>Collapse</span></>}
         </button>
       </aside>
 
@@ -1173,10 +1409,7 @@ function AppShell() {
         />
 
         <header className="content-header">
-          <div>
-            <h1>{titleFor(view)}</h1>
-            <p>{subtitleFor(view)}</p>
-          </div>
+          <Breadcrumbs crumbs={breadcrumbs} />
         </header>
 
         <PageSummary
@@ -1196,53 +1429,21 @@ function AppShell() {
           {view === 'bots' && workspaceMode === 'list' && (
             <BotsView
               bots={bots}
-              selectedBot={selectedBot}
-              transcripts={transcripts}
               loading={loadingBots}
-              onSelect={handleSelectBot}
               onEdit={handleEditBot}
               onDelete={handleDeleteBotRequest}
               onNew={handleNewAgent}
+              onDuplicate={handleDuplicateBot}
+              duplicatingBotId={duplicatingBotId}
+              onBotRestored={loadBots}
             />
           )}
 
           {(view === 'builder' || (view === 'bots' && workspaceMode === 'builder')) && (
             <div className="agent-workspace">
-              <div className="library-tabs agent-workspace-tabs" role="tablist" aria-label="Agent editor">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={builderTab === 'prompt'}
-                  className={builderTab === 'prompt' ? 'library-tab active' : 'library-tab'}
-                  onClick={() => setBuilderTab('prompt')}
-                >
-                  <strong>Prompt</strong>
-                  <small>Behavior &amp; hyperparameters</small>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={builderTab === 'flow'}
-                  className={builderTab === 'flow' ? 'library-tab active' : 'library-tab'}
-                  onClick={() => setBuilderTab('flow')}
-                >
-                  <strong>Flow</strong>
-                  <small>Visual conversation graph</small>
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={builderTab === 'evals'}
-                  className={builderTab === 'evals' ? 'library-tab active' : 'library-tab'}
-                  onClick={() => setBuilderTab('evals')}
-                >
-                  <strong>Evals</strong>
-                  <small>Pre-publish simulation</small>
-                </button>
-              </div>
-
               {builderTab === 'prompt' && (
                 <BuilderView
+                  testPanelSlot={testPanelSlot}
                   selectedBot={selectedBot}
                   versions={versions}
                   activeVersion={activeVersion}
@@ -1274,22 +1475,6 @@ function AppShell() {
                   renameState={renameState}
                 />
               )}
-
-              {builderTab === 'flow' && (
-                <FlowBuilderView
-                  selectedBot={selectedBot}
-                  editingVersion={versions.find((v) => v._id === editingVersionId)}
-                  flow={(parsedConfig.ok ? parsedConfig.value.flow : undefined) || { nodes: [], edges: [] }}
-                  onChange={(flow) => updateConfig('flow', flow)}
-                  onSave={handleSaveFlow}
-                  saveState={saveState === 'running' || updateVersionState === 'running' ? 'running' : saveState === 'failed' || updateVersionState === 'failed' ? 'failed' : 'idle'}
-                  onNavigateTest={() => setView('test')}
-                />
-              )}
-
-              {builderTab === 'evals' && selectedBot && (
-                <EvalsPanel runs={evalRuns} onRun={handleRunEvals} running={evalsRunning} disabled={!parsedConfig.ok} />
-              )}
             </div>
           )}
 
@@ -1315,11 +1500,11 @@ function AppShell() {
             />
           )}
 
-          {view === 'phone_numbers' && (
-            <PhoneNumbersView
+          {(view === 'phone_numbers' || view === 'number_mapping') && (
+            <NumbersView
               phoneNumbers={phoneNumbers}
               bots={bots}
-              loading={loadingPhoneNumbers}
+              loadingPhoneNumbers={loadingPhoneNumbers}
               onCreate={handleCreatePhoneNumber}
               createState={createPhoneNumberState}
               onUpdate={handleUpdatePhoneNumber}
@@ -1327,47 +1512,10 @@ function AppShell() {
               onReassign={handleReassignPhoneNumber}
               reassignState={reassignPhoneNumberState}
               onDelete={handleDeletePhoneNumber}
-              onGoToNumberMapping={() => setView('number_mapping')}
-            />
-          )}
-
-          {view === 'number_mapping' && (
-            <NumberMappingView
               mappings={numberMappings}
-              bots={bots}
-              loading={loadingNumberMappings}
+              loadingMappings={loadingNumberMappings}
               onMap={handleMapNumberToAgent}
               mapState={mapAgentState}
-              onGoToPhoneNumbers={() => setView('phone_numbers')}
-            />
-          )}
-
-          {view === 'test' && (
-            <TestCallPanel
-              bots={bots}
-              selectedBot={testBot}
-              selectedBotId={testBotId}
-              onSelectBot={setTestBotId}
-              runtimeSettings={runtimeSettings}
-              form={testForm}
-              setForm={setTestForm}
-              status={testStatus}
-              error={testError}
-              closeNote={testCloseNote}
-              chatMessage={chatMessage}
-              setChatMessage={setChatMessage}
-              micEnabled={micEnabled}
-              roomName={roomName}
-              remoteAudioReady={remoteAudioReady}
-              livekitUrl={testLivekitUrl}
-              livekitToken={testLivekitToken}
-              onStart={handleStartTestCall}
-              onStop={handleStopTestCall}
-              onLiveKitConnected={handleLiveKitConnected}
-              onLiveKitDisconnected={handleLiveKitDisconnected}
-              onLiveKitError={handleLiveKitError}
-              onMicChange={setMicEnabled}
-              onAudioReady={setRemoteAudioReady}
             />
           )}
 
@@ -1384,22 +1532,17 @@ function AppShell() {
               onSearchText={setTranscriptSearchText}
               filters={transcriptFilters}
               onFiltersChange={setTranscriptFilters}
+              source={transcriptSource}
+              onSourceChange={setTranscriptSource}
               onSelect={setSelectedTranscriptId}
               onNavigateTest={() => setView('test')}
             />
           )}
 
-          {view === 'analytics' && (
-            <AnalyticsView bots={bots} campaigns={campaigns} />
-          )}
+          {view === 'dashboard' && <DashboardView onGoToAgents={handleGoHome} />}
 
-          {view === 'observability' && (
-            <ObservabilityView
-              selectedBot={selectedBot}
-              transcripts={transcripts}
-              langfuseSettings={langfuseSettings}
-              onUpdateLangfuse={handleUpdateLangfuse}
-            />
+          {view === 'analytics' && (
+            <AnalyticsView bots={bots} campaigns={campaigns} onGoToAgents={handleGoHome} />
           )}
 
           {view === 'library' && (
@@ -1418,19 +1561,16 @@ function AppShell() {
             />
           )}
 
-          {view === 'settings' && (
+          {(view === 'settings' || view === 'audit_log' || view === 'admin') && (
             <SettingsView
               runtimeSettings={runtimeSettings}
               onUpdateRuntime={handleUpdateRuntime}
               platformSettings={platformSettings}
               onUpdatePlatformSettings={handleUpdatePlatformSettings}
+              pricingConfig={pricingConfig}
+              onUpdatePricingConfig={handleUpdatePricingConfig}
+              initialTab={view === 'audit_log' ? 'audit_log' : view === 'admin' ? 'admin' : undefined}
             />
-          )}
-
-          {view === 'audit_log' && <AuditLogView />}
-
-          {view === 'admin' && (
-            <AdminView config={pricingConfig} onSave={handleUpdatePricingConfig} />
           )}
         </ResilientPanel>
       </main>
@@ -1447,13 +1587,45 @@ function AppShell() {
 
       {showShortcuts && <ShortcutsModal onClose={() => setShowShortcuts(false)} />}
 
-      {showNewAgent && (
+      {createAgentStep === 'picker' && (
+        <CreateAgentPicker
+          onClose={() => setCreateAgentStep('closed')}
+          onSelectAI={() => setCreateAgentStep('ai')}
+          onSelectTemplate={() => setCreateAgentStep('template')}
+          onSelectScratch={() => {
+            setNewAgentForm({
+              name: '', description: '', agent_name: '', organization_name: '',
+              persona_gender: 'female', language: 'hindi', initial_message: defaultConfig.initial_message || ''
+            });
+            setCreateAgentStep('scratch');
+          }}
+        />
+      )}
+
+      {createAgentStep === 'ai' && (
+        <CreateWithAI
+          onBack={() => setCreateAgentStep('picker')}
+          onContinue={handleCreateWithAI}
+          busy={aiCreateBusy}
+          error={aiCreateError}
+        />
+      )}
+
+      {createAgentStep === 'template' && (
+        <TemplateGallery
+          onBack={() => setCreateAgentStep('picker')}
+          onUseTemplate={handleUseTemplate}
+          busy={newAgentBusy}
+        />
+      )}
+
+      {createAgentStep === 'scratch' && (
         <NewAgentWizard
           form={newAgentForm}
           onChange={setNewAgentForm}
           languages={languages}
           busy={newAgentBusy}
-          onCancel={() => setShowNewAgent(false)}
+          onCancel={() => setCreateAgentStep('picker')}
           onConfirm={confirmNewAgent}
         />
       )}
@@ -1477,6 +1649,7 @@ function AppShell() {
           busy={publishState === 'running'}
           onCancel={() => setShowPublishConfirm(false)}
           onConfirm={confirmPublish}
+          onViewFullDiff={activeVersion ? () => setDiffPair({ a: activeVersion, b: latestDraft }) : undefined}
         />
       )}
 

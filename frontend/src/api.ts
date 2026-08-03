@@ -122,6 +122,9 @@ export type Bot = {
   calls_today?: number;
   avg_duration_sec?: number;
   tags?: string[];
+  /** Set only while status='deleted' (backend/routers/bots.py delete_bot); cleared on
+   * restore. Absent for every active bot. */
+  deleted_at?: string;
 };
 
 export type BotVersion = {
@@ -579,6 +582,35 @@ export type PlatformSettings = {
   default_close_markers?: string[];
 };
 
+export type DailyCount = { date: string; count: number };
+export type DailyDuration = { date: string; avg_duration_sec: number };
+export type OutcomeCount = { outcome: string; count: number };
+
+export type BotMetrics = {
+  total_calls: number;
+  calls_today: number;
+  calls_this_week: number;
+  calls_this_month: number;
+  avg_duration_sec: number;
+  success_rate_pct: number;
+  trend_vs_previous_pct: { total_calls: number | null; success_rate: number | null };
+  daily_volume: DailyCount[];
+  daily_avg_duration: DailyDuration[];
+  outcome_breakdown: OutcomeCount[];
+};
+
+export type BotRankingEntry = { bot_id: string; name: string; success_rate_pct: number; call_count: number };
+
+export type DashboardSummary = {
+  total_agents: number;
+  total_calls_all_time: number;
+  total_minutes_all_time: number;
+  calls_today: number;
+  best_performing_bot: BotRankingEntry | null;
+  least_performing_bot: BotRankingEntry | null;
+  daily_volume: DailyCount[];
+};
+
 // ---------------------------------------------------------------------------
 // api client
 // ---------------------------------------------------------------------------
@@ -641,6 +673,12 @@ export const api = {
   },
   restoreBot(id: string): Promise<{ ok: boolean }> {
     return request(`/api/bots/${id}/restore`, { method: 'POST' });
+  },
+  botMetrics(id: string, days: 7 | 30 = 7): Promise<BotMetrics> {
+    return request(`/api/bots/${id}/metrics?days=${days}`);
+  },
+  dashboardSummary(): Promise<DashboardSummary> {
+    return request('/api/dashboard/summary');
   },
   /** Triggers a browser download of the CSV — can't use request()'s json() parsing, and a
    * plain <a href> can't carry the Bearer auth header, so this fetches as a blob directly. */
@@ -729,13 +767,25 @@ export const api = {
     );
   },
 
-  // AI-assisted system prompt generation/refinement
-  generatePrompt(id: string, mode: 'generate' | 'refine', instruction: string, currentPrompt: string): Promise<{ system_prompt: string }> {
+  // AI-assisted text generation/refinement — shared by System prompt, Closing line, and
+  // Analysis prompt override in BotConfigTabs (each with its own server-side framing, see
+  // backend/prompt_assist.py). `target` defaults to 'system_prompt' for back-compat.
+  generatePrompt(
+    id: string,
+    mode: 'generate' | 'refine',
+    instruction: string,
+    currentPrompt: string,
+    target: 'system_prompt' | 'closing_line' | 'analysis_prompt' = 'system_prompt',
+  ): Promise<{ text: string }> {
     return request(
       `/api/bots/${id}/generate-prompt`,
-      { method: 'POST', body: JSON.stringify({ mode, instruction, current_prompt: currentPrompt }) },
+      { method: 'POST', body: JSON.stringify({ mode, instruction, current_prompt: currentPrompt, target }) },
       30000,
     );
+  },
+  // Create Agent > Create with AI — no bot exists yet, so this is bot-less.
+  generateAgent(description: string): Promise<{ agent_name: string; initial_message: string; system_prompt: string }> {
+    return request('/api/bots/generate-agent', { method: 'POST', body: JSON.stringify({ description }) }, 30000);
   },
 
   // platform (dev/prod) settings
