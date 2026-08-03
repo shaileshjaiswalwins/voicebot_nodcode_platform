@@ -1,6 +1,6 @@
 import type { CallEvent, Transcript, Bot, Campaign, PhraseCategory, Flow, WorkflowGraphDef } from './api';
 
-export type View = 'bots' | 'builder' | 'flow' | 'campaigns' | 'phone_numbers' | 'number_mapping' | 'test' | 'transcripts' | 'analytics' | 'observability' | 'library' | 'settings' | 'audit_log' | 'admin';
+export type View = 'bots' | 'builder' | 'flow' | 'campaigns' | 'phone_numbers' | 'number_mapping' | 'test' | 'transcripts' | 'analytics' | 'library' | 'settings' | 'audit_log' | 'admin';
 export type AgentWorkspaceMode = 'list' | 'builder';
 export type BuilderMode = 'pm' | 'advanced';
 export type DiagnosticSeverity = 'info' | 'warning' | 'error';
@@ -125,6 +125,13 @@ export type RuntimeConfig = {
   /** Prepended to every conversation node's compiled instructions — shared context/persona
    * across the whole graph, since each node is otherwise its own independent LiveKit Agent. */
   global_prompt?: string;
+  /** Optional per-bot override of the global post-call analysis prompt (edited by default
+   * on the Library page — backend/analysis_prompts.py's CALL_ANALYSIS_KEY template).
+   * Empty (the default) means "use the global prompt". When set, this FULLY REPLACES the
+   * template for this bot's calls, so it must still satisfy every required placeholder and
+   * emit the exact same JSON schema the callback worker parses — validated server-side on
+   * save with the same rules as the global editor. */
+  analysis_prompt?: string;
   /** "How easily can a caller interrupt the bot" — see interruption_presets.py. */
   interruption_sensitivity?: '' | 'patient' | 'balanced' | 'responsive';
   /** Config-surface only — see backend/models.py BotConfig for pipeline-wiring status. */
@@ -132,6 +139,8 @@ export type RuntimeConfig = {
   noise_filter_sensitivity?: 'low' | 'medium' | 'high';
   [key: string]: unknown;
 };
+
+export type TestCallStatus = 'Idle' | 'Creating room…' | 'Connecting to LiveKit…' | 'Waiting for bot to join…' | 'Failed';
 
 export type TestForm = {
   campaign_id: string;
@@ -145,6 +154,9 @@ export type TestForm = {
   /** Pinned version id — empty string means "use active published version" */
   test_bot_version_id: string;
   custom_lead_json: string;
+  /** Tester-seeded overrides for this bot's own pre_call functions' query_params, flat
+   * across all pre_call functions (matches bot.py's _pre_call_params merge). */
+  pre_call_params: Record<string, string>;
 };
 
 export type ConversationItem =

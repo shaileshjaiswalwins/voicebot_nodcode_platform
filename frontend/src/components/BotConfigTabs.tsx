@@ -38,8 +38,10 @@ export function BotConfigTabs({
   configError,
   botId,
   onTestFunction,
+  onGeneratePrompt,
   costEstimate,
   pricing,
+  onTabChange,
 }: {
   value: RuntimeConfig;
   onUpdateConfig: (key: keyof RuntimeConfig, value: unknown) => void;
@@ -51,10 +53,38 @@ export function BotConfigTabs({
   configError?: string;
   botId?: string;
   onTestFunction?: (fn: CustomFunction, args: Record<string, unknown>) => Promise<FunctionTestResult>;
+  onGeneratePrompt?: (mode: 'generate' | 'refine', instruction: string, currentPrompt: string) => Promise<{ system_prompt: string }>;
   costEstimate?: AgentCostEstimate | null;
   pricing?: PricingConfig | null;
+  /** Lets the workspace shell know when the Workflow tab is active, so it can drop the
+   * two-column layout (test rail + other builder chrome) and give the graph canvas the
+   * full viewport — it's unusable squeezed into a 340px-narrower shared column. */
+  onTabChange?: (tab: BuilderTab) => void;
 }) {
-  const [tab, setTab] = useState<BuilderTab>('agent');
+  const [tab, setTabState] = useState<BuilderTab>('agent');
+  function setTab(next: BuilderTab) {
+    setTabState(next);
+    onTabChange?.(next);
+  }
+  const [promptInstruction, setPromptInstruction] = useState('');
+  const [promptAssistState, setPromptAssistState] = useState<'idle' | 'running' | 'failed'>('idle');
+  const [promptAssistError, setPromptAssistError] = useState('');
+  const hasExistingPrompt = Boolean(String(value.system_prompt || '').trim());
+  const handleGeneratePrompt = async () => {
+    if (!onGeneratePrompt || !promptInstruction.trim()) return;
+    setPromptAssistState('running');
+    setPromptAssistError('');
+    try {
+      const mode = hasExistingPrompt ? 'refine' : 'generate';
+      const result = await onGeneratePrompt(mode, promptInstruction.trim(), String(value.system_prompt || ''));
+      onUpdateConfig('system_prompt', result.system_prompt);
+      setPromptInstruction('');
+      setPromptAssistState('idle');
+    } catch (err) {
+      setPromptAssistError(err instanceof Error ? err.message : 'Prompt generation failed.');
+      setPromptAssistState('failed');
+    }
+  };
   // Scoped JSON editor for just the `workflow` graph field (rather than the whole bot's
   // Developer JSON below) — local text state so an operator can type transiently-invalid
   // JSON without it being force-parsed on every keystroke, matching the Developer JSON
@@ -184,15 +214,14 @@ export function BotConfigTabs({
               <input value={String(value.agent_name || '')} placeholder="e.g. Tarun, Priya, Aman" onChange={(e) => onUpdateConfig('agent_name', e.target.value)} />
               <small>The name the bot introduces itself with — appears in the opening line and system prompt.</small>
             </label>
-            <label title="The company the bot says it is calling on behalf of.">
-              Organization name
-              <input value={String(value.organization_name || '')} placeholder="e.g. JustDial" onChange={(e) => onUpdateConfig('organization_name', e.target.value)} />
-              <small>The company the bot says it represents on the call.</small>
-            </label>
-            <label>
-              AI partner key
-              <input value={String(value.ai_partner || '')} placeholder="e.g. inh-suny-bot" onChange={(e) => onUpdateConfig('ai_partner', e.target.value)} />
-              <small>Dialer lead fetch tag. Leave blank to use platform default.</small>
+            <label title="Free-form labels for organizing/filtering agents on the Agents page — has no effect on call behavior.">
+              Tags
+              <input
+                value={(value.tags as string[] | undefined || []).join(', ')}
+                placeholder="e.g. Hindi, Justdial, Qualification"
+                onChange={(e) => onUpdateConfig('tags', e.target.value.split(',').map((t) => t.trim()).filter(Boolean))}
+              />
+              <small>Comma-separated. Used to filter the Agents page — no effect on the bot itself.</small>
             </label>
           </div>
           {isWorkflow && (
@@ -205,7 +234,45 @@ export function BotConfigTabs({
           )}
           <label className="full" style={isWorkflow ? inertFieldStyle : undefined}>
             System prompt
+            {onGeneratePrompt && (
+              <div className="prompt-assist">
+                <input
+                  type="text"
+                  placeholder={hasExistingPrompt ? "Describe the change to make, e.g. \"make the tone more casual\"" : 'Describe the bot you want, e.g. "a friendly agent that qualifies real estate leads"'}
+                  value={promptInstruction}
+                  disabled={promptAssistState === 'running'}
+                  onChange={(e) => setPromptInstruction(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleGeneratePrompt(); } }}
+                />
+                <button
+                  type="button"
+                  disabled={promptAssistState === 'running' || !promptInstruction.trim()}
+                  onClick={handleGeneratePrompt}
+                >
+                  {promptAssistState === 'running' ? 'Working…' : hasExistingPrompt ? 'Refine prompt' : 'Generate prompt'}
+                </button>
+              </div>
+            )}
+            {promptAssistState === 'failed' && (
+              <div className="notice error" role="alert" style={{ marginTop: '0.4rem' }}>{promptAssistError}</div>
+            )}
             <textarea className="prompt-editor" value={String(value.system_prompt || '')} onChange={(e) => onUpdateConfig('system_prompt', e.target.value)} />
+          </label>
+          <label className="full">
+            Analysis prompt override (optional)
+            <textarea
+              className="prompt-editor"
+              placeholder="Leave blank to use the global post-call analysis prompt (Settings → Library)."
+              value={String(value.analysis_prompt || '')}
+              onChange={(e) => onUpdateConfig('analysis_prompt', e.target.value)}
+            />
+            <small>
+              Runs once after each call ends, to classify the outcome from the saved transcript — unrelated to
+              the system prompt above, which only drives the live conversation. Applies to both standard and
+              workflow bots. Leave blank to use the shared default. If set, it fully replaces that default for
+              this bot, so it must still return the exact same JSON fields — same required placeholders as the
+              global editor, enforced on save.
+            </small>
           </label>
           <div className="form-grid">
             <label title="The first thing the bot says when the call connects." style={isWorkflow ? inertFieldStyle : undefined}>

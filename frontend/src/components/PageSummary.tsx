@@ -2,7 +2,6 @@ import React from 'react';
 import {
   Activity,
   AlertCircle,
-  AlertTriangle,
   BarChart2,
   BookOpen,
   Bot,
@@ -44,16 +43,7 @@ export function PageSummary({
   const L = loading ? '…' : null;
 
   if (view === 'bots' || view === 'builder') {
-    const total = bots.length;
-    const active = bots.filter((b) => b.status === 'active').length;
-    const draft = bots.filter((b) => b.status === 'paused').length;
-    return (
-      <div className="page-summary">
-        <SummaryCard icon={<Bot size={17} />} color="blue" label="Total agents" value={L ?? total.toString()} sub="All configured bots" />
-        <SummaryCard icon={<CheckCircle2 size={17} />} color="green" label="Active" value={L ?? active.toString()} sub="Published & running" />
-        <SummaryCard icon={<Braces size={17} />} color="amber" label="Draft" value={L ?? draft.toString()} sub="Awaiting publish" />
-      </div>
-    );
+    return null;
   }
 
   if (view === 'campaigns') {
@@ -99,20 +89,6 @@ export function PageSummary({
         <SummaryCard icon={<CheckCircle2 size={17} />} color="green" label="Completed" value={L ?? completed.toString()} sub="Status: completed" />
         <SummaryCard icon={<Clock3 size={17} />} color="amber" label="Avg duration" value={avgDur ? `${avgDur}s` : '—'} sub="From saved records" />
         <SummaryCard icon={<Activity size={17} />} color="slate" label="Today" value={L ?? today.toString()} sub="Calls today" />
-      </div>
-    );
-  }
-
-  if (view === 'observability') {
-    const total = transcripts.length;
-    const nonCompleted = transcripts.filter((t) => t.status && t.status !== 'completed').length;
-    const completed = transcripts.filter((t) => t.status === 'completed').length;
-    return (
-      <div className="page-summary">
-        <SummaryCard icon={<Activity size={17} />} color="blue" label="Total traces" value={L ?? total.toString()} sub="Transcripts stored" />
-        <SummaryCard icon={<CheckCircle2 size={17} />} color="green" label="Completed" value={L ?? completed.toString()} sub="Clean calls" />
-        <SummaryCard icon={<AlertTriangle size={17} />} color="amber" label="Non-completed" value={L ?? nonCompleted.toString()} sub="Errors / incomplete" />
-        <SummaryCard icon={<Bot size={17} />} color="slate" label="Agent" value={selectedBot?.name || '—'} sub="Selected bot" />
       </div>
     );
   }

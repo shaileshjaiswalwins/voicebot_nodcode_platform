@@ -143,6 +143,13 @@ label.full { grid-column: 1 / -1; }
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  /* Pinned to the viewport, independent of how tall the main content grows — without
+     this, the sidebar stretches to match a long Agents list (flex align-items:stretch)
+     and pushes the bottom-anchored Collapse/Shortcuts buttons off-screen. */
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
 }
 .sidebar-brand { display: flex; align-items: center; gap: 0.55rem; font-weight: 700; font-size: 0.95rem; padding: 0.4rem 0.5rem 1.1rem; color: var(--text); }
 .sidebar-logo { height: 22px; width: auto; object-fit: contain; display: block; flex-shrink: 0; }
@@ -174,6 +181,23 @@ label.full { grid-column: 1 / -1; }
 }
 .shortcuts-btn { margin-top: auto; border: 1px solid var(--border); }
 
+.sidebar-collapse-btn { border: 1px solid var(--border); justify-content: center; }
+
+.sidebar.collapsed { width: 60px; padding: 1rem 0.5rem; }
+.sidebar.collapsed .sidebar-brand-subtitle,
+.sidebar.collapsed .nav-item span,
+.sidebar.collapsed .shortcuts-btn span { display: none; }
+.sidebar.collapsed .sidebar-brand { justify-content: center; padding: 0.4rem 0 1.1rem; }
+.sidebar.collapsed .nav-item,
+.sidebar.collapsed .shortcuts-btn { justify-content: center; }
+
+.breadcrumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 0.35rem; font-size: 0.85rem; color: var(--muted); }
+.breadcrumbs .crumb { background: none; border: none; padding: 0; color: var(--muted); font-size: 0.85rem; cursor: pointer; }
+.breadcrumbs .crumb:hover { color: var(--text); text-decoration: underline; }
+.breadcrumbs .crumb.current { color: var(--text); font-weight: 600; cursor: default; }
+.breadcrumbs .crumb.current:hover { text-decoration: none; }
+.breadcrumbs .crumb-sep { color: var(--border); }
+
 .main-content { flex: 1; padding: 1.25rem 1.5rem; min-width: 0; overflow-x: hidden; }
 
 .mobile-topbar { display: none; }
@@ -194,6 +218,51 @@ label.full { grid-column: 1 / -1; }
 .content-grid { display: grid; gap: 1rem; }
 .content-grid.two-col { grid-template-columns: 1.3fr 1fr; }
 .content-grid > * { min-width: 0; }
+
+/* ── Agents page: search/filter/sort toolbar, list/grid views, pagination ── */
+/* Two deterministic rows — search always full-width, filters always grouped together on
+   their own row — instead of letting search and the filter cluster compete for space in one
+   flex row, which wrapped unpredictably (each control landing on its own line) once the
+   window got narrower than the sum of every control's natural width. */
+.agents-toolbar { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 0.85rem; }
+.agents-search input { width: 100%; }
+.agents-toolbar-controls { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.agents-toolbar-controls button.active { background: var(--primary-bg); color: var(--primary); border-color: var(--primary-bg); }
+.count-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 1.1rem; height: 1.1rem; padding: 0 0.3rem; border-radius: var(--radius-pill); background: var(--primary-bg); color: var(--primary); font-size: 0.68rem; font-weight: 700; margin-left: 0.3rem; }
+.tag-filter { position: relative; }
+.tag-filter-dropdown { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow-lg); padding: 0.4rem; min-width: 180px; max-height: 260px; overflow-y: auto; }
+.tag-filter-option { display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.4rem; font-size: 0.82rem; cursor: pointer; border-radius: var(--radius-sm); }
+.tag-filter-option:hover { background: var(--surface-2); }
+.view-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.view-toggle button { border: none; border-radius: 0; }
+.view-toggle button.active { background: var(--primary); color: white; }
+.agents-pagination { display: flex; align-items: center; justify-content: center; gap: 0.75rem; margin-top: 1rem; font-size: 0.82rem; color: var(--muted); }
+
+.agents-layout { display: grid; grid-template-columns: 200px 1fr; gap: 1rem; align-items: start; }
+.agent-folders-rail { display: flex; flex-direction: column; gap: 0.15rem; position: sticky; top: 1rem; }
+.agent-folders-title { font-size: 0.72rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; padding: 0 0.5rem; margin-bottom: 0.3rem; }
+.agent-folder-item { display: flex; align-items: center; gap: 0.5rem; width: 100%; border: none; background: transparent; padding: 0.4rem 0.5rem; border-radius: var(--radius-sm); color: var(--muted); font-weight: 500; font-size: 0.85rem; justify-content: flex-start; }
+.agent-folder-item span:first-of-type { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-folder-item:hover { background: var(--surface-2); color: var(--text); }
+.agent-folder-item.active { background: var(--primary-bg); color: var(--primary); font-weight: 600; }
+@media (max-width: 900px) {
+  .agents-layout { grid-template-columns: 1fr; }
+  .agent-folders-rail { position: static; flex-direction: row; flex-wrap: wrap; }
+}
+
+.agent-card-avatar { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 2.4rem; height: 2.4rem; border-radius: 50%; background: var(--primary-bg); color: var(--primary); font-weight: 700; font-size: 0.85rem; }
+.agent-card-avatar.small { width: 1.9rem; height: 1.9rem; font-size: 0.72rem; }
+.agent-row-name { display: flex; align-items: flex-start; gap: 0.6rem; }
+.agent-card-tags { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-top: 0.3rem; }
+
+.agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem; }
+.agent-card { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.85rem; cursor: pointer; display: flex; flex-direction: column; gap: 0.35rem; background: var(--surface); transition: box-shadow 0.12s ease; }
+.agent-card:hover { box-shadow: var(--shadow-sm); }
+.agent-card-top { display: flex; justify-content: space-between; align-items: flex-start; }
+.agent-card-metrics { display: flex; gap: 1.25rem; margin-top: 0.5rem; }
+.agent-card-metrics strong { display: block; font-size: 1rem; }
+.agent-card-metrics span { font-size: 0.7rem; color: var(--muted); }
+.agent-card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 0.5rem; font-size: 0.75rem; color: var(--muted); }
 /* Transcripts view: call list on the left, turn-by-turn detail as a sticky sidebar on the right. */
 .transcripts-grid { grid-template-columns: 1.3fr 1fr; align-items: start; }
 .builder-layout, .library-layout, .strategy-layout, .observability-layout { display: flex; flex-direction: column; gap: 0.75rem; }
@@ -201,6 +270,30 @@ label.full { grid-column: 1 / -1; }
 .library-tabs { display: flex; gap: 0.4rem; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
 .agent-workspace { display: flex; flex-direction: column; gap: 1rem; }
 .agent-workspace-tabs { margin-bottom: 0.25rem; }
+/* Build on the left, talk to it on the right — the edit→test loop without a navigation. */
+.agent-workspace-split { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 0.75rem; align-items: start; }
+/* Workflow tab active: also drop the outer Talk-to-it rail (350px), one level up from
+   .builder-main's own collapse — the graph needs the full page, not just the builder's
+   inner column. */
+.agent-workspace-split.workflow-fullscreen { grid-template-columns: 1fr; }
+.agent-workspace-split.workflow-fullscreen .test-rail { display: none; }
+.agent-workspace-main { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+.test-rail { position: sticky; top: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem; max-height: calc(100vh - 2.5rem); overflow-y: auto; }
+.test-rail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.6rem; }
+.test-rail-header h2 { font-size: 0.95rem; margin: 0; }
+.test-rail-header p { font-size: 0.78rem; color: var(--muted); margin: 0.1rem 0 0; }
+.test-rail-header .session-dot { margin-top: 0.35rem; }
+.test-rail-version { display: flex; flex-direction: column; gap: 0.2rem; }
+.test-rail-fields { display: flex; flex-direction: column; gap: 0.6rem; }
+.test-rail .form-grid { grid-template-columns: 1fr; }
+.test-rail-actions { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; }
+.test-rail-session { padding: 0.75rem; }
+.test-rail-session .live-session-header h2 { font-size: 0.85rem; }
+.test-rail-checklist .connection-line { padding: 0.35rem 0; }
+@media (max-width: 1180px) {
+  .agent-workspace-split { grid-template-columns: 1fr; }
+  .test-rail { position: static; max-height: none; }
+}
 .library-tab {
   display: flex;
   flex-direction: column;
@@ -224,6 +317,10 @@ label.full { grid-column: 1 / -1; }
 .agent-identity { margin-bottom: 0.5rem; }
 .flow-builder-grid { display: grid; grid-template-columns: 220px 1fr 280px; gap: 0.75rem; height: calc(100vh - 180px); }
 .builder-main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 0.75rem; align-items: stretch; }
+/* Workflow tab active: drop the right-rail column entirely and let the graph canvas
+   (already a 220/1fr/280 grid internally) use the full width instead of a squeezed
+   ~2/3 share — the canvas needs real screen real estate to be usable, not a narrow lane. */
+.builder-main.workflow-fullscreen { grid-template-columns: 1fr; }
 .right-rail { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
 .right-rail-versions { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .right-rail-versions .version-list { flex: 1; }
@@ -564,6 +661,7 @@ kbd.kbd { display: inline-flex; align-items: center; justify-content: center; mi
 .mode-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
 .mode-toggle .mode-btn { border: none; border-radius: 0; }
 .mode-toggle .mode-btn.active { background: var(--primary); color: white; }
+.test-rail-tabs { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.75rem; }
 .builder-action-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
 .builder-action-bar-right { display: flex; align-items: center; gap: 0.5rem; margin-left: auto; }
 .back-link { border: none; background: transparent; padding: 0.3rem 0; }
@@ -990,6 +1088,9 @@ kbd.kbd { display: inline-flex; align-items: center; justify-content: center; mi
 .panel.compact h2 { font-size: 0.92rem; }
 .rename-action { margin-top: 0.4rem; }
 .prompt-editor { min-height: 220px; font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 0.82rem; line-height: 1.5; }
+.prompt-assist { display: flex; gap: 0.5rem; margin: 0.4rem 0; }
+.prompt-assist input { flex: 1; }
+.prompt-assist button { white-space: nowrap; }
 .json-panel { padding: 0.85rem; }
 .json-editor { width: 100%; min-height: 260px; font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 0.8rem; line-height: 1.5; background: var(--surface-2); border-color: var(--border); }
 .json-editor[aria-invalid="true"] { border-color: var(--danger); outline: 1px solid var(--danger); }

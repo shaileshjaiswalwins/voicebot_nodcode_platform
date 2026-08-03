@@ -37,7 +37,7 @@ export class ApiError extends Error {
 
 const READ_TIMEOUT_MS = 8000;
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, timeoutMs: number = READ_TIMEOUT_MS): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -46,13 +46,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), READ_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
     response = await fetch(apiUrl(path), { ...options, headers, signal: controller.signal });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new ApiError(0, `Request timed out after ${READ_TIMEOUT_MS}ms: ${path}`);
+      throw new ApiError(0, `Request timed out after ${timeoutMs}ms: ${path}`);
     }
     throw error;
   } finally {
@@ -91,6 +91,8 @@ async function requestForm<T>(path: string, formData: FormData): Promise<T> {
 // Types
 // ---------------------------------------------------------------------------
 
+export type ChatTurn = { role: 'user' | 'bot'; text: string };
+
 export type BotStatus = 'active' | 'paused' | 'deleted';
 
 export type Bot = {
@@ -113,6 +115,13 @@ export type Bot = {
   active_version_id?: string | null;
   draft_version_id?: string | null;
   owner?: string;
+  /** Total calls against this bot, aggregated server-side over the full
+   * tbl_ai_vb_call_transcripts collection — not just whatever page of transcripts the
+   * Transcripts view happens to have loaded client-side. */
+  call_count?: number;
+  calls_today?: number;
+  avg_duration_sec?: number;
+  tags?: string[];
 };
 
 export type BotVersion = {
@@ -309,6 +318,25 @@ export type FallbackEvent = {
   created_at: string;
 };
 
+export type WorkerHealth = {
+  agent_name: string;
+  pid: number | null;
+  host: string;
+  last_seen: string;
+  started_at: string;
+  age_seconds: number | null;
+  stale: boolean;
+};
+
+export type DispatchFailure = {
+  _id: string;
+  room_name: string;
+  agent_name: string;
+  bot_id: string;
+  timeout_seconds: number;
+  created_at: string;
+};
+
 export type TranscriptTurn = { role: string; text?: string; created_at?: string; interrupted?: boolean; event_type?: string };
 
 export type Transcript = {
@@ -335,6 +363,9 @@ export type Transcript = {
   recording_url?: string;
   recording_source?: string;
   room_name?: string;
+  /** Call origin: "web_test" (dashboard Test Call) vs "batch" (campaign/SIP-dialed).
+   * Absent on transcripts saved before this field existed — treat as "batch". */
+  source?: 'web_test' | 'batch';
 };
 
 export type PhraseCategory = 'voicemail' | 'hold_music' | 'dnc_trigger';
@@ -605,6 +636,28 @@ export const api = {
   deleteBot(id: string): Promise<{ ok: boolean }> {
     return request(`/api/bots/${id}`, { method: 'DELETE' });
   },
+  deletedBots(): Promise<Bot[]> {
+    return request('/api/bots/deleted');
+  },
+  restoreBot(id: string): Promise<{ ok: boolean }> {
+    return request(`/api/bots/${id}/restore`, { method: 'POST' });
+  },
+  /** Triggers a browser download of the CSV — can't use request()'s json() parsing, and a
+   * plain <a href> can't carry the Bearer auth header, so this fetches as a blob directly. */
+  async exportBots(): Promise<void> {
+    const token = getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(apiUrl('/api/bots/export'), { headers });
+    if (!response.ok) throw new ApiError(response.status, await response.text().catch(() => response.statusText));
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'agents.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  },
   compileFlowPreview(flow: Flow): Promise<{ compiled_prompt: string }> {
     return request('/api/bots/compile-flow-preview', { method: 'POST', body: JSON.stringify({ flow }) });
   },
@@ -628,6 +681,61 @@ export const api = {
   },
   listEvals(id: string): Promise<EvalRun[]> {
     return request(`/api/bots/${id}/evals`);
+  },
+
+  // Test LLM: text-only chat against the bot's LLM, no LiveKit/voice involved
+  llmChatReply(
+    id: string,
+    systemPrompt: string,
+    history: ChatTurn[],
+    dynamicVariables: Record<string, string>,
+    functionMocks: Record<string, string>,
+  ): Promise<{ text: string }> {
+    return request(
+      `/api/bots/${id}/llm-chat/reply`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          system_prompt: systemPrompt,
+          history,
+          dynamic_variables: dynamicVariables,
+          function_mocks: functionMocks,
+        }),
+      },
+      30000,
+    );
+  },
+  llmChatSimulateTurn(
+    id: string,
+    systemPrompt: string,
+    callerPersona: string,
+    history: ChatTurn[],
+    dynamicVariables: Record<string, string>,
+    functionMocks: Record<string, string>,
+  ): Promise<{ ended: boolean; caller_text: string | null; bot_text: string | null }> {
+    return request(
+      `/api/bots/${id}/llm-chat/simulate-turn`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          system_prompt: systemPrompt,
+          caller_persona: callerPersona,
+          history,
+          dynamic_variables: dynamicVariables,
+          function_mocks: functionMocks,
+        }),
+      },
+      30000,
+    );
+  },
+
+  // AI-assisted system prompt generation/refinement
+  generatePrompt(id: string, mode: 'generate' | 'refine', instruction: string, currentPrompt: string): Promise<{ system_prompt: string }> {
+    return request(
+      `/api/bots/${id}/generate-prompt`,
+      { method: 'POST', body: JSON.stringify({ mode, instruction, current_prompt: currentPrompt }) },
+      30000,
+    );
   },
 
   // platform (dev/prod) settings
@@ -860,9 +968,16 @@ export const api = {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]));
     return request(`/api/diagnostics/fallback-events?${qs.toString()}`);
   },
+  workerHealth(): Promise<WorkerHealth[]> {
+    return request('/api/diagnostics/worker-health');
+  },
+  dispatchFailures(params: { limit?: number; offset?: number } = {}): Promise<{ items: DispatchFailure[]; total: number }> {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]));
+    return request(`/api/diagnostics/dispatch-failures?${qs.toString()}`);
+  },
 
   // transcripts
-  transcripts(params: { bot_id?: string; campaign_id?: string; status?: string; text?: string; limit?: number } = {}): Promise<Transcript[]> {
+  transcripts(params: { bot_id?: string; campaign_id?: string; status?: string; text?: string; source?: string; limit?: number } = {}): Promise<Transcript[]> {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '') as [string, string][]);
     return request(`/api/transcripts?${qs.toString()}`);
   },
@@ -872,7 +987,7 @@ export const api = {
   testRecordingLookup(callId: string): Promise<TestRecordingLookup> {
     return request(`/api/transcripts/recording-lookup/${callId}`);
   },
-  exportCsvUrl(params: { bot_id?: string; campaign_id?: string; status?: string; outcome?: string; start_date?: string; end_date?: string; text?: string }): string {
+  exportCsvUrl(params: { bot_id?: string; campaign_id?: string; status?: string; outcome?: string; start_date?: string; end_date?: string; text?: string; source?: string }): string {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '') as [string, string][]);
     return apiUrl(`/api/transcripts/export.csv?${qs.toString()}`);
   },
@@ -899,6 +1014,7 @@ export const api = {
     city?: string;
     test_worker_agent_name?: string;
     custom_lead_json?: string;
+    pre_call_params?: Record<string, string>;
   }): Promise<{ room_name: string; livekit_token: string; livekit_url: string }> {
     return request('/api/testcall/start', { method: 'POST', body: JSON.stringify(payload) });
   },

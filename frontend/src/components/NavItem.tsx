@@ -7,7 +7,7 @@ export function NavItem({ icon, label, active, onClick }: {
   onClick: () => void;
 }) {
   return (
-    <button className={`nav-item ${active ? 'active' : ''}`} onClick={onClick}>
+    <button className={`nav-item ${active ? 'active' : ''}`} onClick={onClick} title={label}>
       {icon}<span>{label}</span>
     </button>
   );
