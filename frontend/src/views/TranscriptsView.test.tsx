@@ -35,6 +35,8 @@ const baseProps = {
   onSearchText: vi.fn(),
   filters: { status: '', outcome: '', campaign_id: '', bot_id: '', start_date: '', end_date: '' },
   onFiltersChange: vi.fn(),
+  source: '' as const,
+  onSourceChange: vi.fn(),
   onSelect: vi.fn(),
 };
 

@@ -8,7 +8,6 @@ describe('buildPath', () => {
     expect(buildPath({ view: 'test' })).toBe('/test');
     expect(buildPath({ view: 'transcripts', transcriptId: '' })).toBe('/transcripts');
     expect(buildPath({ view: 'analytics' })).toBe('/analytics');
-    expect(buildPath({ view: 'observability' })).toBe('/observability');
     expect(buildPath({ view: 'library' })).toBe('/library');
     expect(buildPath({ view: 'settings' })).toBe('/settings');
   });
@@ -28,7 +27,6 @@ describe('parsePath', () => {
     expect(parsePath('/test')).toEqual({ view: 'test' });
     expect(parsePath('/transcripts')).toEqual({ view: 'transcripts', transcriptId: '' });
     expect(parsePath('/analytics')).toEqual({ view: 'analytics' });
-    expect(parsePath('/observability')).toEqual({ view: 'observability' });
     expect(parsePath('/library')).toEqual({ view: 'library' });
     expect(parsePath('/settings')).toEqual({ view: 'settings' });
   });

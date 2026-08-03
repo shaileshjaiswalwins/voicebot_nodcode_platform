@@ -23,9 +23,7 @@ describe('BotsView', () => {
     render(
       <BotsView
         bots={[]}
-        transcripts={[]}
         loading={false}
-        onSelect={vi.fn()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
         onNew={onNew}
@@ -42,9 +40,7 @@ describe('BotsView', () => {
     const { container } = render(
       <BotsView
         bots={[]}
-        transcripts={[]}
         loading={true}
-        onSelect={vi.fn()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
         onNew={vi.fn()}
@@ -54,19 +50,16 @@ describe('BotsView', () => {
     expect(container.querySelectorAll('.skeleton-row').length).toBe(4);
   });
 
-  it('renders bot rows and fires onSelect / onEdit / onDelete', async () => {
+  it('renders bot rows and fires onEdit on row click, and onEdit / onDelete from the row menu', async () => {
     const user = userEvent.setup();
     const bot = makeBot();
-    const onSelect = vi.fn();
     const onEdit = vi.fn();
     const onDelete = vi.fn();
 
     render(
       <BotsView
         bots={[bot]}
-        transcripts={[]}
         loading={false}
-        onSelect={onSelect}
         onEdit={onEdit}
         onDelete={onDelete}
         onNew={vi.fn()}
@@ -75,11 +68,13 @@ describe('BotsView', () => {
 
     expect(screen.getByText('Sales Bot')).toBeInTheDocument();
 
+    // Clicking the row itself opens the agent for editing — there's no separate
+    // "select" step now that the side profile panel is gone.
     await user.click(screen.getByText('Sales Bot'));
-    expect(onSelect).toHaveBeenCalledWith('bot-1');
+    expect(onEdit).toHaveBeenCalledWith('bot-1');
+    onEdit.mockClear();
 
-    // Edit/Delete now live behind a single per-row "⋮" menu rather than as always-visible
-    // buttons — open it before each action is clickable.
+    // Edit/Delete also live behind a single per-row "⋮" menu.
     await user.click(screen.getByRole('button', { name: /row actions/i }));
     await user.click(screen.getByRole('menuitem', { name: /edit/i }));
     expect(onEdit).toHaveBeenCalledWith('bot-1');
@@ -89,65 +84,55 @@ describe('BotsView', () => {
     expect(onDelete).toHaveBeenCalledWith(bot);
   });
 
-  it('shows selected bot details in the right-hand profile panel, including call count', () => {
+  it('shows the server-aggregated call count in the table', () => {
+    // call_count is now a server-computed field (GET /api/bots aggregates the full
+    // tbl_ai_vb_call_transcripts collection) rather than a client-side filter over
+    // whatever page of transcripts the Transcripts view happened to have loaded — that
+    // client-side count was silently wrong for any bot with more calls than the fetch limit.
+    const bot = makeBot({ call_count: 7 });
+    render(
+      <BotsView
+        bots={[bot]}
+        loading={false}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onNew={vi.fn()}
+      />
+    );
+    expect(screen.getByText('7')).toBeInTheDocument();
+  });
+
+  it('shows 0 calls when call_count is absent', () => {
     const bot = makeBot();
     render(
       <BotsView
         bots={[bot]}
-        selectedBot={bot}
-        transcripts={[
-          { _id: 't1', bot_id: 'bot-1', created_at: new Date().toISOString() },
-          { _id: 't2', bot_id: 'other-bot', created_at: new Date().toISOString() },
-        ]}
         loading={false}
-        onSelect={vi.fn()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
         onNew={vi.fn()}
       />
     );
-    // Only the one transcript belonging to bot-1 should be counted — both in the table's own
-    // Calls column and the right-hand profile panel's "Calls stored" detail.
-    expect(screen.getAllByText('1').length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: /edit agent/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /delete agent/i })).toBeInTheDocument();
+    expect(screen.getByText('0')).toBeInTheDocument();
   });
 
-  it('does not show the fake hardcoded "Orchestration" field or "local-dev" owner fallback', () => {
-    const bot = makeBot({ owner: undefined });
+  it('offers "Duplicate" from the row menu and calls onDuplicate with the bot', async () => {
+    const user = userEvent.setup();
+    const bot = makeBot();
+    const onDuplicate = vi.fn();
     render(
       <BotsView
         bots={[bot]}
-        selectedBot={bot}
-        transcripts={[]}
         loading={false}
-        onSelect={vi.fn()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
         onNew={vi.fn()}
+        onDuplicate={onDuplicate}
       />
     );
-    expect(screen.queryByText('Orchestration')).not.toBeInTheDocument();
-    expect(screen.queryByText('prompt_settings')).not.toBeInTheDocument();
-    expect(screen.queryByText('local-dev')).not.toBeInTheDocument();
-    expect(screen.getByText('Unknown')).toBeInTheDocument();
-  });
-
-  it('shows the real owner value when the bot has one', () => {
-    const bot = makeBot({ owner: 'admin@justdial.com' });
-    render(
-      <BotsView
-        bots={[bot]}
-        selectedBot={bot}
-        transcripts={[]}
-        loading={false}
-        onSelect={vi.fn()}
-        onEdit={vi.fn()}
-        onDelete={vi.fn()}
-        onNew={vi.fn()}
-      />
-    );
-    expect(screen.getByText('admin@justdial.com')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /row actions/i }));
+    await user.click(screen.getByRole('menuitem', { name: /duplicate/i }));
+    expect(onDuplicate).toHaveBeenCalledWith(bot);
   });
 
   it('shows a persistent "New agent" button in the panel header once agents already exist', async () => {
@@ -157,9 +142,7 @@ describe('BotsView', () => {
     render(
       <BotsView
         bots={[bot]}
-        transcripts={[]}
         loading={false}
-        onSelect={vi.fn()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
         onNew={onNew}

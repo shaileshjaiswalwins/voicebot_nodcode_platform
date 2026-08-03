@@ -61,7 +61,7 @@ export function RecentlyDeletedModal({
                 <div>
                   <strong style={{ fontSize: '0.88rem' }}>{bot.name}</strong>
                   <div className="muted" style={{ fontSize: '0.75rem' }}>
-                    Deleted <TimeAgo value={bot.updated_at} />
+                    Deleted <TimeAgo value={bot.deleted_at || bot.updated_at} />
                   </div>
                 </div>
                 <button disabled={restoringId === bot._id} onClick={() => handleRestore(bot)}>

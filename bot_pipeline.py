@@ -75,6 +75,7 @@ from livekit.plugins import google, sarvam
 from bot import (
     # Config / data helpers
     fetch_bot_config,
+    start_worker_heartbeat,
     normalize_mobile,
     fetch_lead,
     _build_sample_from_search,
@@ -103,7 +104,8 @@ from bot import (
     _save_transcript_to_dashboard_db,
 )
 from custom_function_tools import build_during_call_tools
-from pipeline_providers import build_llm, build_stt, build_tts
+from call_metrics import CallMetricsCollector
+from pipeline_providers import build_llm, build_stt, build_tts, resolve_provider_summary
 
 load_dotenv(override=True)
 
@@ -411,6 +413,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # provider_params.py) per bot. With no *_options set this reproduces the exact prior
     # stack (Sarvam saaras:v3 hi-IN; bulbul:v3/simran 24000Hz linear16 temp 0.75 pace 1.0;
     # Gemini gemini-3.1-flash-lite at the configured temperature).
+    _provider_summary = resolve_provider_summary(_bot_config)
+
     stt = build_stt(_bot_config)
     llm = build_llm(_bot_config)
     tts = build_tts(_bot_config)
@@ -527,12 +531,15 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "turn_count": _turn_counter,
             "avg_response_latency_ms": _avg_latency_ms,
             "response_latencies_ms": _response_latencies,
+            "turn_metrics": _metrics.as_list(),
+            "tool_calls": _metrics.tool_calls_as_list(),
+            "session_errors": _metrics.errors_as_list(),
             "tagged": False,
             "tagged_at": None,
             "created_at": datetime.now(timezone.utc),
         }
         try:
-            await _save_transcript_to_dashboard_db(_mongo_doc, _bot_id_meta, "")
+            await _save_transcript_to_dashboard_db(_mongo_doc, _bot_id_meta, "", bot_config=_bot_config, provider_config=_provider_summary)
             _log.info(
                 f"[MONGO] Transcript saved | lead_id={lead_id!r} | call_id={call_state.get('call_id')!r}"
             )
@@ -1281,6 +1288,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # ── 9. Event handlers ──
 
+    _metrics = CallMetricsCollector()
+    session.on("metrics_collected", _metrics.on_metrics_collected)
+    session.on("function_tools_executed", _metrics.on_function_tools_executed)
+
     @session.on("error")
     def _on_session_error(event) -> None:
         err = event.error
@@ -1291,6 +1302,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         }.get(getattr(err, "type", ""), "[PIPELINE-ERROR]")
         status = "retry" if getattr(err, "recoverable", False) else "EXHAUSTED (all retries failed)"
         _log.error(f"{tag} {status}: {getattr(err, 'error', err)}")
+        _metrics.on_session_error(err)
 
     @session.on("conversation_item_added")
     def _on_item_added(ev) -> None:
@@ -2362,6 +2374,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 # Worker entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    start_worker_heartbeat("voice-bot-justdial")
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,

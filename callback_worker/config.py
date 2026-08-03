@@ -10,6 +10,13 @@ MONGO_URI = os.environ["MONGO_URI"]  # no prod fallback — must be set explicit
 MONGO_DB = "ai_lead_qualify"
 MONGO_COLLECTION = "call_transcripts"
 
+# Separate dashboard/platform DB (bot.py's PLATFORM_MONGO_URI/PLATFORM_DB_NAME) — where
+# tbl_ai_vb_bots/tbl_ai_vb_bot_versions live, holding each bot's optional analysis_prompt
+# override. Distinct from MONGO_DB above (the legacy production lead-qualify DB this
+# worker polls transcripts from).
+PLATFORM_MONGO_URI = os.getenv("PLATFORM_MONGO_URI", MONGO_URI)
+PLATFORM_DB_NAME = os.getenv("VOICEBOT_PLATFORM_DB", "ai_voice_bot_management")
+
 CALLBACK_API_URL = os.environ["CALLBACK_API_URL"]  # no prod fallback — must be set explicitly
 CALLBACK_UPDATE_API_URL = os.environ["CALLBACK_UPDATE_API_URL"]  # no prod fallback — must be set explicitly
 

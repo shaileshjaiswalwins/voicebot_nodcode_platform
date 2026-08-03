@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, CheckCircle2, ClipboardList, RefreshCw } from 'lucide-react';
+import { AlertTriangle, ClipboardList, RefreshCw } from 'lucide-react';
 import type { Diagnostic } from '../types';
 
 export function DiagnosticsBar({
@@ -13,14 +13,9 @@ export function DiagnosticsBar({
   onRetry: () => void;
   onUseCache: () => void;
 }) {
-  if (!diagnostics.length) {
-    return (
-      <section className="diagnostics-bar healthy" id="diagnostics">
-        <CheckCircle2 size={16} />
-        <span>Dashboard diagnostics clear</span>
-      </section>
-    );
-  }
+  // Nothing to say when healthy — a permanent "all clear" pill sitting bottom-right on
+  // every page is noise, not signal. Only render when there's an actual diagnostic to show.
+  if (!diagnostics.length) return null;
   const latest = diagnostics[0];
   return (
     <section className={`diagnostics-bar ${latest.severity}`} id="diagnostics">

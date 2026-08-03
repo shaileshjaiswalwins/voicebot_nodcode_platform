@@ -90,6 +90,34 @@ def build_tts(bot_config: dict):
         return IndicF5TTS(ws_url=os.getenv("INDIC_TTS_WS_URL", "ws://10.10.0.14:8404/ws"), **kwargs)
 
 
+def resolve_provider_summary(bot_config: dict) -> dict:
+    """Same provider/model/voice resolution as build_stt/build_tts/build_llm above, without
+    instantiating any plugin — for logging/tracing which STT/TTS/LLM a call actually used
+    (e.g. langsmith_tracing.py), where building a real plugin instance would be wasteful."""
+    stt_provider = (bot_config.get("stt_provider") or DEFAULT_STT_PROVIDER).lower()
+    if stt_provider not in ("sarvam", "deepgram"):
+        stt_provider = DEFAULT_STT_PROVIDER
+    tts_provider = (bot_config.get("tts_provider") or DEFAULT_TTS_PROVIDER).lower()
+    if tts_provider not in ("sarvam", "elevenlabs", "justdial"):
+        tts_provider = DEFAULT_TTS_PROVIDER
+    llm_provider = (bot_config.get("llm_provider") or DEFAULT_LLM_PROVIDER).lower()
+    if llm_provider not in ("gemini", "openai"):
+        llm_provider = DEFAULT_LLM_PROVIDER
+
+    return {
+        "stt_provider": stt_provider,
+        "stt_model": bot_config.get("stt_model") or ("saaras:v3" if stt_provider == "sarvam" else "nova-3"),
+        "stt_language": bot_config.get("stt_language") or ("hi-IN" if stt_provider == "sarvam" else "en-US"),
+        "tts_provider": tts_provider,
+        "tts_model": bot_config.get("tts_model") or ("bulbul:v3" if tts_provider == "sarvam" else ""),
+        "tts_voice": bot_config.get("tts_voice") or "",
+        "tts_language": bot_config.get("tts_language") or "",
+        "llm_provider": llm_provider,
+        "llm_model": bot_config.get("llm_model") or ("gemini-3.1-flash-lite" if llm_provider == "gemini" else "gpt-4.1"),
+        "llm_temperature": bot_config.get("temperature"),
+    }
+
+
 def build_llm(bot_config: dict):
     provider = (bot_config.get("llm_provider") or DEFAULT_LLM_PROVIDER).lower()
     if provider not in ("gemini", "openai"):

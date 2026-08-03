@@ -9,9 +9,55 @@ import aiohttp
 from loguru import logger
 from pymongo import ASCENDING, MongoClient, ReturnDocument
 
+from bson import ObjectId
+from bson.errors import InvalidId
+
 from .analysis import fallback_analysis, generate_b2b_score, generate_call_analysis
 from .callback import CALLBACK_API_URL, build_callback_payload, send_callback
-from .config import BATCH_LIMIT, LOG_DIR, MONGO_COLLECTION, MONGO_DB, MONGO_URI, POLL_INTERVAL_SEC
+from .config import (
+    BATCH_LIMIT,
+    LOG_DIR,
+    MONGO_COLLECTION,
+    MONGO_DB,
+    MONGO_URI,
+    PLATFORM_DB_NAME,
+    PLATFORM_MONGO_URI,
+    POLL_INTERVAL_SEC,
+)
+
+_platform_client: MongoClient | None = None
+
+
+def _get_platform_db():
+    global _platform_client
+    if _platform_client is None:
+        _platform_client = MongoClient(PLATFORM_MONGO_URI, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
+    return _platform_client[PLATFORM_DB_NAME]
+
+
+def _get_bot_analysis_prompt_override(bot_id: str) -> str:
+    """Best-effort lookup of a bot's optional analysis_prompt override (BotConfig field,
+    validated at save time in backend/routers/bots.py). Never raises — a DB blip or a
+    missing bot here must fall back to the global prompt, not break post-call analysis."""
+    if not bot_id:
+        return ""
+    try:
+        bot_oid = ObjectId(bot_id)
+    except (InvalidId, TypeError):
+        return ""
+    try:
+        db = _get_platform_db()
+        bot = db["tbl_ai_vb_bots"].find_one({"_id": bot_oid}, {"active_version_id": 1, "draft_version_id": 1})
+        if not bot:
+            return ""
+        version_id = bot.get("active_version_id") or bot.get("draft_version_id")
+        if not version_id:
+            return ""
+        version = db["tbl_ai_vb_bot_versions"].find_one({"_id": ObjectId(version_id)}, {"config.analysis_prompt": 1})
+        return ((version or {}).get("config") or {}).get("analysis_prompt", "") or ""
+    except Exception as e:
+        logger.warning(f"[WORKER] Could not look up analysis_prompt override for bot_id={bot_id!r}: {e}")
+        return ""
 
 # A claimed-but-never-finished doc (worker crash mid-process) is reclaimable after this
 # long, so a dead worker doesn't permanently strand it in "processing" limbo.
@@ -98,9 +144,12 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
         greeting_done = bool(doc.get("greeting_done", True))  # default True for older docs
         user_speech_ms = int(doc.get("user_speech_ms") or 0)
         wrong_opener_detected = bool(doc.get("wrong_opener_detected", False))
+        analysis_prompt_override = await loop.run_in_executor(
+            None, lambda: _get_bot_analysis_prompt_override(doc.get("bot_id", ""))
+        )
         try:
             analysis, b2b_score = await asyncio.gather(
-                generate_call_analysis(transcript, status, schema, http_session, muted_transcript=muted_transcript, gemini_connect_failed=gemini_connect_failed, duration_secs=duration_secs, greeting_done=greeting_done, user_speech_ms=user_speech_ms, wrong_opener_detected=wrong_opener_detected, is_business_flag=is_business_flag),
+                generate_call_analysis(transcript, status, schema, http_session, muted_transcript=muted_transcript, gemini_connect_failed=gemini_connect_failed, duration_secs=duration_secs, greeting_done=greeting_done, user_speech_ms=user_speech_ms, wrong_opener_detected=wrong_opener_detected, is_business_flag=is_business_flag, analysis_prompt_override=analysis_prompt_override),
                 generate_b2b_score(transcript, http_session),
             )
         except Exception as e:

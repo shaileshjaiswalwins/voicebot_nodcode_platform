@@ -11,7 +11,7 @@ import { Tooltip } from '../components/Tooltip';
 
 type EnvFilter = 'all' | PhoneNumberEnvironment;
 
-type CreatePayload = {
+export type CreatePayload = {
   number: string;
   environment: PhoneNumberEnvironment;
   service_id?: string;
@@ -23,7 +23,7 @@ type CreatePayload = {
   sip_password?: string;
 };
 
-type UpdatePayload = {
+export type UpdatePayload = {
   status?: string;
   service_id?: string;
   aod_ports?: number;

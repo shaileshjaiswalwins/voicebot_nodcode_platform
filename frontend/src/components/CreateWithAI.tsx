@@ -1,0 +1,55 @@
+import React, { useState } from 'react';
+import { Sparkles } from 'lucide-react';
+import { Dialog } from './Dialog';
+import { Spinner } from './Spinner';
+
+/** Create Agent > Create with AI — a single free-text description in, a fully-formed agent
+ * out (agent_name/initial_message/system_prompt via backend/prompt_assist.py's
+ * generate_agent_from_description). Everything else stays on platform defaults; the goal is
+ * the fewest possible steps from "I need a bot" to "I have a bot to test." */
+export function CreateWithAI({
+  onContinue,
+  onBack,
+  busy,
+  error,
+}: {
+  onContinue: (description: string) => void;
+  onBack: () => void;
+  busy: boolean;
+  error?: string;
+}) {
+  const [description, setDescription] = useState('');
+
+  return (
+    <Dialog
+      title="Create with AI"
+      icon={<Sparkles size={17} />}
+      maxWidth={520}
+      onClose={onBack}
+      closeOnBackdrop={!busy}
+      closeOnEscape={!busy}
+      footer={
+        <>
+          <button onClick={onBack} disabled={busy}>Back</button>
+          <button className="primary" onClick={() => onContinue(description)} disabled={!description.trim() || busy}>
+            {busy ? <Spinner label="Generating" size={13} /> : <Sparkles size={15} />} {busy ? 'Generating…' : 'Continue'}
+          </button>
+        </>
+      }
+    >
+      <label className="full">
+        Describe the agent you want to build
+        <textarea
+          rows={5}
+          autoFocus
+          placeholder='e.g. "A friendly agent that calls HR candidates to schedule their first interview and confirm their availability."'
+          value={description}
+          disabled={busy}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+        <small>We'll generate the persona name, opening greeting, and full system prompt from this. Everything else uses sensible defaults — edit anything after.</small>
+      </label>
+      {error && <div className="notice error" role="alert">{error}</div>}
+    </Dialog>
+  );
+}

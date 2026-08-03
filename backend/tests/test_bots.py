@@ -8,6 +8,54 @@ def _create_bot(client, auth_headers, name="Test Bot"):
     return resp.json()
 
 
+def test_create_bot_rejects_analysis_prompt_missing_required_placeholder(client, auth_headers):
+    resp = client.post(
+        "/api/bots",
+        json={
+            "name": "Bad Analysis Prompt Bot",
+            "description": "d",
+            "config": {"organization_name": "Justdial", "analysis_prompt": "No placeholders here."},
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_update_version_rejects_invalid_analysis_prompt_override(client, auth_headers):
+    bot = _create_bot(client, auth_headers)
+    resp = client.put(
+        f"/api/bots/{bot['_id']}/versions/{bot['draft_version_id']}",
+        json={"config": {"organization_name": "Justdial", "analysis_prompt": "still missing placeholders"}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_update_version_accepts_empty_analysis_prompt_as_use_global_default(client, auth_headers):
+    bot = _create_bot(client, auth_headers)
+    resp = client.put(
+        f"/api/bots/{bot['_id']}/versions/{bot['draft_version_id']}",
+        json={"config": {"organization_name": "Justdial", "analysis_prompt": ""}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+
+def test_update_version_accepts_valid_analysis_prompt_override_with_all_required_placeholders(client, auth_headers):
+    from backend.analysis_prompts import CALL_ANALYSIS_KEY, DEFAULT_PROMPTS
+
+    bot = _create_bot(client, auth_headers)
+    valid_override = DEFAULT_PROMPTS[CALL_ANALYSIS_KEY].replace(
+        "strict call-analysis engine", "custom per-bot call-analysis engine"
+    )
+    resp = client.put(
+        f"/api/bots/{bot['_id']}/versions/{bot['draft_version_id']}",
+        json={"config": {"organization_name": "Justdial", "analysis_prompt": valid_override}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+
 def test_legacy_function_dict_with_custom_body_round_trips(client, auth_headers):
     """Existing bots stored functions as loose dicts (name/url/method/headers/query_params/
     custom_body). Migrating `functions` to the typed CustomFunction model must not drop those
@@ -258,3 +306,32 @@ def test_saving_a_draft_persists_every_field_the_pipeline_actually_reads(client,
                 assert saved_fn.get(fk) == fv, f"functions[0].{fk} dropped: got {saved_fn.get(fk)!r}"
             continue
         assert saved_config.get(key) == value, f"{key} was dropped on save: got {saved_config.get(key)!r}"
+
+
+def test_bot_list_includes_server_aggregated_call_count(client, auth_headers):
+    """Regression test: the frontend used to compute "Calls" per bot by filtering
+    whatever page of transcripts the Transcripts view happened to have loaded client-side
+    (capped at its own fetch limit) — silently wrong for any bot with more calls than that.
+    GET /api/bots now aggregates the real count server-side over the whole collection."""
+    from backend import db as db_module
+
+    bot_a = _create_bot(client, auth_headers, name="Bot A")
+    bot_b = _create_bot(client, auth_headers, name="Bot B")
+
+    db_module.transcripts.insert_many([
+        {"bot_id": bot_a["_id"], "call_id": "c1"},
+        {"bot_id": bot_a["_id"], "call_id": "c2"},
+        {"bot_id": bot_a["_id"], "call_id": "c3"},
+        {"bot_id": bot_b["_id"], "call_id": "c4"},
+    ])
+
+    listed = client.get("/api/bots", headers=auth_headers).json()
+    by_id = {b["_id"]: b for b in listed}
+    assert by_id[bot_a["_id"]]["call_count"] == 3
+    assert by_id[bot_b["_id"]]["call_count"] == 1
+
+
+def test_bot_list_call_count_is_zero_for_a_bot_with_no_calls(client, auth_headers):
+    bot = _create_bot(client, auth_headers)
+    listed = client.get("/api/bots", headers=auth_headers).json()
+    assert listed[0]["call_count"] == 0

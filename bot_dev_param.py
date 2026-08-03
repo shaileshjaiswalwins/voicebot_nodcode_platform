@@ -84,7 +84,7 @@ except ImportError:
 
 import aiohttp
 
-from pipeline_providers import build_llm, build_stt, build_tts
+from pipeline_providers import build_llm, build_stt, build_tts, resolve_provider_summary
 from workflow_engine import run_workflow_call
 
 # ---------------------------------------------------------------------------
@@ -151,6 +151,8 @@ from bot import (
     fetch_bot_config,
     record_fallback_event,
     FALLBACK_REASON_NO_IDS,
+    _save_transcript_to_dashboard_db,
+    start_worker_heartbeat,
     normalize_mobile,
     fetch_lead,
     _build_sample_from_search,
@@ -185,6 +187,7 @@ from custom_functions import (
     run_lifecycle_functions,
 )
 from custom_function_tools import build_during_call_tools
+from call_metrics import CallMetricsCollector
 
 # Override bot.py globals so all calls in this process use the parameterised values
 _bot_module.MONGO_URI        = _MONGO_URI
@@ -391,7 +394,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # its own AgentSession from bot_config["workflow"] and drives the whole call. ──
     if (_bot_config or {}).get("bot_type") == "workflow":
         await run_workflow_call(
-            ctx, _bot_config, _prefetched_lead, room_name=room_name,
+            ctx, _bot_config, _prefetched_lead, room_name=room_name, bot_id=_bot_id_meta,
         )
         return
 
@@ -570,6 +573,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _provider_cfg.setdefault("tts_options", {})
         _provider_cfg["tts_options"] = {"temperature": _TTS_TEMPERATURE, **_provider_cfg["tts_options"]}
 
+    _provider_summary = resolve_provider_summary(_provider_cfg)
+
     stt = build_stt(_provider_cfg)
     llm = build_llm(_provider_cfg)
     tts = build_tts(_provider_cfg)
@@ -677,6 +682,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 if _response_latencies else 0
             ),
             "response_latencies_ms": _response_latencies,
+            "turn_metrics": _metrics.as_list(),
+            "tool_calls": _metrics.tool_calls_as_list(),
+            "session_errors": _metrics.errors_as_list(),
             "tagged": False,
             "tagged_at": None,
             "created_at": datetime.now(timezone.utc),
@@ -695,8 +703,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             },
         }
         try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, lambda: _get_mongo_collection().insert_one(_mongo_doc))
+            await _save_transcript_to_dashboard_db(_mongo_doc, _bot_id_meta, "", bot_config=_bot_config, provider_config=_provider_summary)
             _log.info(
                 f"[MONGO] Transcript saved | lead_id={lead_id!r} | call_id={call_state.get('call_id')!r}"
             )
@@ -1466,6 +1473,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # ── 9. Event handlers ──
 
+    _metrics = CallMetricsCollector()
+    session.on("metrics_collected", _metrics.on_metrics_collected)
+    session.on("function_tools_executed", _metrics.on_function_tools_executed)
+
     @session.on("error")
     def _on_session_error(event) -> None:
         err = event.error
@@ -1476,6 +1487,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         }.get(getattr(err, "type", ""), "[PIPELINE-ERROR]")
         status = "retry" if getattr(err, "recoverable", False) else "EXHAUSTED (all retries failed)"
         _log.error(f"{tag} {status}: {getattr(err, 'error', err)}")
+        _metrics.on_session_error(err)
 
     @session.on("conversation_item_added")
     def _on_item_added(ev) -> None:
@@ -2440,6 +2452,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 # Worker entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    start_worker_heartbeat(_AGENT_NAME)
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,

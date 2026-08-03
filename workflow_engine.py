@@ -99,7 +99,9 @@ import asyncio
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional
 
 import aiohttp
@@ -109,7 +111,8 @@ from livekit.agents import Agent, AgentSession, RunContext, StopResponse, functi
 from livekit.api import DeleteRoomRequest, LiveKitAPI
 from livekit.plugins import google, sarvam
 
-from bot import _get_http_session
+from bot import _get_http_session, build_transcript_from_session, _save_transcript_to_dashboard_db
+from call_metrics import CallMetricsCollector
 from livekit_indic5_tts import IndicF5TTS
 from interruption_presets import resolve_interruption_preset
 
@@ -596,6 +599,7 @@ async def run_workflow_call(
     lead_record: dict | None,
     *,
     room_name: str,
+    bot_id: str = "",
 ) -> None:
     """Compile bot_config["workflow"] and run it as a live LiveKit call.
 
@@ -603,6 +607,7 @@ async def run_workflow_call(
     called by bot_dev.py before handing off here — this function only builds
     the session/agent and starts it).
     """
+    _call_start = time.time()
     workflow = bot_config.get("workflow") or {"nodes": [], "edges": []}
     global_prompt = bot_config.get("global_prompt", "")
     temperature = float(bot_config.get("temperature") or 0.7)
@@ -662,6 +667,17 @@ async def run_workflow_call(
             ws_url=INDIC_TTS_WS_URL, sample_rate=24000, nfe_step=16, speaker=tts_voice,
         )
 
+    # Workflow bots don't go through pipeline_providers.py at all (STT/LLM are hardcoded
+    # above, only TTS is selectable) — build the summary from what's actually instantiated
+    # here, not from pipeline_providers.resolve_provider_summary's defaults.
+    _provider_summary = {
+        "stt_provider": "sarvam", "stt_model": "saaras:v3", "stt_language": "hi-IN",
+        "tts_provider": tts_provider,
+        "tts_model": "bulbul:v3" if tts_provider == "sarvam" else "indicf5",
+        "tts_voice": tts_voice, "tts_language": "hi-IN",
+        "llm_provider": "gemini", "llm_model": "gemini-3.1-flash-lite", "llm_temperature": temperature,
+    }
+
     session: AgentSession = AgentSession(
         stt=stt, llm=llm_plugin, tts=tts,
         turn_handling={
@@ -682,10 +698,53 @@ async def run_workflow_call(
         userdata=state,
     )
 
+    _metrics = CallMetricsCollector()
+    session.on("metrics_collected", _metrics.on_metrics_collected)
+    session.on("function_tools_executed", _metrics.on_function_tools_executed)
+
+    @session.on("error")
+    def _on_session_error(event) -> None:
+        err = event.error
+        logger.error(f"[Workflow] session error: {getattr(err, 'error', err)}")
+        _metrics.on_session_error(err)
+
+    _call_finished = asyncio.Event()
+
     async def _end_call() -> None:
         if state.ended_naturally:
             return
         state.ended_naturally = True
+        try:
+            await _finish_call()
+        finally:
+            _call_finished.set()
+
+    async def _finish_call() -> None:
+        # Workflow bots never persisted a transcript at all — the fixed-assistant
+        # entrypoint's end-of-call save (bot_dev_param.py's _mongo_doc block) only runs
+        # for bot_type != "workflow", since run_workflow_call takes over the whole call
+        # and returns without going back through that code. build_transcript_from_session
+        # is the same helper bot_dev.py/bot_pipeline.py use, so this lands in the same
+        # tbl_ai_vb_call_transcripts collection the dashboard's Transcripts view reads.
+        try:
+            transcript = build_transcript_from_session(session)
+            mongo_doc = {
+                "call_id": room_name,
+                "room_name": room_name,
+                "status": "completed",
+                "transcript": transcript,
+                "call_start_time": _call_start,
+                "call_end_time": time.time(),
+                "call_duration_sec": round(time.time() - _call_start),
+                "turn_count": len(transcript),
+                "turn_metrics": _metrics.as_list(),
+                "tool_calls": _metrics.tool_calls_as_list(),
+                "session_errors": _metrics.errors_as_list(),
+                "created_at": datetime.now(timezone.utc),
+            }
+            await _save_transcript_to_dashboard_db(mongo_doc, bot_id, "", bot_config=bot_config, provider_config=_provider_summary)
+        except Exception as e:
+            logger.error(f"[Workflow] transcript save failed: {e}")
         try:
             await session.aclose()
         except Exception as e:
@@ -722,3 +781,12 @@ async def run_workflow_call(
     )
 
     await session.start(room=ctx.room, agent=first_agent)
+
+    # Block here until the call is actually over (participant disconnect, timeout, or an
+    # explicit end-call action all funnel through _end_call). Previously this function
+    # returned right after session.start(), so bot_dev_param.py's entrypoint returned too
+    # — and the LiveKit job runtime tore the whole process down as soon as the room
+    # disconnected, often faster than the fire-and-forget _end_call() task could finish
+    # its Mongo write. That's why no workflow-bot call ever saved a transcript, even after
+    # the save logic itself was added above.
+    await _call_finished.wait()

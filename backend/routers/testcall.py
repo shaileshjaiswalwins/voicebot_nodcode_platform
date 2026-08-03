@@ -1,14 +1,58 @@
+import asyncio
 import json
+import logging
 import os
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from livekit import api as lkapi
 
 from ..auth import require_user
+from ..db import db
 from ..models import TestCallStartRequest, TestCallStopRequest
 
 router = APIRouter(prefix="/api/testcall", tags=["testcall"])
+
+_log = logging.getLogger("voicebot_admin")
+
+dispatch_failures = db["tbl_ai_vb_dispatch_failures"]
+
+# How long LiveKit gets to assign a registered worker to a freshly-created dispatch
+# before we consider it stuck. A healthy worker picks up a job in well under a second —
+# this only needs to be generous enough to not false-positive on a slow network hop.
+_DISPATCH_ASSIGN_TIMEOUT_S = 10
+
+
+async def _watch_dispatch_assignment(room_name: str, agent_name: str, bot_id: str) -> None:
+    """Distinct failure mode from bot.py's fallback-events (which cover a *resolved*
+    call running on the wrong config) and worker-health (which covers a worker process
+    being down) — this is "a worker was registered and reachable, but LiveKit never
+    actually handed this specific dispatch to any worker at all," which is exactly what
+    happened during the Jul 29 incident and left the caller on an infinite "waiting for
+    bot to join" with zero record of why. Best-effort: never raises into the caller."""
+    await asyncio.sleep(_DISPATCH_ASSIGN_TIMEOUT_S)
+    try:
+        client = _lk_client()
+        try:
+            dispatches = await client.agent_dispatch.list_dispatch(room_name=room_name)
+        finally:
+            await client.aclose()
+        assigned = any(d.state.jobs for d in dispatches if d.agent_name == agent_name)
+        if not assigned:
+            dispatch_failures.insert_one({
+                "room_name": room_name,
+                "agent_name": agent_name,
+                "bot_id": bot_id,
+                "timeout_seconds": _DISPATCH_ASSIGN_TIMEOUT_S,
+                "created_at": datetime.now(timezone.utc),
+            })
+            _log.warning(
+                f"[DISPATCH] room={room_name} agent={agent_name!r} — no worker was ever "
+                f"assigned this job within {_DISPATCH_ASSIGN_TIMEOUT_S}s"
+            )
+    except Exception as exc:
+        _log.warning(f"[DISPATCH] assignment watch failed (non-fatal): {exc}")
 
 
 def _lk_client() -> lkapi.LiveKitAPI:
@@ -57,6 +101,8 @@ async def start_test_call(payload: TestCallStartRequest, user: dict = Depends(re
         raise HTTPException(502, f"Could not reach LiveKit server: {exc}") from exc
     finally:
         await client.aclose()
+
+    asyncio.create_task(_watch_dispatch_assignment(room_name, agent_name, payload.bot_id))
 
     token = (
         lkapi.AccessToken(os.getenv("LIVEKIT_API_KEY", ""), os.getenv("LIVEKIT_API_SECRET", ""))

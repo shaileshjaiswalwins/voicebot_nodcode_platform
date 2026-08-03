@@ -1,7 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, ArrowDown, ArrowUp, Bot, Copy, Download, FileText, LayoutGrid, List,
-  Pencil, Plus, Rocket, Tag, Trash2, Trash
+  Pencil, Plus, Rocket, Search, Tag, Trash2, Trash
 } from 'lucide-react';
 import type { Bot as BotType, Campaign, LanguageOption } from '../api';
 import { api } from '../api';
@@ -14,7 +14,6 @@ import { EmptyState } from '../components/EmptyState';
 import { Dialog } from '../components/Dialog';
 import { Spinner } from '../components/Spinner';
 import { RecentlyDeletedModal } from '../components/RecentlyDeletedModal';
-import { AgentFoldersRail } from '../components/AgentFoldersRail';
 
 const PAGE_SIZE = 20;
 
@@ -30,7 +29,7 @@ function formatDuration(sec?: number): string {
 
 type SortKey = 'updated_at' | 'name' | 'call_count';
 
-export function BotsView({ bots, loading, onEdit, onDelete, onNew, onDuplicate, duplicatingBotId }: {
+export function BotsView({ bots, loading, onEdit, onDelete, onNew, onDuplicate, duplicatingBotId, onBotRestored }: {
   bots: BotType[];
   loading?: boolean;
   onEdit: (botId: string) => void;
@@ -43,10 +42,34 @@ export function BotsView({ bots, loading, onEdit, onDelete, onNew, onDuplicate, 
    * this, slightly different." */
   onDuplicate?: (bot: BotType) => void;
   duplicatingBotId?: string;
+  /** Refreshes the main Agents list after a restore from Recently Deleted — without this,
+   * the restored bot only disappears from the modal's own local list and never actually
+   * reappears in `bots` until an unrelated action happens to reload it. */
+  onBotRestored?: () => void;
 }) {
   const [search, setSearch] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagMenuOpen, setTagMenuOpen] = useState(false);
+  const [tagSearch, setTagSearch] = useState('');
+  const tagFilterRef = useRef<HTMLDivElement>(null);
+  // Matches RowActionsMenu's own close-on-outside-click/Escape behavior — without this the
+  // dropdown only ever closed by clicking the Tags button again, which reads as stuck/broken
+  // once the tester clicks anywhere else on the page.
+  useEffect(() => {
+    if (!tagMenuOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (tagFilterRef.current && !tagFilterRef.current.contains(e.target as Node)) setTagMenuOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setTagMenuOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [tagMenuOpen]);
   const [sortKey, setSortKey] = useState<SortKey>('updated_at');
   const [sortDesc, setSortDesc] = useState(true);
   const [draftsOnly, setDraftsOnly] = useState(false);
@@ -73,22 +96,13 @@ export function BotsView({ bots, loading, onEdit, onDelete, onNew, onDuplicate, 
     return Array.from(set).sort();
   }, [bots]);
 
-  // Folder counts always reflect the full unfiltered set — a folder shows how many agents
-  // it holds regardless of whatever search/drafts-only filter is currently active.
+  // Counts always reflect the full unfiltered set — the dropdown shows how many agents
+  // each tag holds regardless of whatever search/drafts-only filter is currently active.
   const tagCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     bots.forEach((b) => (b.tags || []).forEach((t) => { counts[t] = (counts[t] || 0) + 1; }));
     return counts;
   }, [bots]);
-
-  // A folder is just "selectedTags is exactly this one tag" — no separate selection state
-  // to keep in sync with the Tags filter dropdown below, which can still add more tags on
-  // top of a folder selection.
-  const activeFolder = selectedTags.length === 1 ? selectedTags[0] : null;
-  function selectFolder(tag: string | null) {
-    setSelectedTags(tag ? [tag] : []);
-    setPage(1);
-  }
 
   const draftCount = bots.filter((b) => !b.published).length;
 
@@ -153,26 +167,45 @@ export function BotsView({ bots, loading, onEdit, onDelete, onNew, onDuplicate, 
       </div>
 
       <div className="agents-toolbar-controls">
-        <div className="tag-filter">
+        <div className="tag-filter" ref={tagFilterRef}>
           <button onClick={() => setTagMenuOpen((v) => !v)} className={selectedTags.length ? 'active' : ''}>
             <Tag size={14} /> Tags{selectedTags.length ? ` (${selectedTags.length})` : ''}
           </button>
           {tagMenuOpen && (
             <div className="tag-filter-dropdown">
-              {allTags.length === 0 && <p className="muted" style={{ fontSize: '0.8rem', margin: '0.4rem' }}>No tags assigned yet.</p>}
-              {allTags.map((tag) => (
-                <label key={tag} className="tag-filter-option">
-                  <input
-                    type="checkbox"
-                    checked={selectedTags.includes(tag)}
-                    onChange={(e) => {
-                      setSelectedTags((prev) => (e.target.checked ? [...prev, tag] : prev.filter((t) => t !== tag)));
-                      setPage(1);
-                    }}
-                  />
-                  {tag}
-                </label>
-              ))}
+              <div className="tag-filter-heading">Filter by Tags</div>
+              <div className="tag-filter-search">
+                <Search size={14} />
+                <input
+                  autoFocus
+                  placeholder="Search tags…"
+                  value={tagSearch}
+                  onChange={(e) => setTagSearch(e.target.value)}
+                />
+              </div>
+              <div className="tag-filter-list">
+                {allTags.length === 0 ? (
+                  <p className="muted" style={{ fontSize: '0.8rem', margin: '0.4rem' }}>No tags assigned yet.</p>
+                ) : (
+                  <>
+                    <div className="tag-filter-section-label">Available Tags</div>
+                    {allTags.filter((tag) => tag.toLowerCase().includes(tagSearch.trim().toLowerCase())).map((tag) => (
+                      <label key={tag} className="tag-filter-option">
+                        <input
+                          type="checkbox"
+                          checked={selectedTags.includes(tag)}
+                          onChange={(e) => {
+                            setSelectedTags((prev) => (e.target.checked ? [...prev, tag] : prev.filter((t) => t !== tag)));
+                            setPage(1);
+                          }}
+                        />
+                        <span>{tag}</span>
+                        <span className="count-badge">{tagCounts[tag] || 0}</span>
+                      </label>
+                    ))}
+                  </>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -234,14 +267,7 @@ export function BotsView({ bots, loading, onEdit, onDelete, onNew, onDuplicate, 
   );
 
   return (
-    <section className="agents-layout">
-      <AgentFoldersRail
-        tags={allTags}
-        counts={tagCounts}
-        selected={activeFolder}
-        onSelect={selectFolder}
-        totalCount={bots.length}
-      />
+    <section className="content-grid">
       <div className="table-panel">
         {header}
         {toolbar}
@@ -324,7 +350,10 @@ export function BotsView({ bots, loading, onEdit, onDelete, onNew, onDuplicate, 
         <RecentlyDeletedModal
           bots={deletedBots}
           onClose={() => setDeletedOpen(false)}
-          onRestored={(id) => setDeletedBots((prev) => (prev || []).filter((b) => b._id !== id))}
+          onRestored={(id) => {
+            setDeletedBots((prev) => (prev || []).filter((b) => b._id !== id));
+            onBotRestored?.();
+          }}
         />
       )}
     </section>

@@ -30,6 +30,7 @@ def _clean_db():
         db_module.db["tbl_ai_vb_pricing_config"],
         db_module.dialer_webhook_secrets,
         db_module.custom_functions,
+        db_module.transcripts,
     ):
         coll.delete_many({})
     analysis_prompts_module._cache.clear()

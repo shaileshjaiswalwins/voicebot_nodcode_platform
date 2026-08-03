@@ -27,6 +27,8 @@ describe('SettingsView admin settings persistence', () => {
         onUpdateRuntime={vi.fn()}
         platformSettings={makePlatformSettings()}
         onUpdatePlatformSettings={onUpdatePlatformSettings}
+        pricingConfig={null}
+        onUpdatePricingConfig={vi.fn()}
       />
     );
 
@@ -56,6 +58,8 @@ describe('SettingsView admin settings persistence', () => {
         onUpdateRuntime={vi.fn()}
         platformSettings={makePlatformSettings()}
         onUpdatePlatformSettings={onUpdatePlatformSettings}
+        pricingConfig={null}
+        onUpdatePricingConfig={vi.fn()}
       />
     );
 
@@ -76,6 +80,8 @@ describe('SettingsView URL validation', () => {
         onUpdateRuntime={vi.fn()}
         platformSettings={makePlatformSettings()}
         onUpdatePlatformSettings={onUpdatePlatformSettings}
+        pricingConfig={null}
+        onUpdatePricingConfig={vi.fn()}
       />
     );
 
@@ -95,6 +101,8 @@ describe('SettingsView URL validation', () => {
         onUpdateRuntime={vi.fn()}
         platformSettings={makePlatformSettings()}
         onUpdatePlatformSettings={vi.fn()}
+        pricingConfig={null}
+        onUpdatePricingConfig={vi.fn()}
       />
     );
 
@@ -114,6 +122,8 @@ describe('SettingsView URL validation', () => {
         onUpdateRuntime={onUpdateRuntime}
         platformSettings={makePlatformSettings()}
         onUpdatePlatformSettings={vi.fn()}
+        pricingConfig={null}
+        onUpdatePricingConfig={vi.fn()}
       />
     );
 
@@ -138,6 +148,8 @@ describe('SettingsView cleanup', () => {
         onUpdateRuntime={vi.fn()}
         platformSettings={makePlatformSettings()}
         onUpdatePlatformSettings={vi.fn()}
+        pricingConfig={null}
+        onUpdatePricingConfig={vi.fn()}
       />
     );
     expect(screen.queryByText(/Coming soon: role-based access/)).not.toBeInTheDocument();

@@ -25,7 +25,9 @@ import json
 import logging as _logging
 import os
 import re
+import socket
 import sys
+import threading
 import time
 import unicodedata
 import wave
@@ -45,6 +47,7 @@ from custom_functions import (
     run_lifecycle_functions,
 )
 from custom_function_tools import build_during_call_tools
+from langsmith_tracing import trace_completed_call
 
 from livekit import rtc
 from livekit.agents import (
@@ -300,19 +303,72 @@ def _get_platform_transcripts_collection():
     return _get_platform_db()["tbl_ai_vb_call_transcripts"]
 
 
-async def _save_transcript_to_dashboard_db(mongo_doc: dict, bot_id: str, campaign_id: str = "") -> None:
+async def _save_transcript_to_dashboard_db(
+    mongo_doc: dict, bot_id: str, campaign_id: str = "",
+    bot_config: dict | None = None, provider_config: dict | None = None,
+) -> None:
     """Save a call transcript into the dashboard's own collection
     (ai_voice_bot_management.tbl_ai_vb_call_transcripts), which is what
     backend/routers/transcripts.py reads (backend/db.py:39). This is the transcript
     store for dashboard-driven calls (Test Call / campaigns, i.e. bot_dev.py and
     bot_pipeline.py) — ai_lead_qualify is a separate, legacy production DB those
     entrypoints must not write to. Raises on failure; callers log via their own
-    room-bound logger, matching the existing save-call-data pattern."""
+    room-bound logger, matching the existing save-call-data pattern.
+
+    Dashboard-driven calls have no other post-call analysis pipeline — callback_worker/
+    worker.py only ever processes the legacy ai_lead_qualify.call_transcripts collection
+    (written exclusively by this file's OWN separate production entrypoint, further down),
+    a completely different collection from this one. So call_outcome/qna is computed
+    inline, right here, rather than relying on that worker ever seeing this doc."""
     _doc = dict(mongo_doc)
     _doc["bot_id"] = bot_id
     _doc["campaign_id"] = campaign_id
+    # Dashboard Test Call always names its room "test-<uuid>" (backend/routers/testcall.py);
+    # every other entrypoint (campaign/SIP-dialed calls) uses a LiveKit-assigned or
+    # dialer-assigned room name that never has that prefix. No entrypoint sets an explicit
+    # call-origin field today, so this is the one signal that's both always-present and
+    # already consistent across bot.py/bot_dev.py/bot_dev_param.py/bot_pipeline.py.
+    _doc["source"] = "web_test" if str(mongo_doc.get("room_name", "")).startswith("test-") else "batch"
+    if provider_config:
+        _doc["provider_config"] = provider_config
+
+    try:
+        from callback_worker.analysis import fallback_analysis, generate_b2b_score, generate_call_analysis
+
+        analysis_prompt_override = (bot_config or {}).get("analysis_prompt", "")
+        schema = (mongo_doc.get("lead_record") or {}).get("qualification_schema", {}) or {}
+        analysis, b2b_score = await asyncio.gather(
+            generate_call_analysis(
+                mongo_doc.get("transcript") or [], mongo_doc.get("status", "completed"), schema,
+                _get_http_session(),
+                muted_transcript=mongo_doc.get("muted_transcript"),
+                duration_secs=mongo_doc.get("call_duration_sec"),
+                analysis_prompt_override=analysis_prompt_override,
+            ),
+            generate_b2b_score(mongo_doc.get("transcript") or [], _get_http_session()),
+        )
+    except Exception as e:
+        logger.warning(f"[ANALYSIS] Failed for dashboard call room={mongo_doc.get('room_name')!r}: {e}")
+        analysis = fallback_analysis(mongo_doc.get("status", "completed"))
+        b2b_score = {"deal_value": "", "lead_intent_score": "", "urgency_flag": "no"}
+
+    _doc["analysis"] = {
+        "call_outcome": analysis.get("call_outcome", ""),
+        "call_outcome_description": analysis.get("call_outcome_description", ""),
+        "call_summary": analysis.get("call_summary", ""),
+        "is_business": analysis.get("is_business", ""),
+        "business_name": analysis.get("business_name", ""),
+        "business_city": analysis.get("business_city", ""),
+        "qna": analysis.get("qna") or [],
+        "product_change": analysis.get("product_change") or {},
+        "deal_value": b2b_score.get("deal_value", ""),
+        "lead_intent_score": b2b_score.get("lead_intent_score", ""),
+        "urgency_flag": b2b_score.get("urgency_flag", "no"),
+    }
+
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, lambda: _get_platform_transcripts_collection().insert_one(_doc))
+    await loop.run_in_executor(None, lambda: trace_completed_call(_doc, bot_id))
 
 
 # ---------------------------------------------------------------------------
@@ -743,6 +799,45 @@ def record_fallback_event(
         })
     except Exception as exc:
         logger.warning(f"[CONFIG] record_fallback_event failed (non-fatal): {exc}")
+
+
+_WORKER_HEARTBEAT_INTERVAL_S = float(os.getenv("WORKER_HEARTBEAT_INTERVAL_S", "10"))
+
+
+def _worker_heartbeat_loop(agent_name: str, pid: int) -> None:
+    coll = _get_platform_db()["tbl_ai_vb_worker_heartbeats"]
+    hostname = socket.gethostname()
+    started_at = datetime.now(timezone.utc)
+    while True:
+        try:
+            coll.update_one(
+                {"agent_name": agent_name},
+                {"$set": {
+                    "agent_name": agent_name,
+                    "pid": pid,
+                    "host": hostname,
+                    "last_seen": datetime.now(timezone.utc),
+                    "started_at": started_at,
+                }},
+                upsert=True,
+            )
+        except Exception as exc:
+            logger.warning(f"[WORKER HEARTBEAT] update failed (non-fatal): {exc}")
+        time.sleep(_WORKER_HEARTBEAT_INTERVAL_S)
+
+
+def start_worker_heartbeat(agent_name: str) -> None:
+    """Starts a background thread that upserts this worker process's liveness into
+    tbl_ai_vb_worker_heartbeats every _WORKER_HEARTBEAT_INTERVAL_S seconds, surfaced via
+    GET /api/diagnostics/worker-health. Without this, a crashed or network-partitioned
+    worker is completely invisible until someone places a real call and it silently hangs
+    on "waiting for bot to join" — call once from the top-level `if __name__ ==
+    "__main__":` guard of each worker entrypoint script, before cli.run_app(...) (which
+    blocks), not from inside per-job code — one heartbeat per worker process, not per call."""
+    t = threading.Thread(
+        target=_worker_heartbeat_loop, args=(agent_name, os.getpid()), daemon=True, name="worker-heartbeat",
+    )
+    t.start()
 
 
 # ---------------------------------------------------------------------------

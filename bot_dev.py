@@ -75,6 +75,7 @@ from bot import (
     fetch_bot_config,
     record_fallback_event,
     FALLBACK_REASON_NO_IDS,
+    start_worker_heartbeat,
     normalize_mobile,
     fetch_lead,
     _build_sample_from_search,
@@ -2409,6 +2410,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 # Worker entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    _agent_name = os.getenv("BOT_DEV_AGENT_NAME", "voice-bot-justdial-live-2")
+    start_worker_heartbeat(_agent_name)
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
@@ -2418,7 +2421,7 @@ if __name__ == "__main__":
             # env var, NOT the shared LIVEKIT_AGENT_NAME — a deploy that points
             # LIVEKIT_AGENT_NAME at live-1 to route test calls must not also drag this
             # worker into that pool. Set BOT_DEV_AGENT_NAME to override.
-            agent_name=os.getenv("BOT_DEV_AGENT_NAME", "voice-bot-justdial-live-2"),
+            agent_name=_agent_name,
             port=int(_BOT_PORT),
             num_idle_processes=3,
         )
