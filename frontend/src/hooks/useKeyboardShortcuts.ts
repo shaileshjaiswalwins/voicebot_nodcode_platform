@@ -23,8 +23,18 @@ export function useKeyboardShortcuts(
     // (e.g. right after clicking "Add function"/"New key value pair", focus is on the button,
     // so typing the field value would otherwise hit the button and trigger navigation).
     const INTERACTIVE = ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A', 'OPTION'];
+    // el.isContentEditable is unreliable under jsdom (the test environment) even when the
+    // contenteditable attribute is set correctly, so check the attribute directly too —
+    // matches real-browser behavior either way and also covers a contenteditable ancestor
+    // (e.g. a rich-text child span), not just the exact target element.
+    const isEditableEl = (el: HTMLElement) =>
+      el.isContentEditable || el.getAttribute('contenteditable') === 'true' || (el as HTMLElement).contentEditable === 'true';
     const isInteractive = (el: HTMLElement | null) =>
-      !!el && (INTERACTIVE.includes(el.tagName) || el.isContentEditable);
+      !!el && el instanceof Element && (
+        INTERACTIVE.includes(el.tagName) ||
+        isEditableEl(el) ||
+        el.closest('[contenteditable="true"]') !== null
+      );
 
     function handleKey(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
