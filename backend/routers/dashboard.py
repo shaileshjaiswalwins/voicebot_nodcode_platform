@@ -20,7 +20,8 @@ def dashboard_summary(_: dict = Depends(require_user)) -> dict:
     total_agents = len(bot_docs)
 
     now = datetime.now(timezone.utc)
-    today_str = now.date().isoformat()
+    today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    today_end = today_start + timedelta(days=1)
 
     total_calls_all_time = 0
     total_seconds_all_time = 0.0
@@ -35,7 +36,10 @@ def dashboard_summary(_: dict = Depends(require_user)) -> dict:
                 "calls_today": {
                     "$sum": {
                         "$cond": [
-                            {"$eq": [{"$substrCP": ["$created_at", 0, 10]}, today_str]},
+                            {"$and": [
+                                {"$gte": ["$created_at", today_start]},
+                                {"$lt": ["$created_at", today_end]},
+                            ]},
                             1,
                             0,
                         ]
@@ -79,13 +83,16 @@ def dashboard_summary(_: dict = Depends(require_user)) -> dict:
         best_performing_bot = ranked[0]
         least_performing_bot = ranked[-1]
 
-    # Daily volume across all bots, last 14 days.
-    window_start = now - timedelta(days=14)
+    # Daily volume across all bots, last 14 days (inclusive of today).
+    window_start = today_start - timedelta(days=13)
     daily_by_date: dict[str, int] = {}
     if bot_ids:
         for row in transcripts.aggregate([
-            {"$match": {"bot_id": {"$in": bot_ids}, "created_at": {"$gte": window_start.isoformat()}}},
-            {"$group": {"_id": {"$substrCP": ["$created_at", 0, 10]}, "count": {"$sum": 1}}},
+            {"$match": {"bot_id": {"$in": bot_ids}, "created_at": {"$gte": window_start}}},
+            {"$group": {
+                "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}},
+                "count": {"$sum": 1},
+            }},
         ]):
             daily_by_date[row["_id"]] = row["count"]
 
