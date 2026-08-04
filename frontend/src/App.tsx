@@ -51,6 +51,8 @@ import { TestLLMPanel } from './views/TestLLMPanel';
 import { TestInputsModal } from './components/TestInputsModal';
 import type { DynamicVariables, FunctionMocks } from './components/TestInputsModal';
 import { SettingsView } from './views/SettingsView';
+import { Confetti } from './components/Confetti';
+import { OnboardingTour } from './components/OnboardingTour';
 
 // Real WebRTC test-call connection is owned by <LiveKitRoom> inside
 // components/LiveKitTestSession.tsx, not managed manually here.
@@ -341,18 +343,36 @@ function AppShell() {
   // on first login/refresh the URL wins (may be a deep link like /settings); after that,
   // external URL changes (back/forward) update state, and state changes push new URLs.
   const initializedFromUrlRef = useRef(false);
+  // React StrictMode double-invokes effects on mount (dev only). The first invocation
+  // calls applyRouteToState() and schedules setView(...) — an async update that hasn't
+  // rendered yet — then the second invocation runs with the SAME stale `view` closure.
+  // Without this, that second pass computes statePath from the old view and pushes it
+  // over the just-adopted deep link (e.g. a hard reload on /analytics bounces to /agents).
+  // pendingRouteRef tracks the route we just told React to adopt so this effect can use
+  // it instead of the not-yet-rendered `view`/selection state, until a real render lands.
+  const pendingRouteRef = useRef<ReturnType<typeof parsePath> | null>(null);
 
   useEffect(() => {
     if (!authed) return;
 
+    if (pendingRouteRef.current && pendingRouteRef.current.view === view) {
+      pendingRouteRef.current = null;
+    }
+    const pending = pendingRouteRef.current;
+    const effectiveView = pending?.view ?? view;
+    const effectiveBotId = pending?.view === 'bots' ? pending.botId : selectedBotId;
+    const effectiveCampaignKey = pending?.view === 'campaigns' ? pending.campaignKey : selectedCampaignKey;
+    const effectiveTranscriptId = pending?.view === 'transcripts' ? pending.transcriptId : selectedTranscriptId;
+
     const statePath =
-      view === 'bots' || view === 'builder' ? buildPath({ view: 'bots', botId: workspaceMode === 'builder' ? selectedBotId : '' })
-      : view === 'campaigns' ? buildPath({ view: 'campaigns', campaignKey: campaignWorkspaceMode === 'strategy' ? selectedCampaignKey : '' })
-      : view === 'transcripts' ? buildPath({ view: 'transcripts', transcriptId: selectedTranscriptId })
-      : buildPath({ view } as Parameters<typeof buildPath>[0]);
+      effectiveView === 'bots' || effectiveView === 'builder' ? buildPath({ view: 'bots', botId: workspaceMode === 'builder' ? effectiveBotId : '' })
+      : effectiveView === 'campaigns' ? buildPath({ view: 'campaigns', campaignKey: campaignWorkspaceMode === 'strategy' ? effectiveCampaignKey : '' })
+      : effectiveView === 'transcripts' ? buildPath({ view: 'transcripts', transcriptId: effectiveTranscriptId })
+      : buildPath({ view: effectiveView } as Parameters<typeof buildPath>[0]);
 
     function applyRouteToState(pathname: string) {
       const route = parsePath(pathname);
+      pendingRouteRef.current = route;
       setView(route.view);
       if (route.view === 'bots') {
         setSelectedBotId(route.botId);
@@ -390,7 +410,7 @@ function AppShell() {
       lastSyncedPathRef.current = statePath;
       navigate(statePath);
     }
-    document.title = `${titleFor(view === 'builder' ? 'bots' : view)} — Voice AI Platform`;
+    document.title = `${titleFor(effectiveView === 'builder' ? 'bots' : effectiveView)} — Voice AI Platform`;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed, view, selectedBotId, workspaceMode, selectedCampaignKey, campaignWorkspaceMode, selectedTranscriptId, location.pathname, navigate]);
 
@@ -403,6 +423,20 @@ function AppShell() {
   const [micEnabled, setMicEnabled] = useState(false);
   const [roomName, setRoomName] = useState('');
   const [remoteAudioReady, setRemoteAudioReady] = useState(false);
+  const [showFirstCallConfetti, setShowFirstCallConfetti] = useState(false);
+  // Set only when createAgentAndEnter() creates someone's very first-ever agent (any of the
+  // three Create Agent paths — AI / template / scratch, they all funnel through it). Confetti
+  // fires only when THIS specific bot's test call succeeds — not any test call, and not just
+  // because the account currently has zero agents (that broke as soon as the agent existed).
+  const [firstAgentPendingTestId, setFirstAgentPendingTestId] = useState('');
+
+  const handleAudioReady = (ready: boolean) => {
+    setRemoteAudioReady(ready);
+    if (ready && testBotId && testBotId === firstAgentPendingTestId) {
+      setFirstAgentPendingTestId('');
+      setShowFirstCallConfetti(true);
+    }
+  };
   const [testLivekitUrl, setTestLivekitUrl] = useState('');
   const [testLivekitToken, setTestLivekitToken] = useState('');
 
@@ -656,9 +690,14 @@ function AppShell() {
   // agent they just created rather than back on the list, so there's no extra hunt-and-click
   // before they can start testing it.
   async function createAgentAndEnter(name: string, description: string, config: RuntimeConfig) {
+    // Capture "this account had zero agents right before this create" BEFORE loadBots()
+    // refreshes `bots` and makes that check useless — this is what makes the resulting
+    // agent eligible for the first-test-call confetti, not `bots.length` at call time.
+    const isFirstEverAgent = bots.length === 0;
     const bot = await api.createBot({ name, description, config });
     setCreateAgentStep('closed');
     await loadBots();
+    if (isFirstEverAgent) setFirstAgentPendingTestId(bot._id);
     handleEditBot(bot._id);
     return bot;
   }
@@ -1313,7 +1352,7 @@ function AppShell() {
           onLiveKitDisconnected={handleLiveKitDisconnected}
           onLiveKitError={handleLiveKitError}
           onMicChange={setMicEnabled}
-          onAudioReady={setRemoteAudioReady}
+          onAudioReady={handleAudioReady}
         />
       )}
 
@@ -1342,6 +1381,8 @@ function AppShell() {
 
   return (
     <div className="app-shell">
+      <Confetti fire={showFirstCallConfetti} onDone={() => setShowFirstCallConfetti(false)} />
+      <OnboardingTour run={!loadingBots && bots.length === 0 && view === 'bots'} />
       <div className="mobile-topbar">
         <button onClick={() => setMobileNavOpen(true)} aria-label="Open navigation">
           <Menu size={18} />
@@ -1378,6 +1419,7 @@ function AppShell() {
               key={item.view}
               icon={NAV_ICONS[item.view]}
               label={item.label}
+              tourId={item.view === 'bots' ? 'onboarding-nav-agents' : item.view === 'dashboard' ? 'onboarding-nav-dashboard' : undefined}
               active={view === item.view || (item.view === 'bots' && view === 'builder')}
               onClick={() => {
                 setView(item.view);

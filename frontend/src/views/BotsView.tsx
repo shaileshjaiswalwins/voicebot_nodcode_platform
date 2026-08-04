@@ -252,7 +252,7 @@ export function BotsView({ bots, loading, onEdit, onDelete, onNew, onDuplicate, 
           <Trash size={14} /> Recently Deleted
         </button>
         {onNew && bots.length > 0 && (
-          <button className="primary" onClick={onNew}><Plus size={15} /> New agent</button>
+          <button id="onboarding-create-agent" className="primary" onClick={onNew}><Plus size={15} /> New agent</button>
         )}
       </div>
     </div>
@@ -280,7 +280,7 @@ export function BotsView({ bots, loading, onEdit, onDelete, onNew, onDuplicate, 
             icon={<Bot size={32} />}
             heading="No agents yet"
             description="Create your first voice agent to get started. Each agent has its own prompt, voice, and published versions."
-            action={onNew ? { label: 'Create first agent', onClick: onNew } : undefined}
+            action={onNew ? { label: 'Create first agent', onClick: onNew, id: 'onboarding-create-agent' } : undefined}
           />
         ) : filtered.length === 0 ? (
           <EmptyState icon={<Bot size={32} />} heading="No matching agents" description="Try a different search term or clear your filters." />

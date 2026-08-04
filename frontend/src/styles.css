@@ -418,6 +418,8 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--primary); outlin
    Publishing/Version history, previously two permanently-docked columns eating ~660px on
    every screen regardless of whether anyone was looking at them. ── */
 .side-panel-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.35); z-index: 40; animation: modal-backdrop-in 0.15s ease-out; }
+
+.confetti-canvas { position: fixed; inset: 0; z-index: 9999; pointer-events: none; }
 .side-panel {
   position: fixed; top: 0; right: 0; bottom: 0; width: 420px; max-width: 92vw; z-index: 41;
   background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--shadow-lg);
