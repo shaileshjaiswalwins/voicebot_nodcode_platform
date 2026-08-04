@@ -20,11 +20,17 @@ from ..models import (
     CompileFlowPreviewRequest,
     FunctionTestRequest,
     GenerateAgentRequest,
+    GenerateWorkflowRequest,
     GeneratePromptRequest,
     LlmChatReplyRequest,
     LlmChatSimulateRequest,
 )
-from ..prompt_assist import generate_agent_from_description, generate_prompt
+from ..prompt_assist import (
+    generate_agent_from_description,
+    generate_prompt,
+    generate_workflow_from_description,
+    refine_workflow_from_instruction,
+)
 
 # flow_compiler.py lives at the repo root (shared with bot.py/bot_pipeline.py/bot_dev.py),
 # not inside the backend/ package. Import defensively: in a deployment that only ships
@@ -271,6 +277,36 @@ def generate_agent(payload: GenerateAgentRequest, _: dict = Depends(require_user
         result = generate_agent_from_description(payload.description)
     except Exception as exc:
         raise HTTPException(502, f"Agent generation failed: {exc}") from exc
+    return result
+
+
+@router.post("/generate-workflow")
+def generate_workflow(payload: GenerateWorkflowRequest, _: dict = Depends(require_user)) -> dict:
+    """mode='generate' (default): Create Agent > Create workflow with AI — derives a full
+    WorkflowGraphDef (nodes/edges/conditions/function-calls) plus during_call functions from a
+    free-text description, before any bot exists. Same shape as /generate-agent, but for
+    bot_type='workflow'; the caller merges the result into defaultConfig, sets
+    bot_type='workflow', and calls the normal create_bot endpoint.
+
+    mode='refine': Workflow tab's "Refine with AI" button — edits an already-existing bot's
+    graph (current_workflow/current_functions/current_global_prompt from the caller's live,
+    unsaved builder state) per a free-text instruction, e.g. "add a step that checks the order
+    status via API before confirming". No bot_id needed here either — same as generate-prompt,
+    the graph to edit travels in the request body, not read from storage."""
+    if not payload.description.strip():
+        raise HTTPException(400, "description is required")
+    try:
+        if payload.mode == "refine":
+            result = refine_workflow_from_instruction(
+                payload.current_workflow.model_dump(),
+                [f.model_dump() for f in payload.current_functions],
+                payload.current_global_prompt,
+                payload.description,
+            )
+        else:
+            result = generate_workflow_from_description(payload.description)
+    except Exception as exc:
+        raise HTTPException(502, f"Workflow generation failed: {exc}") from exc
     return result
 
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowRight, Clock, LayoutTemplate, Sparkles, Wrench } from 'lucide-react';
+import { ArrowRight, Clock, LayoutTemplate, Sparkles, Workflow, Wrench } from 'lucide-react';
 import { Dialog } from './Dialog';
 
 type Speed = 'fastest' | 'medium' | 'longest';
@@ -17,11 +17,13 @@ const SPEED_LABEL: Record<Speed, string> = {
  * estimate so a user can pick a path that matches how much time they actually have. */
 export function CreateAgentPicker({
   onSelectAI,
+  onSelectWorkflowAI,
   onSelectTemplate,
   onSelectScratch,
   onClose,
 }: {
   onSelectAI: () => void;
+  onSelectWorkflowAI: () => void;
   onSelectTemplate: () => void;
   onSelectScratch: () => void;
   onClose: () => void;
@@ -43,6 +45,15 @@ export function CreateAgentPicker({
       time: '~1 minute',
       speed: 'fastest',
       onClick: onSelectAI,
+    },
+    {
+      key: 'workflow_ai',
+      icon: <Workflow size={20} />,
+      title: 'Create a workflow with AI',
+      description: 'Describe a complex bot — steps, branching logic, and API calls — and we\'ll build the full node graph for you to review.',
+      time: '~2 minutes',
+      speed: 'fastest',
+      onClick: onSelectWorkflowAI,
     },
     {
       key: 'template',

@@ -5,6 +5,8 @@ import { api } from '../api';
 import { ErrorState } from '../components/ErrorState';
 import { EmptyState } from '../components/EmptyState';
 import { MiniBarChart } from '../components/MiniCharts';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 
 const REFRESH_MS = 60_000;
 
@@ -92,23 +94,39 @@ export function DashboardView({ onGoToAgents }: { onGoToAgents?: () => void }) {
 
         {summary && summary.total_agents > 0 && (
           <>
-            <div className="metric-board" style={{ marginBottom: '16px' }}>
-              <div className="metric">
-                <span>Total agents</span>
-                <strong>{summary.total_agents}</strong>
-              </div>
-              <div className="metric">
-                <span>Total calls (all-time)</span>
-                <strong>{summary.total_calls_all_time.toLocaleString('en-IN')}</strong>
-              </div>
-              <div className="metric">
-                <span>Total minutes (all-time)</span>
-                <strong>{summary.total_minutes_all_time.toLocaleString('en-IN')}</strong>
-              </div>
-              <div className="metric">
-                <span>Calls today</span>
-                <strong>{summary.calls_today}</strong>
-              </div>
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-4 mb-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Total agents</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-2xl font-bold text-foreground">{summary.total_agents}</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Total calls (all-time)</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-2xl font-bold text-foreground">{summary.total_calls_all_time.toLocaleString('en-IN')}</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Total minutes (all-time)</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-2xl font-bold text-foreground">{summary.total_minutes_all_time.toLocaleString('en-IN')}</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Calls today</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-2xl font-bold text-foreground">{summary.calls_today}</p>
+                </CardContent>
+              </Card>
             </div>
 
             {summary.total_calls_all_time === 0 ? (
@@ -120,36 +138,48 @@ export function DashboardView({ onGoToAgents }: { onGoToAgents?: () => void }) {
               />
             ) : (
               <>
-                <div className="content-grid two-col" style={{ marginBottom: '16px' }}>
-                  <div className="detail-list">
-                    <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                      <TrendingUp size={13} style={{ verticalAlign: '-2px', marginRight: '4px' }} />Best performing agent
-                    </h3>
-                    {summary.best_performing_bot ? (
-                      <>
-                        <div className="detail"><span>Name</span><strong>{summary.best_performing_bot.name || '(unnamed)'}</strong></div>
-                        <div className="detail"><span>Success rate</span><strong>{summary.best_performing_bot.success_rate_pct}%</strong></div>
-                        <div className="detail"><span>Calls</span><strong>{summary.best_performing_bot.call_count}</strong></div>
-                      </>
-                    ) : (
-                      <CardEmptyState text="Not enough data yet — needs at least 2 agents with 5+ calls each." />
-                    )}
-                  </div>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 mb-4">
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                        <TrendingUp size={13} />Best performing agent
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {summary.best_performing_bot ? (
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-semibold text-foreground">{summary.best_performing_bot.name || '(unnamed)'}</p>
+                            <p className="text-xs text-muted-foreground">{summary.best_performing_bot.call_count} calls</p>
+                          </div>
+                          <Badge variant="success">{summary.best_performing_bot.success_rate_pct}%</Badge>
+                        </div>
+                      ) : (
+                        <CardEmptyState text="Not enough data yet — needs at least 2 agents with 5+ calls each." />
+                      )}
+                    </CardContent>
+                  </Card>
 
-                  <div className="detail-list">
-                    <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                      <TrendingDown size={13} style={{ verticalAlign: '-2px', marginRight: '4px' }} />Least performing agent
-                    </h3>
-                    {summary.least_performing_bot ? (
-                      <>
-                        <div className="detail"><span>Name</span><strong>{summary.least_performing_bot.name || '(unnamed)'}</strong></div>
-                        <div className="detail"><span>Success rate</span><strong>{summary.least_performing_bot.success_rate_pct}%</strong></div>
-                        <div className="detail"><span>Calls</span><strong>{summary.least_performing_bot.call_count}</strong></div>
-                      </>
-                    ) : (
-                      <CardEmptyState text="Not enough data yet — needs at least 2 agents with 5+ calls each." />
-                    )}
-                  </div>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                        <TrendingDown size={13} />Least performing agent
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {summary.least_performing_bot ? (
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-semibold text-foreground">{summary.least_performing_bot.name || '(unnamed)'}</p>
+                            <p className="text-xs text-muted-foreground">{summary.least_performing_bot.call_count} calls</p>
+                          </div>
+                          <Badge variant="destructive">{summary.least_performing_bot.success_rate_pct}%</Badge>
+                        </div>
+                      ) : (
+                        <CardEmptyState text="Not enough data yet — needs at least 2 agents with 5+ calls each." />
+                      )}
+                    </CardContent>
+                  </Card>
                 </div>
 
                 <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>Daily call volume (last 14 days)</h3>

@@ -775,7 +775,7 @@ export const api = {
     mode: 'generate' | 'refine',
     instruction: string,
     currentPrompt: string,
-    target: 'system_prompt' | 'closing_line' | 'analysis_prompt' = 'system_prompt',
+    target: 'system_prompt' | 'closing_line' | 'analysis_prompt' | 'global_prompt' = 'system_prompt',
   ): Promise<{ text: string }> {
     return request(
       `/api/bots/${id}/generate-prompt`,
@@ -786,6 +786,40 @@ export const api = {
   // Create Agent > Create with AI — no bot exists yet, so this is bot-less.
   generateAgent(description: string): Promise<{ agent_name: string; initial_message: string; system_prompt: string }> {
     return request('/api/bots/generate-agent', { method: 'POST', body: JSON.stringify({ description }) }, 30000);
+  },
+  // Create Agent > Create workflow with AI — same idea, but generates a full WorkflowGraphDef
+  // (nodes/edges/conditions/function-calls) instead of just prompt fields. Any HTTP endpoint the
+  // description implies comes back as WORKFLOW_URL_PLACEHOLDER — see workflowPlaceholders.ts.
+  generateWorkflow(description: string): Promise<{
+    agent_name: string;
+    global_prompt: string;
+    workflow: WorkflowGraphDef;
+    functions: CustomFunction[];
+  }> {
+    return request('/api/bots/generate-workflow', { method: 'POST', body: JSON.stringify({ description }) }, 45000);
+  },
+  // Workflow tab's "Refine with AI" — edits an existing bot's graph in place per a free-text
+  // instruction. No bot_id needed: the graph to edit travels in the body (matches generatePrompt).
+  refineWorkflow(
+    instruction: string,
+    currentWorkflow: WorkflowGraphDef,
+    currentFunctions: CustomFunction[],
+    currentGlobalPrompt: string,
+  ): Promise<{ global_prompt: string; workflow: WorkflowGraphDef; functions: CustomFunction[] }> {
+    return request(
+      '/api/bots/generate-workflow',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          description: instruction,
+          mode: 'refine',
+          current_workflow: currentWorkflow,
+          current_functions: currentFunctions,
+          current_global_prompt: currentGlobalPrompt,
+        }),
+      },
+      45000,
+    );
   },
 
   // platform (dev/prod) settings

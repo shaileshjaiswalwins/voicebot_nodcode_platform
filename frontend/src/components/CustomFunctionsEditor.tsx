@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Plus, Trash2, Play, ChevronDown, ChevronRight } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Plus, Trash2, Play, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react';
 import type { CustomFunction, FunctionParam, FunctionTestResult, HttpMethod } from '../types';
 import {
   newCustomFunction,
@@ -7,7 +7,9 @@ import {
   newStoreVariable,
   validateFunction,
   sampleArgsFromParams,
+  ensureFunctionIds,
 } from '../utils/customFunctions';
+import { functionNeedsAttention } from '../utils/workflowPlaceholders';
 import { KeyValueEditor } from './KeyValueEditor';
 
 const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
@@ -34,17 +36,21 @@ export function CustomFunctionsEditor({
   onTest?: (fn: CustomFunction, args: Record<string, unknown>) => Promise<FunctionTestResult>;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  // Memoized on the `functions` prop reference: ensureFunctionIds generates fresh random ids
+  // for blank/duplicate ones, and recomputing on every render (e.g. an unrelated openId toggle)
+  // would reassign ids out from under `openId`, collapsing whatever card was open.
+  const safeFunctions = useMemo(() => ensureFunctionIds(functions), [functions]);
 
   function update(id: string, patch: Partial<CustomFunction>) {
-    onChange(functions.map((f) => (f.id === id ? { ...f, ...patch } : f)));
+    onChange(safeFunctions.map((f) => (f.id === id ? { ...f, ...patch } : f)));
   }
   function add() {
     const fn = newCustomFunction();
-    onChange([...functions, fn]);
+    onChange([...safeFunctions, fn]);
     setOpenId(fn.id);
   }
   function remove(id: string) {
-    onChange(functions.filter((f) => f.id !== id));
+    onChange(safeFunctions.filter((f) => f.id !== id));
   }
 
   return (
@@ -59,16 +65,16 @@ export function CustomFunctionsEditor({
         <button type="button" className="primary" onClick={add}><Plus size={14} /> Add function</button>
       </div>
 
-      {functions.length === 0 && (
+      {safeFunctions.length === 0 && (
         <div style={{ fontSize: '0.85rem', color: 'var(--muted)', fontStyle: 'italic', margin: '1rem 0' }}>
           No custom functions yet.
         </div>
       )}
 
       <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        {functions.map((fn) => {
+        {safeFunctions.map((fn) => {
           const isOpen = openId === fn.id;
-          const otherNames = functions.filter((f) => f.id !== fn.id).map((f) => (f.name || '').trim());
+          const otherNames = safeFunctions.filter((f) => f.id !== fn.id).map((f) => (f.name || '').trim());
           return (
             <div key={fn.id} className="cf-card" style={{ border: '1px solid var(--border)', borderRadius: '8px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 0.75rem' }}>
@@ -81,6 +87,11 @@ export function CustomFunctionsEditor({
                   {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                 </button>
                 <span style={{ fontWeight: 600, flex: 1 }}>{fn.name || <em style={{ color: 'var(--muted)' }}>Unnamed function</em>}</span>
+                {functionNeedsAttention(fn) && (
+                  <span title="Placeholder endpoint — needs a real URL" style={{ display: 'inline-flex', color: '#dc2626' }}>
+                    <AlertCircle size={15} />
+                  </span>
+                )}
                 <span className="cf-trigger-badge" style={{ fontSize: '0.72rem', background: 'var(--surface-2)', borderRadius: '4px', padding: '2px 8px' }}>
                   {TRIGGERS.find((t) => t.id === fn.trigger)?.label}
                 </span>
@@ -167,8 +178,19 @@ function FunctionForm({
         <select aria-label="HTTP method" value={fn.method} onChange={(e) => onUpdate({ method: e.target.value as HttpMethod })} style={{ maxWidth: '7rem' }}>
           {METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
-        <input aria-label="URL" style={{ flex: 1 }} value={fn.url || ''} placeholder="https://api.example.com/endpoint" onChange={(e) => onUpdate({ url: e.target.value })} />
+        <input
+          aria-label="URL"
+          style={{ flex: 1, ...(functionNeedsAttention(fn) ? { borderColor: '#dc2626', boxShadow: '0 0 0 1px #dc2626' } : {}) }}
+          value={functionNeedsAttention(fn) ? '' : fn.url || ''}
+          placeholder="https://api.example.com/endpoint"
+          onChange={(e) => onUpdate({ url: e.target.value })}
+        />
       </div>
+      {functionNeedsAttention(fn) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#dc2626', fontSize: '0.78rem', marginTop: '0.3rem' }}>
+          <AlertCircle size={13} /> AI-generated placeholder — set the real endpoint before this function can run.
+        </div>
+      )}
       <label style={{ marginTop: '0.5rem', display: 'block', maxWidth: '14rem' }}>
         Timeout (ms)
         <input
@@ -183,10 +205,10 @@ function FunctionForm({
       </label>
 
       <div style={sectionLabel}>Headers</div>
-      <KeyValueEditor label="" hint="HTTP headers sent with the request." value={fn.headers} onChange={(headers) => onUpdate({ headers })} keyPlaceholder="Header-Name" valuePlaceholder="value" />
+      <KeyValueEditor key={`${fn.id}-headers`} label="" hint="HTTP headers sent with the request." value={fn.headers} onChange={(headers) => onUpdate({ headers })} keyPlaceholder="Header-Name" valuePlaceholder="value" />
 
       <div style={sectionLabel}>Query Parameters</div>
-      <KeyValueEditor label="" hint="Appended to the URL as ?key=value." value={fn.query_params} onChange={(query_params) => onUpdate({ query_params })} />
+      <KeyValueEditor key={`${fn.id}-query`} label="" hint="Appended to the URL as ?key=value." value={fn.query_params} onChange={(query_params) => onUpdate({ query_params })} />
 
       <div style={sectionLabel}>Request Body — Parameters</div>
       <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginBottom: '0.4rem' }}>

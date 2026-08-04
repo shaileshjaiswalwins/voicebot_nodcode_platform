@@ -143,7 +143,7 @@ function MetricsTab({ botId }: { botId?: string }) {
   );
 }
 
-type PromptAssistTarget = 'system_prompt' | 'closing_line' | 'analysis_prompt';
+type PromptAssistTarget = 'system_prompt' | 'closing_line' | 'analysis_prompt' | 'global_prompt';
 
 /** The Sparkles trigger + popover for "Generate/Refine with AI" — originally built just for
  * System prompt, generalized so Closing line and Analysis prompt override can reuse the exact
@@ -275,7 +275,7 @@ export function BotConfigTabs({
     mode: 'generate' | 'refine',
     instruction: string,
     currentPrompt: string,
-    target: 'system_prompt' | 'closing_line' | 'analysis_prompt',
+    target: 'system_prompt' | 'closing_line' | 'analysis_prompt' | 'global_prompt',
   ) => Promise<{ text: string }>;
   costEstimate?: AgentCostEstimate | null;
   pricing?: PricingConfig | null;
@@ -794,12 +794,26 @@ export function BotConfigTabs({
           )}
           <label className="full">
             Global prompt
-            <textarea
-              className="prompt-editor"
-              value={String(value.global_prompt || '')}
-              onChange={(e) => onUpdateConfig('global_prompt', e.target.value)}
-              placeholder="Shared persona/context prepended to every conversation node's instructions."
-            />
+            <div className="prompt-editor-wrap">
+              <textarea
+                className="prompt-editor"
+                value={String(value.global_prompt || '')}
+                onChange={(e) => onUpdateConfig('global_prompt', e.target.value)}
+                placeholder="Shared persona/context prepended to every conversation node's instructions."
+              />
+              {onGeneratePrompt && (
+                <PromptAssistButton
+                  target="global_prompt"
+                  currentText={String(value.global_prompt || '')}
+                  onGenerate={onGeneratePrompt}
+                  onApply={(text) => onUpdateConfig('global_prompt', text)}
+                  generateLabel="Generate global prompt"
+                  refineLabel="Refine global prompt"
+                  generatePlaceholder='Describe the shared persona/context, e.g. "a friendly scheduling assistant for a dental clinic"'
+                  refinePlaceholder='Describe the change, e.g. "mention we are open on weekends too"'
+                />
+              )}
+            </div>
             <small>Prepended to every node's compiled instructions — each node is otherwise its own independent agent.</small>
           </label>
           <div style={{ marginTop: '1rem' }}>

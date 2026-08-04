@@ -19,8 +19,9 @@ export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType
   const [hours, setHours] = useState<number | ''>('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [qualityWindowHours, setQualityWindowHours] = useState(1);
 
-  async function load() {
+  async function load(qHours: number = qualityWindowHours) {
     setLoading(true);
     setError('');
     try {
@@ -32,7 +33,7 @@ export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType
       if (endDate) params.end_date = endDate;
       const [a, q] = await Promise.all([
         api.outcomeAnalytics(params),
-        api.qualityAlerts(1, 30),
+        api.qualityAlerts(qHours, 30),
       ]);
       setAnalytics(a);
       setAlert(q);
@@ -44,6 +45,11 @@ export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType
   }
 
   useEffect(() => { load(); }, []);
+
+  function onQualityWindowChange(next: number) {
+    setQualityWindowHours(next);
+    load(next);
+  }
 
   const statusEntries = analytics ? Object.entries(analytics.by_status).sort((a, b) => b[1] - a[1]) : [];
   const outcomeEntries = analytics ? Object.entries(analytics.by_outcome).sort((a, b) => b[1] - a[1]) : [];
@@ -57,7 +63,7 @@ export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType
       <div className="panel">
         <div className="panel-header">
           <div><h2>Call outcome analytics</h2><p>Aggregated over selected time window.</p></div>
-          <button onClick={load} disabled={loading}><RefreshCw size={14} /> {loading ? 'Loading…' : 'Refresh'}</button>
+          <button onClick={() => load()} disabled={loading}><RefreshCw size={14} /> {loading ? 'Loading…' : 'Refresh'}</button>
         </div>
 
         {alert?.alert && (
@@ -90,7 +96,7 @@ export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType
               <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ fontSize: '0.82rem' }} />
             </>
           )}
-          <button onClick={load} disabled={loading}>Apply</button>
+          <button onClick={() => load()} disabled={loading}>Apply</button>
         </div>
 
         {error && !loading && (
@@ -167,8 +173,17 @@ export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType
       <div className="panel">
         <h2>Quality monitoring</h2>
         <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-          Alert fires when disconnected/error calls exceed 30% in the last hour (min 5 calls).
+          Alert fires when disconnected/error calls exceed 30% of calls in the selected window (min 5 calls).
         </p>
+        <select
+          value={qualityWindowHours}
+          onChange={(e) => onQualityWindowChange(Number(e.target.value))}
+          style={{ fontSize: '0.8rem', marginBottom: '16px' }}
+        >
+          <option value={1}>Last 1 hour</option>
+          <option value={24}>Last 24 hours</option>
+          <option value={168}>Last 7 days</option>
+        </select>
         {error && !loading && (
           <p style={{ fontSize: '0.85rem', color: 'var(--danger)' }}>Unavailable — quality alerts load together with analytics above.</p>
         )}
@@ -180,14 +195,15 @@ export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType
             <Detail label="Bad rate" value={`${alert.bad_pct}%`} />
             <div className="detail">
               <span>Status</span>
-              <StatusPill value={alert.alert ? 'alert' : 'ok'} />
+              <StatusPill value={alert.alert ? 'alert' : (alert.total_calls === 0 ? 'no-data' : 'ok')} />
             </div>
+            {alert.total_calls === 0 && (
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '8px' }}>
+                No calls in this window — try a wider window above.
+              </p>
+            )}
           </div>
         )}
-        <div className="callout" style={{ marginTop: '16px' }}>
-          <BarChart2 size={18} />
-          Run this endpoint from a cron job to get Slack/email alerts: <code>GET /api/analytics/quality-alerts?hours=1&threshold_pct=30</code>
-        </div>
       </div>
     </section>
   );

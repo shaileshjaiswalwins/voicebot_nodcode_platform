@@ -5,6 +5,7 @@ import {
   newStoreVariable,
   validateFunction,
   sampleArgsFromParams,
+  ensureFunctionIds,
   RESERVED_TOOL_NAMES,
 } from './customFunctions';
 
@@ -111,6 +112,51 @@ describe('validateFunction', () => {
     });
     const blanks = errs.filter((e) => /parameter needs a name/.test(e));
     expect(blanks).toHaveLength(1);
+  });
+});
+
+describe('ensureFunctionIds', () => {
+  it('assigns unique ids to functions with a blank id (legacy configs)', () => {
+    const fns = [
+      { ...newCustomFunction(), id: '' },
+      { ...newCustomFunction(), id: '' },
+    ];
+    const [a, b] = ensureFunctionIds(fns);
+    expect(a.id).toBeTruthy();
+    expect(b.id).toBeTruthy();
+    expect(a.id).not.toBe(b.id);
+  });
+
+  it('assigns unique ids to functions with a duplicate id', () => {
+    const fns = [
+      { ...newCustomFunction(), id: 'dup' },
+      { ...newCustomFunction(), id: 'dup' },
+    ];
+    const [a, b] = ensureFunctionIds(fns);
+    expect(a.id).toBe('dup');
+    expect(b.id).not.toBe('dup');
+  });
+
+  it('leaves already-unique, non-blank ids untouched', () => {
+    const fns = [
+      { ...newCustomFunction(), id: 'fn-a' },
+      { ...newCustomFunction(), id: 'fn-b' },
+    ];
+    const [a, b] = ensureFunctionIds(fns);
+    expect(a.id).toBe('fn-a');
+    expect(b.id).toBe('fn-b');
+  });
+
+  it('deep-clones nested collections so functions never share object references', () => {
+    const shared = { store_id: '1' };
+    const fns = [
+      { ...newCustomFunction(), id: 'a', query_params: shared },
+      { ...newCustomFunction(), id: 'b', query_params: shared },
+    ];
+    const [a, b] = ensureFunctionIds(fns);
+    expect(a.query_params).not.toBe(b.query_params);
+    a.query_params.store_id = 'changed';
+    expect(b.query_params.store_id).toBe('1');
   });
 });
 

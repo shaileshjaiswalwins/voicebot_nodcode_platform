@@ -51,6 +51,16 @@ sip_dispatch_rules = db["tbl_ai_vb_sip_dispatch_rules"]
 # number -> agent mapping. Unique index on phone_number enforces one-number-one-agent.
 agent_number_mapping = db["tbl_ai_vb_agent_number_mapping"]
 transcripts = db["tbl_ai_vb_call_transcripts"]
+# Every list_transcripts/export_csv query sorts by created_at and optionally filters by
+# one of these fields (see routers/transcripts.py:_build_filter) — without matching
+# compound indexes Mongo falls back to a full COLLSCAN + in-memory sort as the
+# collection grows, which is what made transcript fetches slow.
+transcripts.create_index([("created_at", -1)])
+transcripts.create_index([("bot_id", 1), ("created_at", -1)])
+transcripts.create_index([("campaign_id", 1), ("created_at", -1)])
+transcripts.create_index([("status", 1), ("created_at", -1)])
+transcripts.create_index([("source", 1), ("created_at", -1)])
+transcripts.create_index([("call_id", 1)])
 audit_log = db["tbl_ai_vb_audit_log"]
 campaign_leads = db["tbl_ai_vb_campaign_leads"]
 campaign_leads.create_index([("campaign_id", 1), ("phone_number", 1)])

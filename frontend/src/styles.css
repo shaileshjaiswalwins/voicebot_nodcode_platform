@@ -1,3 +1,28 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: var(--surface);
+  --color-foreground: var(--text);
+  --color-primary: var(--jd-blue-500);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--jd-gray-100);
+  --color-secondary-foreground: var(--text);
+  --color-muted: var(--jd-gray-100);
+  --color-muted-foreground: var(--jd-gray-500);
+  --color-accent: var(--jd-orange-500);
+  --color-accent-foreground: #ffffff;
+  --color-destructive: var(--jd-danger-500);
+  --color-destructive-foreground: #ffffff;
+  --color-border: var(--jd-gray-200);
+  --color-input: var(--jd-gray-200);
+  --color-ring: var(--jd-blue-500);
+  --color-card: #ffffff;
+  --color-card-foreground: var(--text);
+  --radius-lg: var(--radius-lg);
+  --radius-md: var(--radius-md);
+  --radius-sm: var(--radius-sm);
+}
+
 :root {
   /* ── Justdial Design System tokens ──
      JD Blue (#116DB6) primary, JD Orange (#F26600) accent. Custom-property NAMES kept
@@ -1050,6 +1075,25 @@ kbd.kbd { display: inline-flex; align-items: center; justify-content: center; mi
   overflow: hidden;
   font-size: 0.78rem;
   transition: box-shadow 0.15s ease;
+  position: relative;
+}
+/* AI-generated function node with an unfilled endpoint (backend/prompt_assist.py's
+   PLACEHOLDER_URL) — deliberately loud so it can't be missed and shipped un-configured. */
+.flow-graph-node-needs-attention { box-shadow: 0 0 0 1px #dc2626; }
+.flow-graph-node-attention-badge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #dc2626;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 0 2px var(--surface);
+  z-index: 2;
 }
 .flow-graph-node-header {
   display: flex;
@@ -1071,12 +1115,17 @@ kbd.kbd { display: inline-flex; align-items: center; justify-content: center; mi
   min-height: 1.2em;
   /* Clamp to a fixed number of lines so a long prompt can't blow up the card's height and
      overlap whatever's laid out below it on the canvas — full text is still in the node
-     inspector on the right when the card is selected. */
+     inspector on the right when the card is selected.
+     Only -webkit-line-clamp constrains the box height here — a redundant max-height used to
+     sit alongside it and, for AI-generated prompts long enough to actually hit the 3-line
+     limit, its px-rounded value came out fractionally shorter than the clamp's own computed
+     height, so overflow:hidden clipped mid-line-3 instead of at the clamp's ellipsis boundary,
+     visually overlapping the outcomes row directly below it. Dropped the max-height entirely;
+     -webkit-box-orient:vertical alone is sufficient to cap the height at 3 lines. */
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  max-height: 4.2em;
 }
 .flow-graph-node .react-flow__handle {
   width: 9px;
