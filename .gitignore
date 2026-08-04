@@ -72,3 +72,6 @@ start_param.sh
 
 # Backend generated files
 backend/requirements.txt
+
+# Generated test-script output
+scripts/indicf5_health_out/
