@@ -571,12 +571,22 @@ function AppShell() {
     setWorkspaceMode('list');
   }
 
+  const EMPTY_NEW_AGENT_FORM = {
+    name: '', description: '', agent_name: '', organization_name: '',
+    persona_gender: 'female' as const, language: 'hindi',
+    initial_message: defaultConfig.initial_message || '',
+  };
+
+  // Deliberately does NOT reset the form: closing the wizard with Escape used to be
+  // indistinguishable from discarding it, so an accidental keypress lost every field.
+  // The draft survives until the agent is created or Cancel is pressed.
   function handleNewAgent() {
-    setNewAgentForm({
-      name: '', description: '', agent_name: '', organization_name: '',
-      persona_gender: 'female', language: 'hindi', initial_message: defaultConfig.initial_message || ''
-    });
     setShowNewAgent(true);
+  }
+
+  function discardNewAgent() {
+    setNewAgentForm(EMPTY_NEW_AGENT_FORM);
+    setShowNewAgent(false);
   }
 
   async function confirmNewAgent() {
@@ -591,6 +601,7 @@ function AppShell() {
         initial_message: newAgentForm.initial_message,
       };
       const bot = await api.createBot({ name: newAgentForm.name, description: newAgentForm.description, config });
+      setNewAgentForm(EMPTY_NEW_AGENT_FORM);
       setShowNewAgent(false);
       await loadBots();
       setSelectedBotId(bot._id);
@@ -1442,6 +1453,7 @@ function AppShell() {
           languages={languages}
           busy={newAgentBusy}
           onCancel={() => setShowNewAgent(false)}
+          onDiscard={discardNewAgent}
           onConfirm={confirmNewAgent}
         />
       )}

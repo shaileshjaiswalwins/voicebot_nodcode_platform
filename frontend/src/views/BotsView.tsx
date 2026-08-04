@@ -106,6 +106,7 @@ export function NewAgentWizard({
   languages,
   busy,
   onCancel,
+  onDiscard,
   onConfirm
 }: {
   form: {
@@ -121,6 +122,7 @@ export function NewAgentWizard({
   languages: LanguageOption[];
   busy: boolean;
   onCancel: () => void;
+  onDiscard?: () => void;
   onConfirm: () => void;
 }) {
   const canCreate = form.name.trim().length > 0 && form.agent_name.trim().length > 0;
@@ -139,10 +141,12 @@ export function NewAgentWizard({
     });
   }
 
+  // Global replace: a line may use the same placeholder twice, and String.replace with a
+  // string pattern only swaps the first — which previewed as half-substituted text.
   const previewOpening = form.initial_message
-    .replace('{agent_name}', form.agent_name || '<agent_name>')
-    .replace('{organization_name}', form.organization_name || '<org_name>')
-    .replace('{product}', '<product>');
+    .replace(/\{agent_name\}/g, form.agent_name || '<agent_name>')
+    .replace(/\{organization_name\}/g, form.organization_name || '<org_name>')
+    .replace(/\{product\}/g, '<product>');
 
   return (
     <Dialog
@@ -150,11 +154,14 @@ export function NewAgentWizard({
       icon={<Rocket size={17} />}
       maxWidth={560}
       onClose={onCancel}
-      closeOnBackdrop={!busy}
+      // Never dismiss a half-filled creation form on a stray backdrop click — releasing a
+      // text-selection drag outside the panel used to wipe every field. Escape still closes,
+      // but the caller keeps the draft so reopening restores it; only Cancel discards.
+      closeOnBackdrop={false}
       closeOnEscape={!busy}
       footer={
         <>
-          <button onClick={onCancel} disabled={busy}>Cancel</button>
+          <button onClick={onDiscard ?? onCancel} disabled={busy}>Cancel</button>
           <button className="primary" onClick={onConfirm} disabled={!canCreate || busy}>
             {busy ? <Spinner label="Creating" size={13} /> : <Rocket size={15} />} {busy ? 'Creating…' : 'Create agent'}
           </button>
@@ -209,8 +216,8 @@ export function NewAgentWizard({
               <textarea
                 value={form.initial_message}
                 onChange={set('initial_message')}
-                rows={2}
-                style={{ fontFamily: 'inherit', fontSize: '0.85rem' }}
+                rows={3}
+                style={{ fontFamily: 'inherit', fontSize: '0.85rem', resize: 'vertical' }}
               />
               <small>Use <code style={{ fontSize: '0.75rem' }}>{'{product}'}</code>, <code style={{ fontSize: '0.75rem' }}>{'{agent_name}'}</code>, <code style={{ fontSize: '0.75rem' }}>{'{organization_name}'}</code> as placeholders.</small>
             </label>
