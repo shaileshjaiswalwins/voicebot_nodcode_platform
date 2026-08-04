@@ -1,5 +1,6 @@
 import type { PricingConfig, PricingModelEntry } from '../api';
 import type { RuntimeConfig } from '../types';
+import { TTS_PROVIDER_MODEL_KEY } from '../constants/ui';
 
 /** Normalizes a model string to a pricing-entry key: lowercase, non-alnum runs -> "_".
  * "gemini-3.1-flash-lite" -> "gemini_3_1_flash_lite", matching backend/pricing.py's keys. */
@@ -35,7 +36,13 @@ export function estimateAgentCost(config: RuntimeConfig, pricing: PricingConfig)
   const llmOptionsModel = config.llm_options?.model;
   const llmModel = (typeof llmOptionsModel === 'string' && llmOptionsModel) || config.llm_model;
   const llmEntry = findEntry(pricing.llm, llmModel);
-  const ttsEntry = findEntry(pricing.tts, config.tts_model);
+  // tts_model itself is rarely set directly (no UI edits it outside the provider-select
+  // sync) — derive the pricing key from tts_provider whenever it's blank, so bots whose
+  // config was written directly (seed scripts, older drafts predating that sync) still
+  // price against the TTS actually running the call instead of always falling back to
+  // pricing.tts[0] (Sarvam).
+  const ttsModel = config.tts_model || TTS_PROVIDER_MODEL_KEY[config.tts_provider || ''];
+  const ttsEntry = findEntry(pricing.tts, ttsModel);
   const sttEntry = findEntry(pricing.stt, config.stt_model);
   const telephonyEntry = findEntry(pricing.telephony, undefined);
 

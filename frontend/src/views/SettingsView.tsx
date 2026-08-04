@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { AlertTriangle, Save, Settings, SlidersHorizontal } from 'lucide-react';
-import type { PlatformSettings, RuntimeSettings } from '../api';
+import { AlertTriangle, ClipboardList, IndianRupee, Save, Settings, SlidersHorizontal, Wrench } from 'lucide-react';
+import type { PlatformSettings, PricingConfig, RuntimeSettings } from '../api';
 import { StatusPill } from '../components/StatusPill';
+import { FallbackEventsPanel } from '../components/FallbackEventsPanel';
+import { WorkerHealthPanel } from '../components/WorkerHealthPanel';
+import { DispatchFailuresPanel } from '../components/DispatchFailuresPanel';
+import { AuditLogView } from './AuditLogView';
+import { AdminView } from './AdminView';
 import { isValidUrl } from '../utils/validation';
 import { FEEDBACK_TIMEOUT_MS } from '../constants/ui';
 
@@ -9,17 +14,37 @@ function Step({ title, text }: { title: string; text: string }) {
   return <div className="step"><strong>{title}</strong><p>{text}</p></div>;
 }
 
+type SettingsTab = 'general' | 'diagnostics' | 'audit_log' | 'admin';
+const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; icon: React.ReactNode }> = [
+  { id: 'general', label: 'General', icon: <Settings size={15} /> },
+  { id: 'diagnostics', label: 'Diagnostics', icon: <Wrench size={15} /> },
+  { id: 'audit_log', label: 'Audit Log', icon: <ClipboardList size={15} /> },
+  { id: 'admin', label: 'Admin', icon: <IndianRupee size={15} /> },
+];
+
 export function SettingsView({
   runtimeSettings,
   onUpdateRuntime,
   platformSettings,
-  onUpdatePlatformSettings
+  onUpdatePlatformSettings,
+  pricingConfig,
+  onUpdatePricingConfig,
+  initialTab,
 }: {
   runtimeSettings: RuntimeSettings | null;
   onUpdateRuntime: (payload: Partial<RuntimeSettings>) => void;
   platformSettings: PlatformSettings | null;
   onUpdatePlatformSettings: (payload: PlatformSettings) => Promise<void>;
+  pricingConfig: PricingConfig | null;
+  onUpdatePricingConfig: (config: PricingConfig) => Promise<void>;
+  /** Lets a direct link (e.g. the old standalone /audit-log or /admin URL) land on the
+   * right tab instead of always opening on General. */
+  initialTab?: SettingsTab;
 }) {
+  const [tab, setTab] = useState<SettingsTab>(initialTab || 'general');
+  useEffect(() => {
+    if (initialTab) setTab(initialTab);
+  }, [initialTab]);
   const [draft, setDraft] = useState({
     livekit_api_url: runtimeSettings?.livekit_api_url || '',
     livekit_browser_url: runtimeSettings?.livekit_browser_url || '',
@@ -79,6 +104,39 @@ export function SettingsView({
 
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div className="cf-tabbar" role="tablist" style={{ display: 'flex', gap: '0.25rem', borderBottom: '1px solid var(--border)', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
+        {SETTINGS_TABS.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={tab === t.id}
+            className={tab === t.id ? 'cf-tab active' : 'cf-tab'}
+            onClick={() => setTab(t.id)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '0.4rem',
+              padding: '0.45rem 0.85rem', border: 'none', background: 'none', cursor: 'pointer',
+              fontWeight: tab === t.id ? 700 : 500,
+              borderBottom: tab === t.id ? '2px solid var(--primary, #2563eb)' : '2px solid transparent',
+              color: tab === t.id ? 'var(--primary, #2563eb)' : 'var(--muted)',
+            }}
+          >
+            {t.icon} {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'audit_log' && <AuditLogView />}
+      {tab === 'admin' && <AdminView config={pricingConfig} onSave={onUpdatePricingConfig} />}
+      {tab === 'diagnostics' && (
+        <>
+          <WorkerHealthPanel />
+          <DispatchFailuresPanel />
+          <FallbackEventsPanel />
+        </>
+      )}
+
+      {tab === 'general' && (
+      <>
       <div className="content-grid two-col">
         <div className="panel">
           <div className="panel-header">
@@ -162,12 +220,12 @@ export function SettingsView({
         </div>
       </div>
 
-      {/* ── Admin Tools ── */}
+      {/* ── Platform defaults ── */}
       <div className="panel">
         <div className="panel-header">
           <div>
             <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <SlidersHorizontal size={18} /> Admin tools
+              <SlidersHorizontal size={18} /> Platform defaults
             </h2>
             <p>Platform-wide defaults for bot behaviour. These are used when a bot has no per-bot override configured in Advanced mode.</p>
           </div>
@@ -244,6 +302,8 @@ export function SettingsView({
           </p>
         )}
       </div>
+      </>
+      )}
     </section>
   );
 }

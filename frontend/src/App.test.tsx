@@ -287,8 +287,11 @@ describe('Bot select -> builder -> EvalsPanel microinteractions', () => {
     await user.type(screen.getByLabelText(/password/i), 'correct-password');
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 
-    const editButtons = await screen.findAllByRole('button', { name: /^edit$/i });
-    await user.click(editButtons[0]);
+    // Edit/Delete now live behind a single per-row "⋮" menu (RowActionsMenu) rather than as
+    // always-visible buttons.
+    const rowMenus = await screen.findAllByRole('button', { name: /row actions/i });
+    await user.click(rowMenus[0]);
+    await user.click(await screen.findByRole('menuitem', { name: /^edit$/i }));
 
     // Prompt/Flow/Evals are now tabs within one agent workspace (consolidated from
     // separate sidebar destinations), so wait for the tab bar rather than the

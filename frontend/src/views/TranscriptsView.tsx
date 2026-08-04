@@ -26,6 +26,8 @@ export function TranscriptsView({
   onSearchText,
   filters,
   onFiltersChange,
+  source,
+  onSourceChange,
   onSelect,
   onNavigateTest
 }: {
@@ -40,6 +42,8 @@ export function TranscriptsView({
   onSearchText: (value: string) => void;
   filters: { status: string; outcome: string; campaign_id: string; bot_id: string; start_date: string; end_date: string };
   onFiltersChange: (f: typeof filters) => void;
+  source: '' | 'web_test' | 'batch';
+  onSourceChange: (s: '' | 'web_test' | 'batch') => void;
   onSelect: (id: string) => void;
   onNavigateTest?: () => void;
 }) {
@@ -92,6 +96,7 @@ export function TranscriptsView({
     start_date: filters.start_date || undefined,
     end_date: filters.end_date || undefined,
     text: searchText.trim() || undefined,
+    source: source || undefined,
   });
 
   return (
@@ -130,6 +135,31 @@ export function TranscriptsView({
               </button>
             </a>
           </div>
+        </div>
+        <div className="tab-toggle" role="tablist" aria-label="Call source" style={{ display: 'flex', gap: '4px', padding: '8px 16px 0' }}>
+          {([
+            ['', 'All'],
+            ['web_test', 'Web Call'],
+            ['batch', 'Batch Call'],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value || 'all'}
+              role="tab"
+              aria-selected={source === value}
+              onClick={() => onSourceChange(value)}
+              className={source === value ? 'tab active' : 'tab'}
+              style={{
+                fontSize: '0.8rem',
+                padding: '4px 12px',
+                border: '1px solid var(--border)',
+                borderRadius: '999px',
+                background: source === value ? 'var(--accent)' : 'transparent',
+                color: source === value ? 'var(--accent-contrast, #fff)' : 'inherit',
+              }}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         {showFilters && (
           <div style={{ padding: '10px 16px', background: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>

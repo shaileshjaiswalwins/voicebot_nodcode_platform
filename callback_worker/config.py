@@ -10,6 +10,13 @@ MONGO_URI = os.environ["MONGO_URI"]  # no prod fallback — must be set explicit
 MONGO_DB = "ai_lead_qualify"
 MONGO_COLLECTION = "call_transcripts"
 
+# Separate dashboard/platform DB (bot.py's PLATFORM_MONGO_URI/PLATFORM_DB_NAME) — where
+# tbl_ai_vb_bots/tbl_ai_vb_bot_versions live, holding each bot's optional analysis_prompt
+# override. Distinct from MONGO_DB above (the legacy production lead-qualify DB this
+# worker polls transcripts from).
+PLATFORM_MONGO_URI = os.getenv("PLATFORM_MONGO_URI", MONGO_URI)
+PLATFORM_DB_NAME = os.getenv("VOICEBOT_PLATFORM_DB", "ai_voice_bot_management")
+
 CALLBACK_API_URL = os.environ["CALLBACK_API_URL"]  # no prod fallback — must be set explicitly
 CALLBACK_UPDATE_API_URL = os.environ["CALLBACK_UPDATE_API_URL"]  # no prod fallback — must be set explicitly
 
@@ -25,3 +32,20 @@ LOG_DIR = os.path.join(
     os.environ.get("BOT_LOG_DIR", str(Path(__file__).resolve().parent.parent / "logs")),
     "analysis_logs",
 )
+
+VERIFY_TRANSCRIPTS_FROM_RECORDING = os.getenv(
+    "VERIFY_TRANSCRIPTS_FROM_RECORDING", "true"
+).lower() in {"1", "true", "yes", "on"}
+DIALER_RECORDING_API_URL = os.getenv(
+    "DIALER_RECORDING_API_URL",
+    "http://192.168.8.121:8082/jdboxNode/dashboard/fetchFilteredCallData",
+)
+DIALER_RECORDING_CITY = os.getenv("DIALER_RECORDING_CITY", "bangalore")
+DIALER_RECORDING_SERVICE_ID = os.getenv("DIALER_RECORDING_SERVICE_ID", "")
+DIALER_RECORDING_LOOKBACK_HOURS = int(os.getenv("DIALER_RECORDING_LOOKBACK_HOURS", "12"))
+DIALER_RECORDING_LOOKAHEAD_HOURS = int(os.getenv("DIALER_RECORDING_LOOKAHEAD_HOURS", "12"))
+RECORDING_FETCH_TIMEOUT_SEC = int(os.getenv("RECORDING_FETCH_TIMEOUT_SEC", "12"))
+RECORDING_TRANSCRIBE_TIMEOUT_SEC = int(os.getenv("RECORDING_TRANSCRIBE_TIMEOUT_SEC", "30"))
+
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
+SARVAM_STT_URL = os.getenv("SARVAM_STT_URL", "https://api.sarvam.ai/speech-to-text")

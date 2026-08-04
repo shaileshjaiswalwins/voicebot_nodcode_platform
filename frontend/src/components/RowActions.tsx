@@ -1,7 +1,12 @@
 import React, { useState } from 'react';
 import { Pencil, Trash2 } from 'lucide-react';
 import { ConfirmDialog } from './ConfirmDialog';
+import { RowActionsMenu } from './RowActionsMenu';
 
+/** Generic per-row Edit/Delete for a table, used across Campaigns/Library/PhoneNumbers.
+ * Renders through the same "⋮" RowActionsMenu as the Agents table (rather than always-visible
+ * button pairs) — callers keep the same props (onEdit/onDelete/delete confirmation), only the
+ * presentation changed. Delete still goes through ConfirmDialog before onDelete fires. */
 export function RowActions<T>({
   item,
   onEdit,
@@ -33,18 +38,14 @@ export function RowActions<T>({
     }
   }
 
+  const actions = [
+    ...(onEdit ? [{ label: editTitle, icon: <Pencil size={13} />, onClick: () => onEdit(item) }] : []),
+    ...(onDelete ? [{ label: deleteTitle.replace(/\?$/, ''), icon: <Trash2 size={13} />, onClick: () => setPendingDelete(item), danger: true }] : []),
+  ];
+
   return (
-    <div className="button-row" style={{ display: 'flex', gap: '6px' }}>
-      {onEdit && (
-        <button title={editTitle} onClick={() => onEdit(item)}>
-          <Pencil size={13} />
-        </button>
-      )}
-      {onDelete && (
-        <button className="danger-button" title={deleteTitle} onClick={() => setPendingDelete(item)}>
-          <Trash2 size={13} />
-        </button>
-      )}
+    <>
+      <RowActionsMenu actions={actions} />
       {pendingDelete && (
         <ConfirmDialog
           title={deleteTitle}
@@ -57,6 +58,6 @@ export function RowActions<T>({
           onConfirm={confirmDelete}
         />
       )}
-    </div>
+    </>
   );
 }

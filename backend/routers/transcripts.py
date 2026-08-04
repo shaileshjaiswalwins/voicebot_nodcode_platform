@@ -25,7 +25,7 @@ def _serialize(doc: dict) -> dict:
     return doc
 
 
-def _build_filter(bot_id: str = "", campaign_id: str = "", status: str = "", text: str = "") -> dict:
+def _build_filter(bot_id: str = "", campaign_id: str = "", status: str = "", text: str = "", source: str = "") -> dict:
     query: dict = {}
     if bot_id:
         query["bot_id"] = bot_id
@@ -33,11 +33,21 @@ def _build_filter(bot_id: str = "", campaign_id: str = "", status: str = "", tex
         query["campaign_id"] = campaign_id
     if status:
         query["status"] = status
+    and_clauses: list[dict] = []
+    if source == "web_test":
+        query["source"] = "web_test"
+    elif source == "batch":
+        # Transcripts written before this field existed have no "source" key at all —
+        # treat those as "batch" (the pre-existing majority case: campaign/SIP calls)
+        # rather than silently excluding them from either tab.
+        and_clauses.append({"$or": [{"source": "batch"}, {"source": {"$exists": False}}]})
     if text:
-        query["$or"] = [
+        and_clauses.append({"$or": [
             {"lead_id": {"$regex": text, "$options": "i"}},
             {"call_id": {"$regex": text, "$options": "i"}},
-        ]
+        ]})
+    if and_clauses:
+        query["$and"] = and_clauses
     return query
 
 
@@ -47,10 +57,11 @@ def list_transcripts(
     campaign_id: str = Query(""),
     status: str = Query(""),
     text: str = Query(""),
+    source: str = Query(""),
     limit: int = Query(200, le=1000),
     _: dict = Depends(require_user),
 ) -> list[dict]:
-    query = _build_filter(bot_id, campaign_id, status, text)
+    query = _build_filter(bot_id, campaign_id, status, text, source)
     docs = transcripts.find(query).sort("created_at", -1).limit(limit)
     return [_serialize(d) for d in docs]
 
@@ -80,9 +91,10 @@ def export_csv(
     start_date: str = Query(""),
     end_date: str = Query(""),
     text: str = Query(""),
+    source: str = Query(""),
     _: dict = Depends(require_user),
 ) -> StreamingResponse:
-    query = _build_filter(bot_id, campaign_id, status, text)
+    query = _build_filter(bot_id, campaign_id, status, text, source)
     if outcome:
         query["analysis.call_outcome"] = outcome
     if start_date or end_date:

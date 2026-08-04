@@ -70,7 +70,11 @@ def list_analysis_prompts() -> list[dict]:
     return [_serialize(p) for p in analysis_prompts.find({})]
 
 
-def update_analysis_prompt(key: str, prompt_template: str, user: str) -> dict:
+def validate_prompt_template(key: str, prompt_template: str) -> None:
+    """Raises KeyError/ValueError on an invalid template. Shared by the global
+    Library editor (update_analysis_prompt) and per-bot override validation
+    (backend/routers/bots.py), so a malformed override can't silently break
+    the callback worker's JSON parsing in production."""
     if key not in DEFAULT_PROMPTS:
         raise KeyError(f"Unknown analysis prompt key: {key}")
     if not prompt_template or not prompt_template.strip():
@@ -80,6 +84,10 @@ def update_analysis_prompt(key: str, prompt_template: str, user: str) -> dict:
     missing = REQUIRED_PLACEHOLDERS[key] - _placeholders_in(prompt_template)
     if missing:
         raise ValueError(f"prompt_template is missing required placeholder(s): {sorted(missing)}")
+
+
+def update_analysis_prompt(key: str, prompt_template: str, user: str) -> dict:
+    validate_prompt_template(key, prompt_template)
     now = datetime.now(timezone.utc).isoformat()
     analysis_prompts.update_one(
         {"key": key},
@@ -112,10 +120,16 @@ def _placeholders_in(text: str) -> set[str]:
     return names
 
 
-def get_analysis_prompt_for_runtime(key: str) -> str:
+def get_analysis_prompt_for_runtime(key: str, override: str = "") -> str:
     """Cached (60s TTL) reader for the callback worker's hot path. Falls back to the
     hardcoded default if Mongo is unreachable or the document is missing, so a PM typo
-    or a DB blip can never take down post-call analysis."""
+    or a DB blip can never take down post-call analysis.
+
+    `override` is a bot-specific analysis_prompt (BotConfig.analysis_prompt) already
+    validated at save time via validate_prompt_template — when present it's returned
+    directly, bypassing the global Mongo-backed template entirely."""
+    if override and override.strip():
+        return override
     now = time.monotonic()
     with _cache_lock:
         cached = _cache.get(key)

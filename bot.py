@@ -25,7 +25,9 @@ import json
 import logging as _logging
 import os
 import re
+import socket
 import sys
+import threading
 import time
 import unicodedata
 import wave
@@ -45,6 +47,7 @@ from custom_functions import (
     run_lifecycle_functions,
 )
 from custom_function_tools import build_during_call_tools
+from langsmith_tracing import trace_completed_call
 
 from livekit import rtc
 from livekit.agents import (
@@ -300,19 +303,72 @@ def _get_platform_transcripts_collection():
     return _get_platform_db()["tbl_ai_vb_call_transcripts"]
 
 
-async def _save_transcript_to_dashboard_db(mongo_doc: dict, bot_id: str, campaign_id: str = "") -> None:
+async def _save_transcript_to_dashboard_db(
+    mongo_doc: dict, bot_id: str, campaign_id: str = "",
+    bot_config: dict | None = None, provider_config: dict | None = None,
+) -> None:
     """Save a call transcript into the dashboard's own collection
     (ai_voice_bot_management.tbl_ai_vb_call_transcripts), which is what
     backend/routers/transcripts.py reads (backend/db.py:39). This is the transcript
     store for dashboard-driven calls (Test Call / campaigns, i.e. bot_dev.py and
     bot_pipeline.py) — ai_lead_qualify is a separate, legacy production DB those
     entrypoints must not write to. Raises on failure; callers log via their own
-    room-bound logger, matching the existing save-call-data pattern."""
+    room-bound logger, matching the existing save-call-data pattern.
+
+    Dashboard-driven calls have no other post-call analysis pipeline — callback_worker/
+    worker.py only ever processes the legacy ai_lead_qualify.call_transcripts collection
+    (written exclusively by this file's OWN separate production entrypoint, further down),
+    a completely different collection from this one. So call_outcome/qna is computed
+    inline, right here, rather than relying on that worker ever seeing this doc."""
     _doc = dict(mongo_doc)
     _doc["bot_id"] = bot_id
     _doc["campaign_id"] = campaign_id
+    # Dashboard Test Call always names its room "test-<uuid>" (backend/routers/testcall.py);
+    # every other entrypoint (campaign/SIP-dialed calls) uses a LiveKit-assigned or
+    # dialer-assigned room name that never has that prefix. No entrypoint sets an explicit
+    # call-origin field today, so this is the one signal that's both always-present and
+    # already consistent across bot.py/bot_dev.py/bot_dev_param.py/bot_pipeline.py.
+    _doc["source"] = "web_test" if str(mongo_doc.get("room_name", "")).startswith("test-") else "batch"
+    if provider_config:
+        _doc["provider_config"] = provider_config
+
+    try:
+        from callback_worker.analysis import fallback_analysis, generate_b2b_score, generate_call_analysis
+
+        analysis_prompt_override = (bot_config or {}).get("analysis_prompt", "")
+        schema = (mongo_doc.get("lead_record") or {}).get("qualification_schema", {}) or {}
+        analysis, b2b_score = await asyncio.gather(
+            generate_call_analysis(
+                mongo_doc.get("transcript") or [], mongo_doc.get("status", "completed"), schema,
+                _get_http_session(),
+                muted_transcript=mongo_doc.get("muted_transcript"),
+                duration_secs=mongo_doc.get("call_duration_sec"),
+                analysis_prompt_override=analysis_prompt_override,
+            ),
+            generate_b2b_score(mongo_doc.get("transcript") or [], _get_http_session()),
+        )
+    except Exception as e:
+        logger.warning(f"[ANALYSIS] Failed for dashboard call room={mongo_doc.get('room_name')!r}: {e}")
+        analysis = fallback_analysis(mongo_doc.get("status", "completed"))
+        b2b_score = {"deal_value": "", "lead_intent_score": "", "urgency_flag": "no"}
+
+    _doc["analysis"] = {
+        "call_outcome": analysis.get("call_outcome", ""),
+        "call_outcome_description": analysis.get("call_outcome_description", ""),
+        "call_summary": analysis.get("call_summary", ""),
+        "is_business": analysis.get("is_business", ""),
+        "business_name": analysis.get("business_name", ""),
+        "business_city": analysis.get("business_city", ""),
+        "qna": analysis.get("qna") or [],
+        "product_change": analysis.get("product_change") or {},
+        "deal_value": b2b_score.get("deal_value", ""),
+        "lead_intent_score": b2b_score.get("lead_intent_score", ""),
+        "urgency_flag": b2b_score.get("urgency_flag", "no"),
+    }
+
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, lambda: _get_platform_transcripts_collection().insert_one(_doc))
+    await loop.run_in_executor(None, lambda: trace_completed_call(_doc, bot_id))
 
 
 # ---------------------------------------------------------------------------
@@ -671,22 +727,38 @@ _HARDCODED_BOT_CONFIG: dict = {
 }
 
 
-async def fetch_bot_config(bot_id: str, test_bot_version_id: str) -> dict | None:
+# Reason codes for why fetch_bot_config fell back to _HARDCODED_BOT_CONFIG — used by
+# record_fallback_event() below so "why did this call get the hardcoded Simran bot" is a
+# queryable Mongo record instead of something only visible by grepping a worker's local log
+# file after the fact (which was exactly the problem the night this was added: three
+# different, unrelated causes — a stale duplicate worker process, a worker assignment
+# timeout, and this function's own None-returns — all produced the identical symptom, and
+# telling them apart required reading raw logs across two machines).
+FALLBACK_REASON_NO_IDS = "no_ids_in_room_metadata"
+FALLBACK_REASON_MALFORMED_IDS = "malformed_ids"
+FALLBACK_REASON_DB_UNREACHABLE = "platform_db_unreachable"
+FALLBACK_REASON_VERSION_NOT_FOUND = "version_not_found"
+FALLBACK_REASON_CONFIG_EMPTY = "version_doc_has_no_config"
+
+
+async def fetch_bot_config(bot_id: str, test_bot_version_id: str) -> tuple[dict | None, str]:
     """Resolve a specific bot version's config from the dashboard's config store, for
     dashboard "Test Call" runs only (see backend/routers/testcall.py, which is the only
     dispatch path that puts bot_id/test_bot_version_id into room metadata today).
 
-    Returns None (caller falls back to _HARDCODED_BOT_CONFIG) if either id is missing,
-    malformed, or no matching version is found — this keeps real production calls, whose
-    room metadata never carries these keys, completely unaffected."""
+    Returns (None, reason) — caller falls back to _HARDCODED_BOT_CONFIG — if either id is
+    missing, malformed, the platform DB is unreachable, or no matching version is found;
+    this keeps real production calls, whose room metadata never carries these keys,
+    completely unaffected. reason is one of the FALLBACK_REASON_* constants above, or ""
+    on success, so callers can record *why* without re-deriving it from log text."""
     if not bot_id or not test_bot_version_id:
-        return None
+        return None, FALLBACK_REASON_NO_IDS
     try:
         version_oid = ObjectId(test_bot_version_id)
         bot_oid = ObjectId(bot_id)
     except (InvalidId, TypeError):
         logger.warning(f"[CONFIG] Malformed bot_id/test_bot_version_id in room metadata: {bot_id!r}/{test_bot_version_id!r}")
-        return None
+        return None, FALLBACK_REASON_MALFORMED_IDS
 
     loop = asyncio.get_running_loop()
     try:
@@ -698,12 +770,74 @@ async def fetch_bot_config(bot_id: str, test_bot_version_id: str) -> dict | None
         )
     except Exception as exc:
         logger.warning(f"[CONFIG] Could not reach platform DB for bot_id={bot_id!r} version={test_bot_version_id!r}: {exc}")
-        return None
+        return None, FALLBACK_REASON_DB_UNREACHABLE
 
     if not version_doc:
         logger.warning(f"[CONFIG] No bot_version found for bot_id={bot_id!r} version={test_bot_version_id!r}")
-        return None
-    return version_doc.get("config") or None
+        return None, FALLBACK_REASON_VERSION_NOT_FOUND
+    config = version_doc.get("config") or None
+    if config is None:
+        return None, FALLBACK_REASON_CONFIG_EMPTY
+    return config, ""
+
+
+def record_fallback_event(
+    *, room_name: str, bot_id: str, test_bot_version_id: str, reason: str, worker: str,
+) -> None:
+    """Best-effort, queryable audit trail for every call that ran on _HARDCODED_BOT_CONFIG
+    instead of the dashboard-configured bot — surfaced via GET /api/diagnostics/fallback-events
+    (backend/routers/diagnostics.py). Never raises: a logging failure must not affect the call
+    it's describing, and this fires from inside the hot call-setup path on every worker."""
+    try:
+        _get_platform_db()["tbl_ai_vb_bot_config_fallback_events"].insert_one({
+            "room_name": room_name,
+            "bot_id": bot_id,
+            "test_bot_version_id": test_bot_version_id,
+            "reason": reason,
+            "worker": worker,
+            "created_at": datetime.now(timezone.utc),
+        })
+    except Exception as exc:
+        logger.warning(f"[CONFIG] record_fallback_event failed (non-fatal): {exc}")
+
+
+_WORKER_HEARTBEAT_INTERVAL_S = float(os.getenv("WORKER_HEARTBEAT_INTERVAL_S", "10"))
+
+
+def _worker_heartbeat_loop(agent_name: str, pid: int) -> None:
+    coll = _get_platform_db()["tbl_ai_vb_worker_heartbeats"]
+    hostname = socket.gethostname()
+    started_at = datetime.now(timezone.utc)
+    while True:
+        try:
+            coll.update_one(
+                {"agent_name": agent_name},
+                {"$set": {
+                    "agent_name": agent_name,
+                    "pid": pid,
+                    "host": hostname,
+                    "last_seen": datetime.now(timezone.utc),
+                    "started_at": started_at,
+                }},
+                upsert=True,
+            )
+        except Exception as exc:
+            logger.warning(f"[WORKER HEARTBEAT] update failed (non-fatal): {exc}")
+        time.sleep(_WORKER_HEARTBEAT_INTERVAL_S)
+
+
+def start_worker_heartbeat(agent_name: str) -> None:
+    """Starts a background thread that upserts this worker process's liveness into
+    tbl_ai_vb_worker_heartbeats every _WORKER_HEARTBEAT_INTERVAL_S seconds, surfaced via
+    GET /api/diagnostics/worker-health. Without this, a crashed or network-partitioned
+    worker is completely invisible until someone places a real call and it silently hangs
+    on "waiting for bot to join" — call once from the top-level `if __name__ ==
+    "__main__":` guard of each worker entrypoint script, before cli.run_app(...) (which
+    blocks), not from inside per-job code — one heartbeat per worker process, not per call."""
+    t = threading.Thread(
+        target=_worker_heartbeat_loop, args=(agent_name, os.getpid()), daemon=True, name="worker-heartbeat",
+    )
+    t.start()
 
 
 # ---------------------------------------------------------------------------
@@ -1680,8 +1814,17 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # 2. Resolve bot config and settings
     _bot_id_meta = _room_meta_raw.get("bot_id", "")
     _test_version_meta = _room_meta_raw.get("test_bot_version_id", "")
-    _bc = await fetch_bot_config(_bot_id_meta, _test_version_meta) if (_bot_id_meta and _test_version_meta) else None
+    if _bot_id_meta and _test_version_meta:
+        _bc, _fallback_reason = await fetch_bot_config(_bot_id_meta, _test_version_meta)
+    else:
+        _bc, _fallback_reason = None, FALLBACK_REASON_NO_IDS
     _bot_config: dict = _bc or _HARDCODED_BOT_CONFIG
+    if _bc is None:
+        record_fallback_event(
+            room_name=room_name, bot_id=_bot_id_meta, test_bot_version_id=_test_version_meta,
+            reason=_fallback_reason, worker=os.getenv("LIVEKIT_AGENT_NAME", ""),
+        )
+        _log.warning(f"[CONFIG] Falling back to hardcoded assistant — reason={_fallback_reason!r}")
 
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
 
@@ -1741,6 +1884,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         "mobile": _room_mobile,
         "call_id": call_state.get("call_id") or room_name,
     }
+    # Test-call only: tester-seeded overrides for query_params this bot's own pre_call
+    # functions define beyond the fixed lead_id/mobile/call_id trio above (dashboard's
+    # dynamic "Test Call Parameters" modal, one field per function's query_params). Real
+    # production calls never carry this metadata key, so this is a no-op for them.
+    _extra_pre_call_params = _room_meta_raw.get("pre_call_params")
+    if isinstance(_extra_pre_call_params, dict):
+        _pre_call_params = {**_pre_call_params, **_extra_pre_call_params}
     try:
         _pre_results = await run_lifecycle_functions(
             _functions, "pre_call", _pre_call_params,

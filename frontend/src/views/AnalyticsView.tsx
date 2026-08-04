@@ -6,9 +6,10 @@ import { useCountUp } from '../hooks/useCountUp';
 import { StatusPill } from '../components/StatusPill';
 import { Detail } from '../components/Detail';
 import { ErrorState } from '../components/ErrorState';
+import { EmptyState } from '../components/EmptyState';
 import { Tooltip } from '../components/Tooltip';
 
-export function AnalyticsView({ bots, campaigns }: { bots: BotType[]; campaigns: Campaign[] }) {
+export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType[]; campaigns: Campaign[]; onGoToAgents?: () => void }) {
   const [analytics, setAnalytics] = useState<OutcomeAnalytics | null>(null);
   const [alert, setAlert] = useState<QualityAlert | null>(null);
   const [loading, setLoading] = useState(false);
@@ -118,34 +119,44 @@ export function AnalyticsView({ bots, campaigns }: { bots: BotType[]; campaigns:
               </div>
             </div>
 
-            <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>By status</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '16px' }}>
-              {statusEntries.map(([status, count]) => (
-                <div key={status} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <StatusPill value={status} />
-                  <div style={{ flex: 1, background: 'var(--bg-tertiary)', borderRadius: '3px', height: '8px', overflow: 'hidden' }}>
-                    <div style={{ width: `${total ? count / total * 100 : 0}%`, background: 'var(--accent)', height: '100%', transition: 'width 0.3s' }} />
-                  </div>
-                  <span style={{ fontSize: '0.82rem', minWidth: '50px', textAlign: 'right' }}>{count} ({total ? Math.round(count / total * 100) : 0}%)</span>
-                </div>
-              ))}
-              {!statusEntries.length && <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No data for this window.</p>}
-            </div>
-
-            {outcomeEntries.length > 0 && (
+            {total === 0 ? (
+              <EmptyState
+                icon={<BarChart2 size={32} />}
+                heading="No calls in this window"
+                description="Outcome and status breakdowns appear here once at least one call has been made — try a test call, or widen the date range above."
+                action={onGoToAgents ? { label: 'Go make a test call', onClick: onGoToAgents } : undefined}
+              />
+            ) : (
               <>
-                <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>By outcome tag</h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {outcomeEntries.map(([outcome, count]) => (
-                    <div key={outcome} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <span style={{ minWidth: '140px', fontSize: '0.82rem' }}>{outcome}</span>
+                <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>By status</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '16px' }}>
+                  {statusEntries.map(([status, count]) => (
+                    <div key={status} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <StatusPill value={status} />
                       <div style={{ flex: 1, background: 'var(--bg-tertiary)', borderRadius: '3px', height: '8px', overflow: 'hidden' }}>
-                        <div style={{ width: `${total ? count / total * 100 : 0}%`, background: 'var(--success)', height: '100%', transition: 'width 0.3s' }} />
+                        <div style={{ width: `${total ? count / total * 100 : 0}%`, background: 'var(--accent)', height: '100%', transition: 'width 0.3s' }} />
                       </div>
-                      <span style={{ fontSize: '0.82rem', minWidth: '40px', textAlign: 'right' }}>{count}</span>
+                      <span style={{ fontSize: '0.82rem', minWidth: '50px', textAlign: 'right' }}>{count} ({total ? Math.round(count / total * 100) : 0}%)</span>
                     </div>
                   ))}
                 </div>
+
+                {outcomeEntries.length > 0 && (
+                  <>
+                    <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>By outcome tag</h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {outcomeEntries.map(([outcome, count]) => (
+                        <div key={outcome} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <span style={{ minWidth: '140px', fontSize: '0.82rem' }}>{outcome}</span>
+                          <div style={{ flex: 1, background: 'var(--bg-tertiary)', borderRadius: '3px', height: '8px', overflow: 'hidden' }}>
+                            <div style={{ width: `${total ? count / total * 100 : 0}%`, background: 'var(--success)', height: '100%', transition: 'width 0.3s' }} />
+                          </div>
+                          <span style={{ fontSize: '0.82rem', minWidth: '40px', textAlign: 'right' }}>{count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
               </>
             )}
           </>

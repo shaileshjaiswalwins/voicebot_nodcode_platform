@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  AlertTriangle, ChevronRight, Database, GitBranch, Pencil, Plus,
-  Rocket, Save, ShieldCheck, SlidersHorizontal, Wand2
+  AlertTriangle, ChevronRight, Database, GitBranch, History, Info, Pencil, PhoneCall, Plus,
+  Rocket, Save, ShieldCheck, X
 } from 'lucide-react';
 import type { Bot as BotType, BotVersion, LanguageOption, PricingConfig } from '../api';
 import type { RuntimeConfig, BuilderMode } from '../types';
@@ -11,6 +11,7 @@ import { TimeAgo } from '../components/TimeAgo';
 import { Detail } from '../components/Detail';
 import { CopyableId } from '../components/CopyableId';
 import { BotConfigTabs } from '../components/BotConfigTabs';
+import type { BuilderTab as BuilderConfigTab } from '../components/BotConfigTabs';
 import { CostBreakdownPopover } from '../components/CostBreakdownPopover';
 import { estimateAgentCost } from '../utils/agentCost';
 import { api } from '../api';
@@ -18,67 +19,6 @@ import type { CustomFunction } from '../types';
 
 // Re-exported from its own module for backward compatibility with existing imports.
 export { CloseMarkersEditor } from '../components/CloseMarkersEditor';
-
-export function PromptPreview({ version, srchterm }: { version: BotVersion; srchterm: string }) {
-  const cfg = version.config as Record<string, string | undefined>;
-  const rawOpening = cfg.initial_message || '(no opening line set)';
-  const opening = rawOpening
-    .replace('{product}', srchterm || '<product>')
-    .replace('{agent_name}', cfg.agent_name || '<agent_name>')
-    .replace('{organization_name}', cfg.organization_name || '<org_name>');
-  const systemPrompt = cfg.system_prompt || '(no system_prompt set in this version)';
-  const agentName = cfg.agent_name;
-  const orgName = cfg.organization_name;
-  const aiPartner = cfg.ai_partner;
-
-  const warnings: string[] = [];
-  if (!agentName) warnings.push('agent_name not set — bot may use hardcoded persona');
-  if (!orgName) warnings.push('organization_name not set');
-  if (!cfg.initial_message) warnings.push('initial_message not set — bot will use fallback');
-
-  const configSource = version.state === 'published'
-    ? `embedded_test_config:${version._id.slice(-6)}`
-    : `draft:v${version.version}`;
-
-  return (
-    <details className="prompt-preview" style={{ marginTop: '1rem' }}>
-      <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem', padding: '0.5rem 0', userSelect: 'none' }}>
-        Prompt preview — v{version.version} ({version.state})
-      </summary>
-      <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <code style={{ fontSize: '0.72rem', background: 'var(--surface-2)', padding: '2px 8px', borderRadius: '4px', color: 'var(--muted)' }}>
-            config: {configSource}
-          </code>
-          {aiPartner && <code style={{ fontSize: '0.72rem', background: 'var(--surface-2)', padding: '2px 8px', borderRadius: '4px', color: 'var(--muted)' }}>ai_partner: {aiPartner}</code>}
-        </div>
-        {warnings.length > 0 && (
-          <div style={{ background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', borderRadius: '6px', padding: '0.5rem 0.75rem' }}>
-            {warnings.map((w) => <div key={w} style={{ fontSize: '0.78rem', color: 'var(--warning)' }}>⚠ {w}</div>)}
-          </div>
-        )}
-        <div>
-          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Persona</div>
-          <code style={{ fontSize: '0.8rem' }}>{agentName || '(not set)'} · {orgName || '(org not set)'}</code>
-        </div>
-        <div>
-          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Pipeline</div>
-          <code style={{ fontSize: '0.8rem' }}>Sarvam STT (saaras:v3) → gemini-3.1-flash-lite → Sarvam TTS (bulbul:v3, simran)</code>
-        </div>
-        <div>
-          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Opening line</div>
-          <div style={{ background: 'var(--surface-2)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.85rem', fontStyle: 'italic' }}>
-            "{opening}"
-          </div>
-        </div>
-        <div>
-          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>System prompt</div>
-          <pre style={{ background: 'var(--surface-2)', borderRadius: '6px', padding: '0.75rem', fontSize: '0.78rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '300px', overflowY: 'auto', margin: 0 }}>{systemPrompt}</pre>
-        </div>
-      </div>
-    </details>
-  );
-}
 
 export function BuilderView({
   selectedBot,
@@ -110,7 +50,8 @@ export function BuilderView({
   onShowDiff,
   liveCallsByVersion,
   builderMode,
-  onToggleMode
+  onToggleMode,
+  testPanelSlot
 }: {
   selectedBot?: BotType;
   versions: BotVersion[];
@@ -142,6 +83,11 @@ export function BuilderView({
   liveCallsByVersion?: Record<string, number>;
   builderMode?: BuilderMode;
   onToggleMode?: (mode: BuilderMode) => void;
+  /** The Test Audio/Test LLM rail's JSX, built and state-owned by App.tsx (testForm,
+   * testPanelMode, dynamicVariables, etc. all live there already) — passed in as an element
+   * rather than lifting that state up here, so the drawer can host it without duplicating
+   * where that state lives. */
+  testPanelSlot?: React.ReactNode;
 }) {
   const value = config.ok ? config.value : defaultConfig;
   const isAdvanced = builderMode === 'advanced';
@@ -227,6 +173,30 @@ export function BuilderView({
     setRecoveryDraft(null);
   }
 
+  // Test Agent and Version history are two independent triggers sharing one slide-over
+  // slot — opening either one always closes the other (a single "which content" state
+  // makes that automatic, rather than two independent booleans that could both be true).
+  // Agent details/Cost moved to a separate small info popover instead, since it's a quick
+  // glance, not something you'd want a full panel width for.
+  const [sidePanel, setSidePanel] = useState<'none' | 'test' | 'versions'>('none');
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!detailsOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (detailsRef.current && !detailsRef.current.contains(e.target as Node)) setDetailsOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setDetailsOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [detailsOpen]);
+
   // Auto-save to localStorage (debounced 2s)
   useEffect(() => {
     if (!lsKey || !isDirtyConfig) return;
@@ -284,24 +254,6 @@ export function BuilderView({
             <ChevronRight className="rotate-180" size={15} /> Back to agents
           </button>
         )}
-        {onToggleMode && (
-          <div className="mode-toggle" role="group" aria-label="Builder mode">
-            <button
-              className={!isAdvanced ? 'mode-btn active' : 'mode-btn'}
-              onClick={() => onToggleMode('pm')}
-              title="PM view — core fields only"
-            >
-              <Pencil size={13} /> PM
-            </button>
-            <button
-              className={isAdvanced ? 'mode-btn active' : 'mode-btn'}
-              onClick={() => onToggleMode('advanced')}
-              title="Advanced — all config fields including admin settings"
-            >
-              <SlidersHorizontal size={13} /> Advanced
-            </button>
-          </div>
-        )}
         <div className="builder-action-bar-right">
           {isDirty && (
             <span className="unsaved-indicator" title="You have unsaved changes. Press ⌘S to save a new draft.">
@@ -337,6 +289,59 @@ export function BuilderView({
             onClick={onPublish}
           >
             <Rocket size={15} /> {publishState === 'failed' ? 'Retry' : publishState === 'running' ? 'Publishing…' : 'Publish'}
+          </button>
+          <div className="details-popover-anchor" ref={detailsRef}>
+            <button className={detailsOpen ? 'primary' : ''} onClick={() => setDetailsOpen((v) => !v)} title="Agent details" aria-label="Agent details">
+              <Info size={15} />
+            </button>
+            {detailsOpen && (
+              <div className="details-popover">
+                <div className="panel-header-inline">
+                  <h2>Agent details</h2>
+                  {selectedBot && <CopyableId value={selectedBot._id} label="ID" />}
+                </div>
+                <div className="detail-list">
+                  <Detail label="Owner" value={selectedBot?.owner || 'Unknown'} />
+                  {costEstimate ? (
+                    <>
+                      <CostBreakdownPopover estimate={costEstimate}>
+                        <div className="detail dotted-underline-row">
+                          <span>Cost</span>
+                          <strong className="dotted-underline">₹{costEstimate.totalCostInrPerMin.toFixed(2)}/min</strong>
+                        </div>
+                      </CostBreakdownPopover>
+                      <Detail
+                        label="Latency"
+                        value={
+                          costEstimate.latencyMinMs != null && costEstimate.latencyMaxMs != null
+                            ? `${costEstimate.latencyMinMs}-${costEstimate.latencyMaxMs}ms`
+                            : '-'
+                        }
+                      />
+                      <Detail
+                        label="Tokens"
+                        value={
+                          costEstimate.tokensMin != null && costEstimate.tokensMax != null
+                            ? `${costEstimate.tokensMin} - ${costEstimate.tokensMax >= 1000 ? `${(costEstimate.tokensMax / 1000).toFixed(costEstimate.tokensMax % 1000 === 0 ? 0 : 1)}k` : costEstimate.tokensMax}`
+                            : '-'
+                        }
+                      />
+                    </>
+                  ) : (
+                    <Detail label="Cost" value="Loading…" />
+                  )}
+                  <Detail label="Published versions" value={publishedCount.toString()} />
+                  <Detail label="Active version" value={activeVersion ? `v${activeVersion.version}` : '-'} />
+                  <Detail label="Latest draft" value={latestDraft ? `v${latestDraft.version}` : 'None'} />
+                </div>
+              </div>
+            )}
+          </div>
+          <button className={sidePanel === 'versions' ? 'primary' : ''} onClick={() => setSidePanel((p) => (p === 'versions' ? 'none' : 'versions'))} title="Version history" aria-label="Version history">
+            <History size={15} />
+          </button>
+          <button className={sidePanel === 'test' ? 'primary' : ''} onClick={() => setSidePanel((p) => (p === 'test' ? 'none' : 'test'))}>
+            <PhoneCall size={15} /> Test Agent
           </button>
         </div>
       </div>
@@ -406,58 +411,31 @@ export function BuilderView({
                   ? (fn: CustomFunction, args: Record<string, unknown>) => api.testCustomFunction(selectedBot!._id, fn, args)
                   : undefined
               }
+              onGeneratePrompt={
+                selectedBot?._id
+                  ? (mode, instruction, currentPrompt, target) => api.generatePrompt(selectedBot!._id, mode, instruction, currentPrompt, target)
+                  : undefined
+              }
             />
           </div>
         </div>
-        <aside className="right-rail">
-          {selectedBot && (
-            <div className="panel compact">
-              <div className="panel-header-inline">
-                <h2>Agent details</h2>
-                <CopyableId value={selectedBot._id} label="ID" />
-              </div>
-              <div className="detail-list">
-                {costEstimate ? (
-                  <>
-                    <CostBreakdownPopover estimate={costEstimate}>
-                      <div className="detail dotted-underline-row">
-                        <span>Cost</span>
-                        <strong className="dotted-underline">₹{costEstimate.totalCostInrPerMin.toFixed(2)}/min</strong>
-                      </div>
-                    </CostBreakdownPopover>
-                    <Detail
-                      label="Latency"
-                      value={
-                        costEstimate.latencyMinMs != null && costEstimate.latencyMaxMs != null
-                          ? `${costEstimate.latencyMinMs}-${costEstimate.latencyMaxMs}ms`
-                          : '-'
-                      }
-                    />
-                    <Detail
-                      label="Tokens"
-                      value={
-                        costEstimate.tokensMin != null && costEstimate.tokensMax != null
-                          ? `${costEstimate.tokensMin} - ${costEstimate.tokensMax >= 1000 ? `${(costEstimate.tokensMax / 1000).toFixed(costEstimate.tokensMax % 1000 === 0 ? 0 : 1)}k` : costEstimate.tokensMax}`
-                          : '-'
-                      }
-                    />
-                  </>
-                ) : (
-                  <Detail label="Cost" value="Loading…" />
-                )}
-              </div>
-            </div>
-          )}
-          <div className="panel compact">
-            <h2>Publishing</h2>
-            <div className="detail-list">
-              <Detail label="Published versions" value={publishedCount.toString()} />
-              <Detail label="Active version" value={activeVersion ? `v${activeVersion.version}` : '-'} />
-              <Detail label="Latest draft" value={latestDraft ? `v${latestDraft.version}` : 'None'} />
-            </div>
+      </div>
+
+      {sidePanel !== 'none' && <div className="side-panel-backdrop" onClick={() => setSidePanel('none')} />}
+      <aside className={sidePanel !== 'none' ? 'side-panel open' : 'side-panel'} aria-hidden={sidePanel === 'none'}>
+        <div className="side-panel-header">
+          <h2 style={{ margin: 0, fontSize: '0.95rem' }}>{sidePanel === 'versions' ? 'Version history' : 'Test Agent'}</h2>
+          <button className="modal-close" onClick={() => setSidePanel('none')} aria-label="Close"><X size={16} /></button>
+        </div>
+
+        {sidePanel === 'test' && (
+          <div className="side-panel-body">
+            {testPanelSlot}
           </div>
-          <div className="panel compact right-rail-versions">
-            <h2>Version history</h2>
+        )}
+
+        {sidePanel === 'versions' && (
+          <div className="side-panel-body">
             <div className="version-list">
               {versions.map((version, i) => {
                 const isActive = version._id === selectedBot?.active_version_id;
@@ -507,12 +485,8 @@ export function BuilderView({
               })}
             </div>
           </div>
-          <div className="callout">
-            <Wand2 size={18} />
-            V1 is prompt and settings only. Visual node routing can come later through Dograh.
-          </div>
-        </aside>
-      </div>
+        )}
+      </aside>
     </section>
   );
 }

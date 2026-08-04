@@ -1,101 +1,361 @@
-import React, { useState } from 'react';
-import { AlertTriangle, Bot, FileText, Headphones, Pencil, Plus, Rocket, ShieldCheck, Trash2 } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertTriangle, ArrowDown, ArrowUp, Bot, Copy, Download, FileText, LayoutGrid, List,
+  Pencil, Plus, Rocket, Search, Tag, Trash2, Trash
+} from 'lucide-react';
 import type { Bot as BotType, Campaign, LanguageOption } from '../api';
-import type { Transcript } from '../api';
+import { api } from '../api';
 import { OPENING_LINE_BY_GENDER } from '../constants/ui';
 import { StatusPill } from '../components/StatusPill';
-import { CopyableId } from '../components/CopyableId';
 import { TimeAgo } from '../components/TimeAgo';
-import { Detail } from '../components/Detail';
+import { RowActionsMenu } from '../components/RowActionsMenu';
 import { SkeletonTableBody } from '../components/SkeletonTableBody';
 import { EmptyState } from '../components/EmptyState';
 import { Dialog } from '../components/Dialog';
 import { Spinner } from '../components/Spinner';
-import { shortId } from '../utils/formatting';
+import { RecentlyDeletedModal } from '../components/RecentlyDeletedModal';
 
-export function BotsView({ bots, selectedBot, transcripts, loading, onSelect, onEdit, onDelete, onNew }: {
+const PAGE_SIZE = 20;
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || '?';
+}
+
+function formatDuration(sec?: number): string {
+  const s = Math.round(sec || 0);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+type SortKey = 'updated_at' | 'name' | 'call_count';
+
+export function BotsView({ bots, loading, onEdit, onDelete, onNew, onDuplicate, duplicatingBotId, onBotRestored }: {
   bots: BotType[];
-  selectedBot?: BotType;
-  transcripts: Transcript[];
   loading?: boolean;
-  onSelect: (botId: string) => void;
   onEdit: (botId: string) => void;
   onDelete: (bot: BotType) => void;
   onNew?: () => void;
+  /** Clone an agent's current config (published version if it has one, else its latest
+   * draft) into a brand-new draft bot named "{name} (copy)". The most-requested action
+   * missing from this list — every new agent otherwise starts from the same generic
+   * defaultConfig, so teams running several similar bots have no fast path to "one like
+   * this, slightly different." */
+  onDuplicate?: (bot: BotType) => void;
+  duplicatingBotId?: string;
+  /** Refreshes the main Agents list after a restore from Recently Deleted — without this,
+   * the restored bot only disappears from the modal's own local list and never actually
+   * reappears in `bots` until an unrelated action happens to reload it. */
+  onBotRestored?: () => void;
 }) {
-  return (
-    <section className="content-grid two-col">
-      <div className="table-panel">
-        <div className="panel-header">
-          <div>
-            <h2>Agents</h2>
-            <p>Each agent owns its prompt, voice, language, versions, and runtime settings.</p>
-          </div>
-          {onNew && bots.length > 0 && (
-            <button className="primary" onClick={onNew}><Plus size={15} /> New agent</button>
+  const [search, setSearch] = useState('');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [tagMenuOpen, setTagMenuOpen] = useState(false);
+  const [tagSearch, setTagSearch] = useState('');
+  const tagFilterRef = useRef<HTMLDivElement>(null);
+  // Matches RowActionsMenu's own close-on-outside-click/Escape behavior — without this the
+  // dropdown only ever closed by clicking the Tags button again, which reads as stuck/broken
+  // once the tester clicks anywhere else on the page.
+  useEffect(() => {
+    if (!tagMenuOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (tagFilterRef.current && !tagFilterRef.current.contains(e.target as Node)) setTagMenuOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setTagMenuOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [tagMenuOpen]);
+  const [sortKey, setSortKey] = useState<SortKey>('updated_at');
+  const [sortDesc, setSortDesc] = useState(true);
+  const [draftsOnly, setDraftsOnly] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>(() => (localStorage.getItem('agentsViewMode') as 'list' | 'grid') || 'list');
+  const [page, setPage] = useState(1);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
+  const [deletedOpen, setDeletedOpen] = useState(false);
+  const [deletedBots, setDeletedBots] = useState<BotType[] | null>(null);
+
+  function setViewModePersist(mode: 'list' | 'grid') {
+    setViewMode(mode);
+    localStorage.setItem('agentsViewMode', mode);
+  }
+
+  function loadDeletedBots() {
+    setDeletedOpen(true);
+    api.deletedBots().then(setDeletedBots).catch(() => setDeletedBots([]));
+  }
+
+  const allTags = useMemo(() => {
+    const set = new Set<string>();
+    bots.forEach((b) => (b.tags || []).forEach((t) => set.add(t)));
+    return Array.from(set).sort();
+  }, [bots]);
+
+  // Counts always reflect the full unfiltered set — the dropdown shows how many agents
+  // each tag holds regardless of whatever search/drafts-only filter is currently active.
+  const tagCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    bots.forEach((b) => (b.tags || []).forEach((t) => { counts[t] = (counts[t] || 0) + 1; }));
+    return counts;
+  }, [bots]);
+
+  const draftCount = bots.filter((b) => !b.published).length;
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let list = bots.filter((b) => {
+      if (draftsOnly && b.published) return false;
+      if (selectedTags.length && !selectedTags.every((t) => (b.tags || []).includes(t))) return false;
+      if (!q) return true;
+      return (
+        b.name.toLowerCase().includes(q) ||
+        (b.description || '').toLowerCase().includes(q) ||
+        (b.tags || []).some((t) => t.toLowerCase().includes(q))
+      );
+    });
+    list = [...list].sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === 'name') cmp = a.name.localeCompare(b.name);
+      else if (sortKey === 'call_count') cmp = (a.call_count ?? 0) - (b.call_count ?? 0);
+      else cmp = new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime();
+      return sortDesc ? -cmp : cmp;
+    });
+    return list;
+  }, [bots, search, selectedTags, draftsOnly, sortKey, sortDesc]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageClamped = Math.min(page, totalPages);
+  const paged = filtered.slice((pageClamped - 1) * PAGE_SIZE, pageClamped * PAGE_SIZE);
+
+  async function handleExport() {
+    setExporting(true);
+    setExportError('');
+    try {
+      await api.exportBots();
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Export failed.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function rowActionsFor(bot: BotType) {
+    return [
+      { label: 'Edit', icon: <Pencil size={13} />, onClick: () => onEdit(bot._id) },
+      ...(onDuplicate ? [{
+        label: duplicatingBotId === bot._id ? 'Duplicating…' : 'Duplicate',
+        icon: <Copy size={13} />,
+        onClick: () => onDuplicate(bot),
+      }] : []),
+      { label: 'Delete', icon: <Trash2 size={13} />, onClick: () => onDelete(bot), danger: true },
+    ];
+  }
+
+  const toolbar = (
+    <div className="agents-toolbar">
+      <div className="agents-search">
+        <input
+          placeholder="Search agents by name, description, or tags…"
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+        />
+      </div>
+
+      <div className="agents-toolbar-controls">
+        <div className="tag-filter" ref={tagFilterRef}>
+          <button onClick={() => setTagMenuOpen((v) => !v)} className={selectedTags.length ? 'active' : ''}>
+            <Tag size={14} /> Tags{selectedTags.length ? ` (${selectedTags.length})` : ''}
+          </button>
+          {tagMenuOpen && (
+            <div className="tag-filter-dropdown">
+              <div className="tag-filter-heading">Filter by Tags</div>
+              <div className="tag-filter-search">
+                <Search size={14} />
+                <input
+                  autoFocus
+                  placeholder="Search tags…"
+                  value={tagSearch}
+                  onChange={(e) => setTagSearch(e.target.value)}
+                />
+              </div>
+              <div className="tag-filter-list">
+                {allTags.length === 0 ? (
+                  <p className="muted" style={{ fontSize: '0.8rem', margin: '0.4rem' }}>No tags assigned yet.</p>
+                ) : (
+                  <>
+                    <div className="tag-filter-section-label">Available Tags</div>
+                    {allTags.filter((tag) => tag.toLowerCase().includes(tagSearch.trim().toLowerCase())).map((tag) => (
+                      <label key={tag} className="tag-filter-option">
+                        <input
+                          type="checkbox"
+                          checked={selectedTags.includes(tag)}
+                          onChange={(e) => {
+                            setSelectedTags((prev) => (e.target.checked ? [...prev, tag] : prev.filter((t) => t !== tag)));
+                            setPage(1);
+                          }}
+                        />
+                        <span>{tag}</span>
+                        <span className="count-badge">{tagCounts[tag] || 0}</span>
+                      </label>
+                    ))}
+                  </>
+                )}
+              </div>
+            </div>
           )}
         </div>
-        <div className="table-scroll"><table>
-          <thead>
-            <tr><th>Name</th><th>Status</th><th>Assistant</th><th>Updated</th><th>Actions</th></tr>
-          </thead>
-          <tbody>
-            {loading && !bots.length ? (
-              <SkeletonTableBody cols={5} rows={4} />
-            ) : bots.length === 0 ? (
-              <tr><td colSpan={5}>
-                <EmptyState
-                  icon={<Bot size={32} />}
-                  heading="No agents yet"
-                  description="Create your first voice agent to get started. Each agent has its own prompt, voice, and published versions."
-                  action={onNew ? { label: 'Create first agent', onClick: onNew } : undefined}
-                />
-              </td></tr>
-            ) : bots.map((bot) => (
-              <tr key={bot._id} onClick={() => onSelect(bot._id)} className={bot._id === selectedBot?._id ? 'selected-row' : ''}>
-                <td>
-                  <strong>{bot.name}</strong>
-                  <small>{bot.description || 'Prompt + settings agent'}</small>
-                </td>
-                <td><StatusPill value={bot.status} /></td>
-                <td><CopyableId value={bot.assistant_id} /></td>
-                <td><TimeAgo value={bot.updated_at} /></td>
-                <td>
-                  <div className="table-actions">
-                    <button onClick={(event) => { event.stopPropagation(); onEdit(bot._id); }}><Pencil size={13} /> Edit</button>
-                    <button className="danger-button" onClick={(event) => { event.stopPropagation(); onDelete(bot); }}><Trash2 size={14} /> Delete</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table></div>
+
+        <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)}>
+          <option value="updated_at">Last Updated</option>
+          <option value="name">Name</option>
+          <option value="call_count">Calls</option>
+        </select>
+        <button onClick={() => setSortDesc((v) => !v)} title={sortDesc ? 'Descending' : 'Ascending'}>
+          {sortDesc ? <ArrowDown size={15} /> : <ArrowUp size={15} />}
+        </button>
+
+        <button
+          className={draftsOnly ? 'active' : ''}
+          onClick={() => { setDraftsOnly((v) => !v); setPage(1); }}
+        >
+          Show Drafts Only {draftCount > 0 && <span className="count-badge">{draftCount}</span>}
+        </button>
+
+        <div className="view-toggle">
+          <button className={viewMode === 'list' ? 'active' : ''} onClick={() => setViewModePersist('list')} aria-label="List view" title="List view">
+            <List size={15} />
+          </button>
+          <button className={viewMode === 'grid' ? 'active' : ''} onClick={() => setViewModePersist('grid')} aria-label="Grid view" title="Grid view">
+            <LayoutGrid size={15} />
+          </button>
+        </div>
       </div>
-      <div className="panel">
-        <div className="agent-profile">
-          <div className="agent-avatar"><Headphones size={28} /></div>
-          <div>
-            <h2>{selectedBot?.name || 'No agent selected'}</h2>
-            <p>{selectedBot?.description || 'Open an agent to edit its draft or test a browser call.'}</p>
-          </div>
-        </div>
-        <div className="detail-list">
-          <Detail label="Assistant ID" value={selectedBot?.assistant_id || '-'} />
-          <Detail label="Active version" value={selectedBot?.active_version_id ? shortId(selectedBot.active_version_id) : '-'} />
-          <Detail label="Owner" value={selectedBot?.owner || 'Unknown'} />
-          <Detail label="Calls stored" value={transcripts.filter((item) => item.bot_id === selectedBot?._id).length.toString()} />
-        </div>
-        <div className="callout success">
-          <ShieldCheck size={18} />
-          Live calls keep their original published config snapshot. Publishing changes affects only new calls.
-        </div>
-        {selectedBot && (
-          <div className="button-row">
-            <button className="primary" onClick={() => onEdit(selectedBot._id)}><Pencil size={15} /> Edit agent</button>
-            <button className="danger-button" onClick={() => onDelete(selectedBot)}><Trash2 size={16} /> Delete agent</button>
-          </div>
+    </div>
+  );
+
+  const header = (
+    <div className="panel-header">
+      <div>
+        <h2>Agents</h2>
+        <p>Manage your intelligent voice agents.</p>
+      </div>
+      <div className="button-row">
+        <button onClick={handleExport} disabled={exporting}>
+          <Download size={14} /> {exporting ? 'Exporting…' : 'Export Data'}
+        </button>
+        <button onClick={loadDeletedBots}>
+          <Trash size={14} /> Recently Deleted
+        </button>
+        {onNew && bots.length > 0 && (
+          <button id="onboarding-create-agent" className="primary" onClick={onNew}><Plus size={15} /> New agent</button>
         )}
       </div>
+    </div>
+  );
+
+  const pagination = totalPages > 1 && (
+    <div className="agents-pagination">
+      <button disabled={pageClamped <= 1} onClick={() => setPage(pageClamped - 1)}>Previous</button>
+      <span>Page {pageClamped} of {totalPages}</span>
+      <button disabled={pageClamped >= totalPages} onClick={() => setPage(pageClamped + 1)}>Next</button>
+    </div>
+  );
+
+  return (
+    <section className="content-grid">
+      <div className="table-panel">
+        {header}
+        {toolbar}
+        {exportError && <div className="notice error" role="alert" style={{ margin: '0.5rem 0' }}>{exportError}</div>}
+
+        {loading && !bots.length ? (
+          <div className="table-scroll"><table><tbody><SkeletonTableBody cols={6} rows={4} /></tbody></table></div>
+        ) : bots.length === 0 ? (
+          <EmptyState
+            icon={<Bot size={32} />}
+            heading="No agents yet"
+            description="Create your first voice agent to get started. Each agent has its own prompt, voice, and published versions."
+            action={onNew ? { label: 'Create first agent', onClick: onNew, id: 'onboarding-create-agent' } : undefined}
+          />
+        ) : filtered.length === 0 ? (
+          <EmptyState icon={<Bot size={32} />} heading="No matching agents" description="Try a different search term or clear your filters." />
+        ) : viewMode === 'grid' ? (
+          <div className="agents-grid">
+            {paged.map((bot) => (
+              <div key={bot._id} className="agent-card" onClick={() => onEdit(bot._id)}>
+                <div className="agent-card-top">
+                  <div className="agent-card-avatar">{initials(bot.name)}</div>
+                  <RowActionsMenu actions={rowActionsFor(bot)} />
+                </div>
+                <strong>{bot.name}</strong>
+                <small>{bot.description || 'Prompt + settings agent'}</small>
+                {(bot.tags || []).length > 0 && (
+                  <div className="agent-card-tags">
+                    {(bot.tags || []).slice(0, 3).map((t) => <span key={t} className="pill">{t}</span>)}
+                    {(bot.tags || []).length > 3 && <span className="pill">+{(bot.tags || []).length - 3}</span>}
+                  </div>
+                )}
+                <div className="agent-card-metrics">
+                  <div><strong>{bot.calls_today ?? 0}</strong><span>calls today</span></div>
+                  <div><strong>{formatDuration(bot.avg_duration_sec)}</strong><span>avg duration</span></div>
+                </div>
+                <div className="agent-card-footer">
+                  <StatusPill value={bot.published ? 'published' : 'draft'} />
+                  <TimeAgo value={bot.updated_at} />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="table-scroll"><table>
+            <thead>
+              <tr><th>Agent</th><th>Calls Today</th><th>Avg Duration</th><th>Last Updated</th><th></th></tr>
+            </thead>
+            <tbody>
+              {paged.map((bot) => (
+                <tr key={bot._id} onClick={() => onEdit(bot._id)}>
+                  <td>
+                    <div className="agent-row-name">
+                      <div className="agent-card-avatar small">{initials(bot.name)}</div>
+                      <div>
+                        <strong>{bot.name}</strong>
+                        <small>{bot.agent_name ? `${bot.agent_name} — ` : ''}{bot.description || 'Prompt + settings agent'}</small>
+                        {(bot.tags || []).length > 0 && (
+                          <div className="agent-card-tags">
+                            {(bot.tags || []).map((t) => <span key={t} className="pill">{t}</span>)}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                  <td>{bot.calls_today ?? 0}<br /><small className="muted">calls today</small></td>
+                  <td>{formatDuration(bot.avg_duration_sec)}<br /><small className="muted">average duration</small></td>
+                  <td><TimeAgo value={bot.updated_at} /><br /><small className="muted">last updated</small></td>
+                  <td><RowActionsMenu actions={rowActionsFor(bot)} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+        )}
+
+        {pagination}
+      </div>
+
+      {deletedOpen && (
+        <RecentlyDeletedModal
+          bots={deletedBots}
+          onClose={() => setDeletedOpen(false)}
+          onRestored={(id) => {
+            setDeletedBots((prev) => (prev || []).filter((b) => b._id !== id));
+            onBotRestored?.();
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -183,10 +443,6 @@ export function NewAgentWizard({
                 <span>Agent name <span style={{ color: 'var(--danger)' }}>*</span></span>
                 <input value={form.agent_name} onChange={set('agent_name')} placeholder="e.g. Tarun, Priya, Aman" />
                 <small>Name of the agent</small>
-              </label>
-              <label>
-                Organization name
-                <input value={form.organization_name} onChange={set('organization_name')} placeholder="e.g. JustDial" />
               </label>
               <label>
                 Gender

@@ -37,6 +37,10 @@ TTS_RATES = {
     "google_neural2": 1.30,
     "google_chirp3_hd": 2.43,
     "google_studio": 12.96,
+    # Self-hosted on our own infra (INDIC_TTS_WS_URL) — no per-call vendor invoice like the
+    # others above, so this is a rough compute-amortization estimate, not a metered rate.
+    # Adjust from the Admin pricing page once real infra-cost numbers are in.
+    "indic_f5": 0.20,
 }
 TELEPHONY_RATES = {
     "inhouse_dialer": 0.0,
@@ -68,6 +72,7 @@ MODEL_COMPANY: dict[str, str] = {
     "google_neural2": "Google",
     "google_chirp3_hd": "Google",
     "google_studio": "Google",
+    "indic_f5": "Justdial",
     "inhouse_dialer": "Platform",
     "sip_direct": "Platform",
     "plivo": "Plivo",

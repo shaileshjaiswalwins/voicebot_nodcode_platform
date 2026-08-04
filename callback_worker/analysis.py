@@ -28,8 +28,8 @@ class _SafeFormatDict(dict):
         return "{" + key + "}"
 
 
-def _render_analysis_prompt(key: str, ctx: dict) -> str:
-    template = get_analysis_prompt_for_runtime(key)
+def _render_analysis_prompt(key: str, ctx: dict, override: str = "") -> str:
+    template = get_analysis_prompt_for_runtime(key, override=override)
     try:
         return template.format_map(_SafeFormatDict(ctx))
     except Exception:
@@ -200,6 +200,7 @@ async def generate_call_analysis(
     user_speech_ms: int = 0,
     wrong_opener_detected: bool = False,
     is_business_flag: int | None = None,
+    analysis_prompt_override: str = "",
 ) -> dict:
     if gemini_connect_failed:
         return {
@@ -1642,7 +1643,7 @@ explicitly stated or clearly implied by the buyer's direct response to the agent
         "_hot_lead_step2c": _hot_lead_step2c,
         "_hot_lead_step3_keys": _hot_lead_step3_keys,
     }
-    prompt = _render_analysis_prompt(CALL_ANALYSIS_KEY, _analysis_prompt_ctx)
+    prompt = _render_analysis_prompt(CALL_ANALYSIS_KEY, _analysis_prompt_ctx, override=analysis_prompt_override)
 
     try:
         url = (

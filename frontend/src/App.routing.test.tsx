@@ -148,7 +148,9 @@ describe('App routing', () => {
     mockedApi.listEvals.mockResolvedValue([]);
     await login(user);
 
-    await user.click(screen.getByRole('button', { name: /^edit$/i }));
+    // Edit/Delete now live behind a single per-row "⋮" menu (RowActionsMenu).
+    await user.click(screen.getByRole('button', { name: /row actions/i }));
+    await user.click(await screen.findByRole('menuitem', { name: /^edit$/i }));
     await waitFor(() => expect(window.location.pathname).toBe('/agents/bot-1'));
   });
 

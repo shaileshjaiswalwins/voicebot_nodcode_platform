@@ -8,7 +8,7 @@ logic lives in custom_functions.py; this module only wires it to `function_tool`
 
 from typing import Any, Awaitable, Callable
 
-from livekit.agents import function_tool
+from livekit.agents import RunContext, function_tool
 
 from custom_functions import build_tool_schema, selectable_during_call_functions
 
@@ -39,7 +39,7 @@ def build_during_call_tools(
 
 def _make_tool(name: str, schema: dict, functions, execute_fn: ExecuteFn, call_state: dict):
     @function_tool(raw_schema=schema)
-    async def _tool(ctx, raw_arguments: dict[str, Any]) -> dict:  # noqa: ANN001 (ctx is RunContext)
+    async def _tool(ctx: RunContext, raw_arguments: dict[str, Any]) -> dict:
         return await execute_fn(name, raw_arguments or {}, functions=functions, call_state=call_state)
 
     return _tool

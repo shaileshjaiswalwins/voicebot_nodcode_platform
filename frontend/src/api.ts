@@ -37,7 +37,7 @@ export class ApiError extends Error {
 
 const READ_TIMEOUT_MS = 8000;
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, timeoutMs: number = READ_TIMEOUT_MS): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -46,13 +46,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), READ_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
     response = await fetch(apiUrl(path), { ...options, headers, signal: controller.signal });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new ApiError(0, `Request timed out after ${READ_TIMEOUT_MS}ms: ${path}`);
+      throw new ApiError(0, `Request timed out after ${timeoutMs}ms: ${path}`);
     }
     throw error;
   } finally {
@@ -91,6 +91,8 @@ async function requestForm<T>(path: string, formData: FormData): Promise<T> {
 // Types
 // ---------------------------------------------------------------------------
 
+export type ChatTurn = { role: 'user' | 'bot'; text: string };
+
 export type BotStatus = 'active' | 'paused' | 'deleted';
 
 export type Bot = {
@@ -102,11 +104,27 @@ export type Bot = {
   description?: string;
   assistant_id?: string;
   status: BotStatus;
+  /** "standard" = fixed-assistant pipeline, "workflow" = visual-graph state machine — read
+   * off the bot's active (or draft) version config by GET /api/bots. */
+  bot_type?: 'standard' | 'workflow';
+  /** Whether this bot has ever been published (active_version_id set) — more informative
+   * than `status`, which reads "active" for every non-deleted bot regardless of lifecycle. */
+  published?: boolean;
   updated_at: string;
   created_at?: string;
   active_version_id?: string | null;
   draft_version_id?: string | null;
   owner?: string;
+  /** Total calls against this bot, aggregated server-side over the full
+   * tbl_ai_vb_call_transcripts collection — not just whatever page of transcripts the
+   * Transcripts view happens to have loaded client-side. */
+  call_count?: number;
+  calls_today?: number;
+  avg_duration_sec?: number;
+  tags?: string[];
+  /** Set only while status='deleted' (backend/routers/bots.py delete_bot); cleared on
+   * restore. Absent for every active bot. */
+  deleted_at?: string;
 };
 
 export type BotVersion = {
@@ -293,6 +311,35 @@ export type AuditLogEntry = {
   created_at: string;
 };
 
+export type FallbackEvent = {
+  _id: string;
+  room_name: string;
+  bot_id: string;
+  test_bot_version_id: string;
+  reason: string;
+  worker: string;
+  created_at: string;
+};
+
+export type WorkerHealth = {
+  agent_name: string;
+  pid: number | null;
+  host: string;
+  last_seen: string;
+  started_at: string;
+  age_seconds: number | null;
+  stale: boolean;
+};
+
+export type DispatchFailure = {
+  _id: string;
+  room_name: string;
+  agent_name: string;
+  bot_id: string;
+  timeout_seconds: number;
+  created_at: string;
+};
+
 export type TranscriptTurn = { role: string; text?: string; created_at?: string; interrupted?: boolean; event_type?: string };
 
 export type Transcript = {
@@ -319,6 +366,9 @@ export type Transcript = {
   recording_url?: string;
   recording_source?: string;
   room_name?: string;
+  /** Call origin: "web_test" (dashboard Test Call) vs "batch" (campaign/SIP-dialed).
+   * Absent on transcripts saved before this field existed — treat as "batch". */
+  source?: 'web_test' | 'batch';
 };
 
 export type PhraseCategory = 'voicemail' | 'hold_music' | 'dnc_trigger';
@@ -398,6 +448,73 @@ export type FlowEdge = {
 };
 export type Flow = { nodes: FlowNode[]; edges: FlowEdge[] };
 
+/** Mirrors backend/models.py's Workflow* models exactly — the real state-machine graph
+ * consumed by workflow_engine.py's WorkflowGraph (distinct from Flow/FlowNode above,
+ * which is prompt-compiled by flow_compiler.py and only instructs, not enforces). */
+export type WorkflowNodeKind = 'start' | 'conversation' | 'condition' | 'function' | 'end_call' | 'global';
+
+export type WorkflowVariableSpec = {
+  name: string;
+  type?: 'string' | 'number' | 'boolean';
+  required?: boolean;
+  description?: string;
+};
+
+export type WorkflowTransitionSpec = {
+  id: string;
+  key?: string;
+  label?: string;
+  condition?: string;
+};
+
+export type WorkflowConditionSpec = {
+  id: string;
+  path?: string;
+  op?: 'eq' | 'ne' | 'gt' | 'lt' | 'contains' | 'exists';
+  value?: unknown;
+  is_fallback?: boolean;
+};
+
+export type WorkflowFunctionSpec = {
+  url?: string;
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  headers?: Record<string, string>;
+  query_params?: Record<string, string>;
+  body_format?: 'json' | 'form';
+  custom_body?: string;
+};
+
+export type WorkflowNodeData = {
+  kind: WorkflowNodeKind;
+  label?: string;
+  first_message?: string;
+  prompt?: string;
+  variables?: WorkflowVariableSpec[];
+  transitions?: WorkflowTransitionSpec[];
+  conditions?: WorkflowConditionSpec[];
+  function?: WorkflowFunctionSpec;
+  output_key?: string;
+  closing_message?: string;
+  trigger_description?: string;
+  action?: 'end_call' | 'continue' | 'transfer';
+  transfer_number?: string;
+};
+
+export type WorkflowNode = {
+  id: string;
+  position?: { x: number; y: number };
+  data: WorkflowNodeData;
+};
+
+export type WorkflowEdge = {
+  id?: string;
+  source: string;
+  target: string;
+  sourceHandle?: string;
+};
+
+export type WorkflowGraphDef = { nodes: WorkflowNode[]; edges: WorkflowEdge[] };
+
 export type LanguageOption = { id: string; label: string };
 export type VoiceOption = { id: string; label: string; gender?: string };
 
@@ -465,6 +582,35 @@ export type PlatformSettings = {
   default_close_markers?: string[];
 };
 
+export type DailyCount = { date: string; count: number };
+export type DailyDuration = { date: string; avg_duration_sec: number };
+export type OutcomeCount = { outcome: string; count: number };
+
+export type BotMetrics = {
+  total_calls: number;
+  calls_today: number;
+  calls_this_week: number;
+  calls_this_month: number;
+  avg_duration_sec: number;
+  success_rate_pct: number;
+  trend_vs_previous_pct: { total_calls: number | null; success_rate: number | null };
+  daily_volume: DailyCount[];
+  daily_avg_duration: DailyDuration[];
+  outcome_breakdown: OutcomeCount[];
+};
+
+export type BotRankingEntry = { bot_id: string; name: string; success_rate_pct: number; call_count: number };
+
+export type DashboardSummary = {
+  total_agents: number;
+  total_calls_all_time: number;
+  total_minutes_all_time: number;
+  calls_today: number;
+  best_performing_bot: BotRankingEntry | null;
+  least_performing_bot: BotRankingEntry | null;
+  daily_volume: DailyCount[];
+};
+
 // ---------------------------------------------------------------------------
 // api client
 // ---------------------------------------------------------------------------
@@ -522,6 +668,34 @@ export const api = {
   deleteBot(id: string): Promise<{ ok: boolean }> {
     return request(`/api/bots/${id}`, { method: 'DELETE' });
   },
+  deletedBots(): Promise<Bot[]> {
+    return request('/api/bots/deleted');
+  },
+  restoreBot(id: string): Promise<{ ok: boolean }> {
+    return request(`/api/bots/${id}/restore`, { method: 'POST' });
+  },
+  botMetrics(id: string, days: 7 | 30 = 7): Promise<BotMetrics> {
+    return request(`/api/bots/${id}/metrics?days=${days}`);
+  },
+  dashboardSummary(): Promise<DashboardSummary> {
+    return request('/api/dashboard/summary');
+  },
+  /** Triggers a browser download of the CSV — can't use request()'s json() parsing, and a
+   * plain <a href> can't carry the Bearer auth header, so this fetches as a blob directly. */
+  async exportBots(): Promise<void> {
+    const token = getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(apiUrl('/api/bots/export'), { headers });
+    if (!response.ok) throw new ApiError(response.status, await response.text().catch(() => response.statusText));
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'agents.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  },
   compileFlowPreview(flow: Flow): Promise<{ compiled_prompt: string }> {
     return request('/api/bots/compile-flow-preview', { method: 'POST', body: JSON.stringify({ flow }) });
   },
@@ -545,6 +719,73 @@ export const api = {
   },
   listEvals(id: string): Promise<EvalRun[]> {
     return request(`/api/bots/${id}/evals`);
+  },
+
+  // Test LLM: text-only chat against the bot's LLM, no LiveKit/voice involved
+  llmChatReply(
+    id: string,
+    systemPrompt: string,
+    history: ChatTurn[],
+    dynamicVariables: Record<string, string>,
+    functionMocks: Record<string, string>,
+  ): Promise<{ text: string }> {
+    return request(
+      `/api/bots/${id}/llm-chat/reply`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          system_prompt: systemPrompt,
+          history,
+          dynamic_variables: dynamicVariables,
+          function_mocks: functionMocks,
+        }),
+      },
+      30000,
+    );
+  },
+  llmChatSimulateTurn(
+    id: string,
+    systemPrompt: string,
+    callerPersona: string,
+    history: ChatTurn[],
+    dynamicVariables: Record<string, string>,
+    functionMocks: Record<string, string>,
+  ): Promise<{ ended: boolean; caller_text: string | null; bot_text: string | null }> {
+    return request(
+      `/api/bots/${id}/llm-chat/simulate-turn`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          system_prompt: systemPrompt,
+          caller_persona: callerPersona,
+          history,
+          dynamic_variables: dynamicVariables,
+          function_mocks: functionMocks,
+        }),
+      },
+      30000,
+    );
+  },
+
+  // AI-assisted text generation/refinement — shared by System prompt, Closing line, and
+  // Analysis prompt override in BotConfigTabs (each with its own server-side framing, see
+  // backend/prompt_assist.py). `target` defaults to 'system_prompt' for back-compat.
+  generatePrompt(
+    id: string,
+    mode: 'generate' | 'refine',
+    instruction: string,
+    currentPrompt: string,
+    target: 'system_prompt' | 'closing_line' | 'analysis_prompt' = 'system_prompt',
+  ): Promise<{ text: string }> {
+    return request(
+      `/api/bots/${id}/generate-prompt`,
+      { method: 'POST', body: JSON.stringify({ mode, instruction, current_prompt: currentPrompt, target }) },
+      30000,
+    );
+  },
+  // Create Agent > Create with AI — no bot exists yet, so this is bot-less.
+  generateAgent(description: string): Promise<{ agent_name: string; initial_message: string; system_prompt: string }> {
+    return request('/api/bots/generate-agent', { method: 'POST', body: JSON.stringify({ description }) }, 30000);
   },
 
   // platform (dev/prod) settings
@@ -771,8 +1012,22 @@ export const api = {
     return request(`/api/audit-log?${qs.toString()}`);
   },
 
+  // bot-config fallback events — every call that ran on the hardcoded default assistant
+  // instead of the dashboard-configured bot, with why (see bot.py's record_fallback_event)
+  fallbackEvents(params: { limit?: number; offset?: number } = {}): Promise<{ items: FallbackEvent[]; total: number }> {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]));
+    return request(`/api/diagnostics/fallback-events?${qs.toString()}`);
+  },
+  workerHealth(): Promise<WorkerHealth[]> {
+    return request('/api/diagnostics/worker-health');
+  },
+  dispatchFailures(params: { limit?: number; offset?: number } = {}): Promise<{ items: DispatchFailure[]; total: number }> {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]));
+    return request(`/api/diagnostics/dispatch-failures?${qs.toString()}`);
+  },
+
   // transcripts
-  transcripts(params: { bot_id?: string; campaign_id?: string; status?: string; text?: string; limit?: number } = {}): Promise<Transcript[]> {
+  transcripts(params: { bot_id?: string; campaign_id?: string; status?: string; text?: string; source?: string; limit?: number } = {}): Promise<Transcript[]> {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '') as [string, string][]);
     return request(`/api/transcripts?${qs.toString()}`);
   },
@@ -782,7 +1037,7 @@ export const api = {
   testRecordingLookup(callId: string): Promise<TestRecordingLookup> {
     return request(`/api/transcripts/recording-lookup/${callId}`);
   },
-  exportCsvUrl(params: { bot_id?: string; campaign_id?: string; status?: string; outcome?: string; start_date?: string; end_date?: string; text?: string }): string {
+  exportCsvUrl(params: { bot_id?: string; campaign_id?: string; status?: string; outcome?: string; start_date?: string; end_date?: string; text?: string; source?: string }): string {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '') as [string, string][]);
     return apiUrl(`/api/transcripts/export.csv?${qs.toString()}`);
   },
@@ -809,6 +1064,7 @@ export const api = {
     city?: string;
     test_worker_agent_name?: string;
     custom_lead_json?: string;
+    pre_call_params?: Record<string, string>;
   }): Promise<{ room_name: string; livekit_token: string; livekit_url: string }> {
     return request('/api/testcall/start', { method: 'POST', body: JSON.stringify(payload) });
   },

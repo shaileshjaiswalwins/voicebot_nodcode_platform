@@ -115,6 +115,111 @@ class CustomFunction(BaseModel):
     custom_body: dict[str, Any] = Field(default_factory=dict)
 
 
+class WorkflowVariableSpec(BaseModel):
+    """One piece of information a conversation node should extract from the caller
+    during that step (workflow_engine.py's ConversationAgent turns this into part of
+    the compiled instructions + reads it back via the set_variable tool)."""
+
+    name: str
+    type: Literal["string", "number", "boolean"] = "string"
+    required: bool = False
+    description: str = ""
+
+
+class WorkflowTransitionSpec(BaseModel):
+    """One outgoing branch of a `conversation` node — becomes a dynamically-built
+    LiveKit function-tool in workflow_engine.py; calling it triggers an agent handoff
+    to whichever node the matching edge (same id as this transition's id, via
+    edge.sourceHandle) points to."""
+
+    id: str
+    key: str = ""
+    label: str = ""
+    condition: str = ""
+
+
+class WorkflowConditionSpec(BaseModel):
+    """One deterministic branch of a `condition` node — evaluated against collected
+    variables (workflow_engine.py's _eval_condition), no LLM turn involved."""
+
+    id: str
+    path: str = ""
+    op: Literal["eq", "ne", "gt", "lt", "contains", "exists"] = "eq"
+    value: Any = None
+    is_fallback: bool = False
+
+
+class WorkflowFunctionSpec(BaseModel):
+    """A `function` node's webhook call (workflow_engine.py's _run_function_node) —
+    no LLM turn, response stored at `output_key` for later {{var}} interpolation or
+    condition-node evaluation."""
+
+    url: str = ""
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
+    headers: dict[str, str] = Field(default_factory=dict)
+    query_params: dict[str, str] = Field(default_factory=dict)
+    body_format: Literal["json", "form"] = "json"
+    custom_body: str = ""
+
+
+class WorkflowNodeData(BaseModel):
+    """Every field any workflow node kind might use — kept as one permissive shape
+    (rather than a tagged union) so the frontend can freely add/remove fields per kind
+    without a backend schema change; workflow_engine.py only ever reads the fields
+    relevant to a given node's own `kind`, ignoring the rest.
+
+    `kind` mirrors JD-Dashboard's workflow-canvas node types (start / conversation /
+    condition / function / end_call / global) — see workflow_engine.py's module
+    docstring for the full node-kind → runtime-behavior mapping this must match.
+    """
+
+    kind: Literal["start", "conversation", "condition", "function", "end_call", "global"] = "conversation"
+    label: str = ""
+    # start
+    first_message: str = ""
+    # conversation
+    prompt: str = ""
+    variables: list[WorkflowVariableSpec] = Field(default_factory=list)
+    transitions: list[WorkflowTransitionSpec] = Field(default_factory=list)
+    # condition
+    conditions: list[WorkflowConditionSpec] = Field(default_factory=list)
+    # function
+    function: WorkflowFunctionSpec = Field(default_factory=WorkflowFunctionSpec)
+    output_key: str = ""
+    # end_call
+    closing_message: str = ""
+    # global
+    trigger_description: str = ""
+    action: Literal["end_call", "continue", "transfer"] = "continue"
+    transfer_number: str = ""
+
+
+class WorkflowNode(BaseModel):
+    id: str
+    position: dict[str, float] = Field(default_factory=lambda: {"x": 0, "y": 0})
+    data: WorkflowNodeData = Field(default_factory=WorkflowNodeData)
+
+
+class WorkflowEdge(BaseModel):
+    id: str = ""
+    source: str
+    target: str
+    # Which of the source node's named outcomes (transition/condition-branch id) this
+    # edge is attached to — matched against WorkflowTransitionSpec.id / WorkflowConditionSpec.id
+    # by workflow_engine.py's WorkflowGraph._target_of(). Empty for start/function nodes,
+    # which have exactly one, unnamed, outgoing edge.
+    sourceHandle: str = ""
+
+
+class WorkflowGraphDef(BaseModel):
+    """The visual workflow-bot graph — a real deterministic state machine at call time
+    (workflow_engine.py), distinct from the prompt-compiled `Flow` above (flow_compiler.py,
+    "Phase A": the model is instructed to follow it but can skip/reorder steps)."""
+
+    nodes: list[WorkflowNode] = Field(default_factory=list)
+    edges: list[WorkflowEdge] = Field(default_factory=list)
+
+
 class BotConfig(BaseModel):
     """Mirrors RuntimeConfig in frontend/src/types.ts — the fields a PM can edit.
 
@@ -130,6 +235,8 @@ class BotConfig(BaseModel):
 
     organization_name: str = ""
     agent_name: str = ""
+    # Agents-page filter/organization only — never read by the call pipeline.
+    tags: list[str] = Field(default_factory=list)
     # Persona gender. Hindi conjugates first-person verbs by speaker gender, so this drives
     # both the opening line's verb (बोल रही हूँ / बोल रहा हूँ) and the prompt's gender rule.
     persona_gender: Literal["female", "male"] = "female"
@@ -143,6 +250,29 @@ class BotConfig(BaseModel):
     close_markers: list[str] = Field(default_factory=list)
     max_call_duration: int = 600
     flow: Flow = Field(default_factory=Flow)
+
+    # "standard" = the existing fixed-assistant pipeline (system_prompt/flow above,
+    # compiled/instructed but not deterministically enforced). "workflow" = a real
+    # state-machine bot (workflow_engine.py) driven entirely by the `workflow` graph
+    # below — bot_dev_param.py's entrypoint dispatches to run_workflow_call() for these,
+    # bypassing the rest of the fixed-assistant flow. Additive: every existing bot
+    # defaults to "standard" and is completely unaffected.
+    bot_type: Literal["standard", "workflow"] = "standard"
+    workflow: WorkflowGraphDef = Field(default_factory=WorkflowGraphDef)
+    # Prepended to every conversation node's compiled instructions (workflow_engine.py's
+    # WorkflowGraph.compile_instructions) — shared context/persona across the whole graph,
+    # since each node is otherwise its own independent LiveKit Agent.
+    global_prompt: str = ""
+
+    # Optional per-bot override of the global post-call analysis prompt
+    # (backend/analysis_prompts.py's CALL_ANALYSIS_KEY template, edited by default on the
+    # Library page). Empty string (the default) means "use the global prompt" — this is
+    # NOT a supplementary note, it fully replaces the template for this bot's calls, so it
+    # must still satisfy every REQUIRED_PLACEHOLDERS[CALL_ANALYSIS_KEY] placeholder and
+    # emit the same JSON schema the callback worker parses. Validated with the exact same
+    # rules as the global editor at save time (backend/routers/bots.py's update_version) —
+    # never validate this yourself elsewhere, call analysis_prompts.validate_prompt_template.
+    analysis_prompt: str = ""
 
     # Real bot_pipeline.py runtime knobs (backend/evals.py:307-323).
     temperature: float = 0.4
@@ -165,12 +295,21 @@ class BotConfig(BaseModel):
     stt_provider: Literal["", "sarvam", "deepgram"] = ""
     stt_model: str = ""
     stt_language: str = ""
-    tts_provider: Literal["", "sarvam", "elevenlabs"] = ""
+    # "justdial" = our own in-house IndicF5 TTS (livekit_indic5_tts.py); only relevant to
+    # bot_type="workflow" today (workflow_engine.py's run_workflow_call), which treats
+    # anything other than "sarvam" as the IndicF5 path — added here so a workflow bot's
+    # saved config round-trips through BotConfig without this field being silently dropped.
+    tts_provider: Literal["", "sarvam", "elevenlabs", "justdial"] = ""
     tts_model: str = ""
     tts_voice: str = ""
     tts_language: str = ""
     llm_provider: Literal["", "gemini", "openai"] = ""
     llm_model: str = ""
+    # PM-facing "how easily can a caller interrupt the bot" knob — see
+    # interruption_presets.py for the concrete parameters each preset resolves to.
+    # "" (default) resolves to "balanced", matching every pre-existing bot's actual
+    # behavior (see resolve_interruption_preset).
+    interruption_sensitivity: Literal["", "patient", "balanced", "responsive"] = ""
 
     # Full per-provider parameter surface — see provider_params.py for the assembled kwargs
     # and the exact keys each accepts. These free-form dicts let a PM tune every relevant
@@ -447,6 +586,10 @@ class TestCallStartRequest(BaseModel):
     city: str = ""
     test_worker_agent_name: str = ""
     custom_lead_json: str = ""
+    # Tester-seeded overrides for the bot's own pre_call functions' query_params, keyed by
+    # param name (flat across all pre_call functions — matches how bot.py's _pre_call_params
+    # already merges lead_id/mobile/call_id into every pre_call function's request args).
+    pre_call_params: dict[str, str] = Field(default_factory=dict)
 
 
 class TestCallStopRequest(BaseModel):
@@ -469,6 +612,50 @@ class EvalScenario(BaseModel):
 class EvalRunRequest(BaseModel):
     version_id: str = ""  # empty = current draft
     scenarios: list[EvalScenario] = Field(default_factory=list)  # empty = built-in defaults
+
+
+class GeneratePromptRequest(BaseModel):
+    mode: Literal["generate", "refine"]
+    instruction: str
+    current_prompt: str = ""  # only used/required when mode == "refine"
+    # Which field this powers — system_prompt (default, back-compat), closing_line, or
+    # analysis_prompt. See prompt_assist.generate_prompt for the per-target framing.
+    target: Literal["system_prompt", "closing_line", "analysis_prompt"] = "system_prompt"
+
+
+class GenerateAgentRequest(BaseModel):
+    """Create Agent > Create with AI: a free-text description of the agent to build."""
+
+    description: str
+
+
+class ChatTurn(BaseModel):
+    role: Literal["user", "bot"]
+    text: str
+
+
+class LlmChatReplyRequest(BaseModel):
+    """Manual Chat: tester talks to the bot's LLM directly (no LiveKit/voice). Stateless —
+    the full turn history is resent by the client every call, so nothing is persisted
+    server-side."""
+
+    system_prompt: str
+    history: list[ChatTurn] = Field(default_factory=list)
+    dynamic_variables: dict[str, str] = Field(default_factory=dict)
+    function_mocks: dict[str, str] = Field(default_factory=dict)
+
+
+class LlmChatSimulateRequest(BaseModel):
+    """AI Simulated Chat: one call advances the LLM-vs-LLM simulation by exactly one
+    caller-then-bot turn, so the frontend can render each pair as it arrives instead of
+    waiting for the whole conversation to finish (see evals.run_scenario, which only
+    returns a full transcript at the end — this is the turn-by-turn sibling of that)."""
+
+    system_prompt: str
+    caller_persona: str
+    history: list[ChatTurn] = Field(default_factory=list)
+    dynamic_variables: dict[str, str] = Field(default_factory=dict)
+    function_mocks: dict[str, str] = Field(default_factory=dict)
 
 
 PhoneEnvironment = Literal["dev", "preprod", "prod"]

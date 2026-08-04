@@ -84,7 +84,8 @@ except ImportError:
 
 import aiohttp
 
-from livekit.plugins import google, sarvam
+from pipeline_providers import build_llm, build_stt, build_tts, resolve_provider_summary
+from workflow_engine import run_workflow_call
 
 # ---------------------------------------------------------------------------
 # ── Env-var config block — all parameters live here ──────────────────────────
@@ -94,7 +95,7 @@ load_dotenv(override=True)
 
 # Infrastructure
 _PORT               = int(os.getenv("BOT_PORT", "8085"))
-_AGENT_NAME         = os.getenv("AGENT_NAME", "voice-bot-justdial-live-1")
+_AGENT_NAME         = os.getenv("AGENT_NAME", os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial-live-2"))
 _NUM_IDLE_PROCESSES = int(os.getenv("NUM_IDLE_PROCESSES", "2"))
 
 # Language
@@ -148,6 +149,10 @@ _BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 from bot import (
     # Config / data helpers
     fetch_bot_config,
+    record_fallback_event,
+    FALLBACK_REASON_NO_IDS,
+    _save_transcript_to_dashboard_db,
+    start_worker_heartbeat,
     normalize_mobile,
     fetch_lead,
     _build_sample_from_search,
@@ -182,6 +187,7 @@ from custom_functions import (
     run_lifecycle_functions,
 )
 from custom_function_tools import build_during_call_tools
+from call_metrics import CallMetricsCollector
 
 # Override bot.py globals so all calls in this process use the parameterised values
 _bot_module.MONGO_URI        = _MONGO_URI
@@ -369,10 +375,28 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # fetch_bot_config(bot_id, test_version) loads a specific version's config — used by the
     # dashboard test flow, which passes both in room metadata. Live number-attached calls
     # instead resolve config via the number→bot mapping (resolve_agent_config, below).
-    _bc = await fetch_bot_config(_bot_id_meta, _test_version_meta) if (_bot_id_meta and _test_version_meta) else None
+    if _bot_id_meta and _test_version_meta:
+        _bc, _fallback_reason = await fetch_bot_config(_bot_id_meta, _test_version_meta)
+    else:
+        _bc, _fallback_reason = None, FALLBACK_REASON_NO_IDS
     _bot_config: dict = _bc or _HARDCODED_BOT_CONFIG
+    if _bc is None:
+        record_fallback_event(
+            room_name=room_name, bot_id=_bot_id_meta, test_bot_version_id=_test_version_meta,
+            reason=_fallback_reason, worker=_AGENT_NAME,
+        )
+        _log.warning(f"[CONFIG] Falling back to hardcoded assistant — reason={_fallback_reason!r}")
 
     _prefetched_lead = await _early_lead_task if _early_lead_task is not None else None
+
+    # ── Workflow bots (visual graph, backend/routers/workflow_bots.py) bypass the
+    # rest of this fixed-assistant entrypoint entirely — run_workflow_call builds
+    # its own AgentSession from bot_config["workflow"] and drives the whole call. ──
+    if (_bot_config or {}).get("bot_type") == "workflow":
+        await run_workflow_call(
+            ctx, _bot_config, _prefetched_lead, room_name=room_name, bot_id=_bot_id_meta,
+        )
+        return
 
     _api_urls = _bot_config.get("api_urls") or {}
     _mis_api_base = _api_urls.get("mis_api_base") or MIS_API_BASE
@@ -473,6 +497,13 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         "mobile": _call_vars["mobile"],
         "call_id": _call_vars["call_id"],
     }
+    # Test-call only: tester-seeded overrides for query_params this bot's own pre_call
+    # functions define beyond the fixed lead_id/mobile/call_id trio above (dashboard's
+    # dynamic "Test Call Parameters" modal). Real production calls never carry this
+    # metadata key, so this is a no-op for them.
+    _extra_pre_call_params = _room_meta_raw.get("pre_call_params")
+    if isinstance(_extra_pre_call_params, dict):
+        _pre_call_params = {**_pre_call_params, **_extra_pre_call_params}
     try:
         _pre_results = await run_lifecycle_functions(
             _functions, "pre_call", _pre_call_params,
@@ -514,7 +545,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     except Exception as _q_ex:
         _log.warning(f"[QUESTIONS] could not read qualification_schema: {_q_ex}")
 
-    # ── 5. Pipeline plugins: Sarvam STT → Gemini LLM → Sarvam TTS ──
+    # ── 5. Pipeline plugins: provider-selectable via pipeline_providers.py, so a bot's
+    # stt_provider/tts_provider/llm_provider (Deepgram, ElevenLabs, our own IndicF5 "justdial"
+    # TTS, OpenAI, ...) actually take effect here — previously this block hardcoded Sarvam
+    # STT / Gemini LLM / Sarvam TTS inline and never read those fields at all. A bot with no
+    # provider fields set still gets exactly the same hardcoded stack (see
+    # tests/test_pipeline_providers.py's backward-compatibility tests). ──
     _gemini_api_key = os.getenv("GEMINI_API_KEY", "")
     _log.info(f"[LLM] Using GEMINI_API_KEY ...{_gemini_api_key[-6:] if _gemini_api_key else 'NOT SET'}")
     _log.info(f"[CONFIG] language={_language!r} stt={_STT_LANGUAGE_CODE!r} tts={_TTS_LANGUAGE_CODE!r} "
@@ -522,29 +558,26 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
               f"llm_temp={_temperature} tts_temp={_TTS_TEMPERATURE} "
               f"mongo_db={_MONGO_DB!r} mongo_collection={_MONGO_COLLECTION!r}")
 
-    stt = sarvam.STT(
-        language=_STT_LANGUAGE_CODE,
-        model=_STT_MODEL,
-        mode="transcribe",
-        api_key=SARVAM_API_KEY or None,
-        flush_signal=True,
-    )
-    llm = google.LLM(
-        model=_LLM_MODEL,
-        api_key=_gemini_api_key or None,
-        temperature=_temperature,
-    )
-    tts = sarvam.TTS(
-        target_language_code=_TTS_LANGUAGE_CODE,
-        model=_TTS_MODEL,
-        speaker=_SPEAKER_BY_GENDER.get(_persona_gender, "simran"),
-        api_key=SARVAM_API_KEY or None,
-        speech_sample_rate=24000,
-        output_audio_codec="linear16",
-        temperature=_TTS_TEMPERATURE,
-        pace=1.0,
-        send_completion_event=True,
-    )
+    # This env's legacy hardcoded defaults (language/model/speaker) fill in only where the
+    # bot's own config doesn't already set them, so existing bots/env overrides keep working.
+    _provider_cfg = dict(_bot_config)
+    _provider_cfg["temperature"] = _temperature
+    _provider_cfg.setdefault("stt_language", _STT_LANGUAGE_CODE)
+    _provider_cfg.setdefault("stt_model", _STT_MODEL)
+    _provider_cfg.setdefault("tts_language", _TTS_LANGUAGE_CODE)
+    _provider_cfg.setdefault("tts_model", _TTS_MODEL)
+    _provider_cfg.setdefault("llm_model", _LLM_MODEL)
+    if not _provider_cfg.get("tts_voice"):
+        _provider_cfg["tts_voice"] = _SPEAKER_BY_GENDER.get(_persona_gender, "simran")
+    if (_provider_cfg.get("tts_provider") or "sarvam").lower() == "sarvam":
+        _provider_cfg.setdefault("tts_options", {})
+        _provider_cfg["tts_options"] = {"temperature": _TTS_TEMPERATURE, **_provider_cfg["tts_options"]}
+
+    _provider_summary = resolve_provider_summary(_provider_cfg)
+
+    stt = build_stt(_provider_cfg)
+    llm = build_llm(_provider_cfg)
+    tts = build_tts(_provider_cfg)
 
     await _preload_hold_message(tts)
 
@@ -649,6 +682,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 if _response_latencies else 0
             ),
             "response_latencies_ms": _response_latencies,
+            "turn_metrics": _metrics.as_list(),
+            "tool_calls": _metrics.tool_calls_as_list(),
+            "session_errors": _metrics.errors_as_list(),
             "tagged": False,
             "tagged_at": None,
             "created_at": datetime.now(timezone.utc),
@@ -667,8 +703,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             },
         }
         try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, lambda: _get_mongo_collection().insert_one(_mongo_doc))
+            await _save_transcript_to_dashboard_db(_mongo_doc, _bot_id_meta, "", bot_config=_bot_config, provider_config=_provider_summary)
             _log.info(
                 f"[MONGO] Transcript saved | lead_id={lead_id!r} | call_id={call_state.get('call_id')!r}"
             )
@@ -1438,6 +1473,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     # ── 9. Event handlers ──
 
+    _metrics = CallMetricsCollector()
+    session.on("metrics_collected", _metrics.on_metrics_collected)
+    session.on("function_tools_executed", _metrics.on_function_tools_executed)
+
     @session.on("error")
     def _on_session_error(event) -> None:
         err = event.error
@@ -1448,6 +1487,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         }.get(getattr(err, "type", ""), "[PIPELINE-ERROR]")
         status = "retry" if getattr(err, "recoverable", False) else "EXHAUSTED (all retries failed)"
         _log.error(f"{tag} {status}: {getattr(err, 'error', err)}")
+        _metrics.on_session_error(err)
 
     @session.on("conversation_item_added")
     def _on_item_added(ev) -> None:
@@ -2308,17 +2348,26 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             or ""
         )
 
-    # Greeting comes from the same config the prompt/functions used: the number→bot mapping
-    # for live calls, or the metadata-loaded config for dashboard test calls. Falls back to
-    # the built-in persona only when neither yields a greeting.
-    _greet_cfg = _mapped_config or _bot_config
+    # Reuse the config resolved early at step 4 (it drove the prompt + voice) so the
+    # greeting matches. Dashboard test calls (bot_id/test_bot_version_id in room metadata,
+    # _bc truthy) resolve a specific draft/published version with its own initial_message —
+    # that must win over the live number→bot mapping, which is empty for a WebRTC test room
+    # and was silently falling through to the hardcoded built-in persona's opening line even
+    # though the system prompt itself was already using the real bot's config. _mapped_config
+    # is None when no agent is mapped → built-in persona.
     _greeting_text = ""
-    if _greet_cfg:
-        _greeting_text = render_greeting(_greet_cfg, product=_product_for(record))
+    if _bc:
+        _greeting_text = render_greeting(_bot_config, product=_product_for(record))
         _log.info(
-            f"[AGENT] persona={_greet_cfg.get('agent_name')!r} "
-            f"org={_greet_cfg.get('organization_name')!r} gender={_persona_gender!r} "
-            f"source={'number-map' if _mapped_config else 'config'}"
+            f"[AGENT] dashboard test config persona={_bot_config.get('agent_name')!r} "
+            f"org={_bot_config.get('organization_name')!r} gender={_persona_gender!r}"
+        )
+
+    if not _greeting_text and _mapped_config:
+        _greeting_text = render_greeting(_mapped_config, product=_product_for(record))
+        _log.info(
+            f"[AGENT] mapped agent persona={_mapped_config.get('agent_name')!r} "
+            f"org={_mapped_config.get('organization_name')!r} gender={_persona_gender!r}"
         )
 
     if not _greeting_text:
@@ -2403,6 +2452,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 # Worker entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    start_worker_heartbeat(_AGENT_NAME)
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,

@@ -1,4 +1,5 @@
 import React, { useEffect, useId } from 'react';
+import { X } from 'lucide-react';
 
 export function Dialog({
   title,
@@ -49,6 +50,12 @@ export function Dialog({
         <div className="modal-header">
           {icon && <div className="modal-icon">{icon}</div>}
           <h2 id={titleId}>{title}</h2>
+          {/* Explicit close control — matters most when closeOnBackdrop is false (see
+              CreateAgentPicker), where an accidental outside click no longer dismisses the
+              dialog and this becomes the only click-based way out besides Escape. */}
+          <button type="button" className="modal-close" aria-label="Close dialog" onClick={onClose}>
+            <X size={16} />
+          </button>
         </div>
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-footer">{footer}</div>}

@@ -11,12 +11,16 @@ export function NumberMappingView({
   loading,
   onMap,
   mapState,
+  onGoToPhoneNumbers,
 }: {
   mappings: NumberMapping[];
   bots: BotType[];
   loading?: boolean;
   onMap: (botId: string, phoneNumber: string | null) => void;
   mapState?: Record<string, 'idle' | 'running' | 'failed'>;
+  /** Jumps to the Phone Numbers view — that's where a number's SIP trunk/provisioning
+   * details live, and where it must first be added before it can be mapped here. */
+  onGoToPhoneNumbers?: () => void;
 }) {
   // A number belongs to at most one agent, so a given agent's options are the free
   // numbers plus the one it already holds.
@@ -32,7 +36,21 @@ export function NumberMappingView({
         <div className="panel-header">
           <div>
             <h2>Number mapping</h2>
-            <p>Give each agent a number to answer on. One number belongs to one agent.</p>
+            <p>Give each agent a number to answer on. One number belongs to one agent — this is what actually decides which bot picks up an inbound call.</p>
+            <p className="muted" style={{ fontSize: '0.8rem', marginTop: '0.2rem' }}>
+              Need to add a new number or edit its SIP trunk details first? Do that on{' '}
+              {onGoToPhoneNumbers ? (
+                <button
+                  type="button"
+                  onClick={onGoToPhoneNumbers}
+                  style={{ border: 'none', background: 'none', padding: 0, minHeight: 0, font: 'inherit', color: 'var(--accent)', textDecoration: 'underline', cursor: 'pointer' }}
+                >
+                  Phone Numbers
+                </button>
+              ) : (
+                <strong>Phone Numbers</strong>
+              )}.
+            </p>
           </div>
         </div>
 
