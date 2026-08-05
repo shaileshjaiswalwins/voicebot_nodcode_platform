@@ -71,6 +71,37 @@ describe('CustomFunctionsEditor', () => {
     fireEvent.change(triggerSelect, { target: { value: 'pre_call' } });
     expect(screen.getByDisplayValue('Before call')).toBeInTheDocument();
   });
+
+  it('does not leak query params between two functions sharing a blank id', () => {
+    render(<Harness initial={[
+      { ...newCustomFunction(), id: '', name: 'fn_one' },
+      { ...newCustomFunction(), id: '', name: 'fn_two' },
+    ]} />);
+
+    fireEvent.click(screen.getAllByLabelText('Expand')[0]);
+    // Headers and Query Parameters each have their own "New key value pair" button —
+    // Query Parameters is the second one in DOM order.
+    fireEvent.click(screen.getAllByText(/New key value pair/i)[1]);
+    // Query Parameters is the only KeyValueEditor using the default "key"/"value" placeholders
+    // (Headers uses "Header-Name" for its key), and no Headers row exists yet.
+    fireEvent.change(screen.getByPlaceholderText('key'), { target: { value: 'a' } });
+    fireEvent.change(screen.getByPlaceholderText('value'), { target: { value: '1' } });
+    fireEvent.click(screen.getByLabelText('Collapse'));
+
+    fireEvent.click(screen.getAllByLabelText('Expand')[1]);
+    expect(screen.queryByDisplayValue('a')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('1')).not.toBeInTheDocument();
+  });
+
+  it('keeps a card open across re-renders when the function had a blank id', () => {
+    render(<Harness initial={[{ ...newCustomFunction(), id: '', name: 'fn_one' }]} />);
+    fireEvent.click(screen.getByLabelText('Expand'));
+    expect(screen.getByLabelText('URL')).toBeInTheDocument();
+    // Editing a field re-renders the parent; the card must stay open, not collapse
+    // because ensureFunctionIds reassigned a new random id out from under openId.
+    fireEvent.change(screen.getByPlaceholderText(/get_lead_details/i), { target: { value: 'renamed' } });
+    expect(screen.getByLabelText('URL')).toBeInTheDocument();
+  });
 });
 
 describe('KeyValueEditor', () => {

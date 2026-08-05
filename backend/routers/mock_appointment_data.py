@@ -13,7 +13,7 @@ integrations. Swap both for real MIS/CRM + calendar APIs before going live.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 router = APIRouter()
 
@@ -28,11 +28,26 @@ _SAMPLE_VENDOR = {
 
 
 @router.get("/api/mock/vendor-lookup")
-async def mock_vendor_lookup(lead_id: str = "", mobile: str = "") -> dict:
-    """Returns a fixed sample vendor record regardless of lead_id/mobile —
-    test/demo data only. `lead_id`/`mobile` are accepted (unused) so this has
-    the same call shape a real lookup endpoint would."""
-    return _SAMPLE_VENDOR
+async def mock_vendor_lookup(
+    lead_id: str = "",
+    mobile: str = "",
+    owner_name: str = "",
+    business_name: str = "",
+    business_category: str = "",
+) -> dict:
+    """Returns a fixed sample vendor record — test/demo data only. `lead_id`/`mobile`
+    are accepted (unused) so this has the same call shape a real lookup endpoint would.
+    `owner_name`/`business_name`/`business_category` let a tester override the demo
+    persona from the dashboard's Test Inputs "Pre-call Parameters" panel, without a
+    code change, by passing them as this pre_call function's query_params."""
+    vendor = dict(_SAMPLE_VENDOR)
+    if owner_name:
+        vendor["owner_name"] = owner_name
+    if business_name:
+        vendor["business_name"] = business_name
+    if business_category:
+        vendor["business_category"] = business_category
+    return vendor
 
 
 @router.post("/api/mock/calendar/book")
@@ -71,3 +86,12 @@ async def mock_category_change(payload: dict) -> dict:
         "new_category": new_category,
         "change_ref": f"CAT-{abs(hash((lead_id, new_category))) % 100000:05d}",
     }
+
+
+@router.get("/api/mock/echo")
+async def mock_echo(request: Request) -> dict:
+    """Query-parameters showcase demo target (backend/seed_demo_showcase_bots.py's
+    "Query Parameters Showcase" bot) — echoes back whatever query params it received so a
+    PM can see, live, that each function's fixed query_params (and any LLM-filled params)
+    actually reached the URL. THROWAWAY TEST DATA, not a real integration."""
+    return {"received": dict(request.query_params)}

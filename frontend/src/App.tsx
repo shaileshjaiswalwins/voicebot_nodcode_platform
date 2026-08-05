@@ -16,6 +16,7 @@ import type { AgentWorkspaceMode, BuilderMode, CmdKExtra, Diagnostic, RuntimeCon
 import { CMD_VIEWS, SHORTCUT_MAP, defaultConfig } from './constants/ui';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { parseConfig } from './utils/config';
+import { ensureFunctionIds } from './utils/customFunctions';
 import { shortId } from './utils/formatting';
 import { buildDiagnostic, friendlyApiError, friendlyTestError } from './utils/errors';
 import { buildPath, parsePath } from './utils/routes';
@@ -40,6 +41,7 @@ import { CreateWithAI } from './components/CreateWithAI';
 import { TemplateGallery } from './components/TemplateGallery';
 import type { AgentTemplate } from './constants/agentTemplates';
 import { BuilderView } from './views/BuilderView';
+import { autoLayout as autoLayoutWorkflow } from './views/WorkflowBuilderView';
 import { CampaignsView } from './views/CampaignsView';
 import { NumbersView } from './views/NumbersView';
 import { LibraryView } from './views/LibraryView';
@@ -275,9 +277,11 @@ function AppShell() {
   // Create Agent is a small flow, not one modal: picker (AI / template / scratch) first,
   // then whichever path the user picked. Replaces the old behavior of jumping straight into
   // a blank form, which gave a non-technical user nothing to work from.
-  const [createAgentStep, setCreateAgentStep] = useState<'closed' | 'picker' | 'ai' | 'template' | 'scratch'>('closed');
+  const [createAgentStep, setCreateAgentStep] = useState<'closed' | 'picker' | 'ai' | 'workflow_ai' | 'template' | 'scratch'>('closed');
   const [aiCreateBusy, setAiCreateBusy] = useState(false);
   const [aiCreateError, setAiCreateError] = useState('');
+  const [workflowAiCreateBusy, setWorkflowAiCreateBusy] = useState(false);
+  const [workflowAiCreateError, setWorkflowAiCreateError] = useState('');
   const [newAgentBusy, setNewAgentBusy] = useState(false);
   const [newAgentForm, setNewAgentForm] = useState<{
     name: string; description: string; agent_name: string; organization_name: string;
@@ -593,6 +597,13 @@ function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transcriptSearchText, transcriptSource, authed]);
 
+  // Normalize function ids before a config lands in editor state — legacy configs can carry
+  // blank/duplicate ids that make the Functions tab merge edits across unrelated functions.
+  function normalizedConfigText(config: RuntimeConfig): string {
+    const withIds = config.functions ? { ...config, functions: ensureFunctionIds(config.functions) } : config;
+    return JSON.stringify(withIds, null, 2);
+  }
+
   // Load bot versions when a bot is selected / edited
   const loadBotVersions = useCallback(async (botId: string) => {
     try {
@@ -603,7 +614,7 @@ function AppShell() {
       const initial = draft || active || bundle.versions[0];
       if (initial) {
         setEditingVersionId(initial._id);
-        setConfigText(JSON.stringify(initial.config, null, 2));
+        setConfigText(normalizedConfigText(initial.config));
       } else {
         setEditingVersionId('');
         setConfigText(JSON.stringify(defaultConfig, null, 2));
@@ -760,6 +771,35 @@ function AppShell() {
     }
   }
 
+  async function handleCreateWorkflowWithAI(description: string) {
+    setWorkflowAiCreateBusy(true);
+    setWorkflowAiCreateError('');
+    try {
+      const generated = await api.generateWorkflow(description);
+      const config: RuntimeConfig = {
+        ...defaultConfig,
+        agent_name: generated.agent_name || defaultConfig.agent_name,
+        bot_type: 'workflow',
+        // Re-layout with the builder's own algorithm (same one "Auto Arrange" uses) rather
+        // than trusting whatever positions the backend guessed — keeps exactly one source of
+        // truth for node placement instead of two layout implementations drifting apart.
+        workflow: autoLayoutWorkflow(generated.workflow),
+        global_prompt: generated.global_prompt || '',
+        // Placeholder URLs (backend PLACEHOLDER_URL) travel through unchanged — the builder
+        // (WorkflowGraphNode / CustomFunctionsEditor) flags them with a red "needs attention"
+        // badge so the user notices and fills them in before the bot goes live.
+        functions: generated.functions.length ? generated.functions : defaultConfig.functions,
+        function_calling: generated.functions.length > 0,
+      };
+      const name = generated.agent_name ? `${generated.agent_name} — AI-generated workflow` : 'New AI-generated workflow';
+      await createAgentAndEnter(name, description.slice(0, 200), config);
+    } catch (err) {
+      setWorkflowAiCreateError(err instanceof Error ? err.message : 'Workflow generation failed.');
+    } finally {
+      setWorkflowAiCreateBusy(false);
+    }
+  }
+
   async function handleUseTemplate(template: AgentTemplate) {
     setNewAgentBusy(true);
     try {
@@ -904,7 +944,7 @@ function AppShell() {
 
   function handleSelectVersion(v: BotVersion) {
     setEditingVersionId(v._id);
-    setConfigText(JSON.stringify(v.config, null, 2));
+    setConfigText(normalizedConfigText(v.config));
   }
 
   function handleShowDiff(versionIdA: string, versionIdB: string) {
@@ -1382,22 +1422,28 @@ function AppShell() {
         />
       )}
 
-      {testInputsOpen && (
-        <TestInputsModal
-          open={testInputsOpen}
-          onClose={() => setTestInputsOpen(false)}
-          functions={parsedConfig.ok ? (parsedConfig.value.functions || []) : []}
-          dynamicVariables={dynamicVariables}
-          onChangeDynamicVariables={(v) => saveTestInputs(v, functionMocks)}
-          functionMocks={functionMocks}
-          onChangeFunctionMocks={(v) => saveTestInputs(dynamicVariables, v)}
-        />
-      )}
     </>
+  );
+
+  // Rendered at app root (not inside testPanelSlot) so closing the Test Agent sidebar —
+  // which unmounts testPanelSlot — doesn't discard an open Test Inputs modal's edits.
+  const testInputsModal = testInputsOpen && (
+    <TestInputsModal
+      open={testInputsOpen}
+      onClose={() => setTestInputsOpen(false)}
+      functions={parsedConfig.ok ? (parsedConfig.value.functions || []) : []}
+      dynamicVariables={dynamicVariables}
+      onChangeDynamicVariables={(v) => saveTestInputs(v, functionMocks)}
+      functionMocks={functionMocks}
+      onChangeFunctionMocks={(v) => saveTestInputs(dynamicVariables, v)}
+      preCallParams={testForm.pre_call_params}
+      onChangePreCallParams={(v) => setTestForm((f) => ({ ...f, pre_call_params: v }))}
+    />
   );
 
   return (
     <div className="app-shell">
+      {testInputsModal}
       <Confetti fire={showFirstCallConfetti} onDone={() => setShowFirstCallConfetti(false)} />
       <OnboardingTour run={!loadingBots && bots.length === 0 && view === 'bots'} />
       <div className="mobile-topbar">
@@ -1650,6 +1696,7 @@ function AppShell() {
         <CreateAgentPicker
           onClose={() => setCreateAgentStep('closed')}
           onSelectAI={() => setCreateAgentStep('ai')}
+          onSelectWorkflowAI={() => setCreateAgentStep('workflow_ai')}
           onSelectTemplate={() => setCreateAgentStep('template')}
           // No reset here: re-entering "from scratch" after an accidental Escape must restore
           // the draft, not blank it. The form is cleared on successful create and on Cancel.
@@ -1663,6 +1710,21 @@ function AppShell() {
           onContinue={handleCreateWithAI}
           busy={aiCreateBusy}
           error={aiCreateError}
+        />
+      )}
+
+      {createAgentStep === 'workflow_ai' && (
+        <CreateWithAI
+          title="Create a workflow with AI"
+          label="Describe the workflow bot you want to build"
+          placeholder='e.g. "Call the customer, ask for their order ID, look up the order status via our API, and if it is delayed offer to transfer them to a human agent — otherwise read out the expected delivery date and end the call."'
+          hint="We'll build the full node graph — conversation steps, condition branches, and API-call nodes — for you to review in the builder. Any endpoint we can't know is left as a placeholder, flagged in red."
+          continueLabel="Generate workflow"
+          generatingLabel="Building workflow…"
+          onBack={() => setCreateAgentStep('picker')}
+          onContinue={handleCreateWorkflowWithAI}
+          busy={workflowAiCreateBusy}
+          error={workflowAiCreateError}
         />
       )}
 

@@ -81,34 +81,86 @@ function validateWorkflow(wf: WorkflowGraphDef): string[] {
 const LAYER_Y_GAP = 260;
 const SIBLING_X_GAP = 340;
 
-/** BFS layering from the Start node (falls back to the first node if none) — nodes reachable
- * in N hops sit in row N (top-to-bottom, matching this call-script's natural read order and
- * the builder panel's narrow-and-tall aspect ratio), with same-row siblings spread out left to
- * right. Hand-picked y-coordinates (e.g. from a seed script) tend to under-space multi-line
- * prompt cards, which is what caused the overlapping mess this replaces; this ignores stored
- * positions entirely and recomputes a clean layered layout every time it's invoked. */
-function autoLayout(wf: WorkflowGraphDef): WorkflowGraphDef {
+/** Longest-path layering from the Start node (falls back to the first node if none) — a node's
+ * row is 1 + the max row of ALL its parents (computed in topological order via Kahn's
+ * algorithm), not just whichever parent BFS happens to visit first. Plain BFS layering gives a
+ * node the row of its *shortest* path in, so a node also reachable via a longer path gets an
+ * edge that has to stretch across multiple rows to reach it — visually, edges arcing far off
+ * the laid-out area. Longest-path layering keeps every edge exactly one row, top-to-bottom
+ * (matching this call-script's natural read order and the builder panel's narrow-and-tall
+ * aspect ratio), with same-row siblings spread out left to right. Hand-picked y-coordinates
+ * (e.g. from a seed script) tend to under-space multi-line prompt cards, which is what caused
+ * the overlapping mess this replaces; this ignores stored positions entirely and recomputes a
+ * clean layered layout every time it's invoked. */
+export function autoLayout(wf: WorkflowGraphDef): WorkflowGraphDef {
   if (wf.nodes.length === 0) return wf;
   const startId = wf.nodes.find((n) => n.data.kind === 'start')?.id || wf.nodes[0].id;
+
+  const outgoing = new Map<string, string[]>(wf.nodes.map((n) => [n.id, []]));
+  const incoming = new Map<string, string[]>(wf.nodes.map((n) => [n.id, []]));
+  for (const e of wf.edges) {
+    if (outgoing.has(e.source) && incoming.has(e.target)) {
+      outgoing.get(e.source)!.push(e.target);
+      incoming.get(e.target)!.push(e.source);
+    }
+  }
+
+  const reachable = new Set<string>([startId]);
+  let frontier = [startId];
+  while (frontier.length > 0) {
+    const next: string[] = [];
+    for (const id of frontier) {
+      for (const child of outgoing.get(id) || []) {
+        if (!reachable.has(child)) {
+          reachable.add(child);
+          next.push(child);
+        }
+      }
+    }
+    frontier = next;
+  }
+
   const layer = new Map<string, number>([[startId, 0]]);
+  const indegree = new Map<string, number>();
+  for (const id of reachable) {
+    indegree.set(id, (incoming.get(id) || []).filter((p) => reachable.has(p)).length);
+  }
   const queue = [startId];
   while (queue.length > 0) {
     const id = queue.shift()!;
-    const l = layer.get(id)!;
-    for (const e of wf.edges) {
-      if (e.source === id && !layer.has(e.target)) {
-        layer.set(e.target, l + 1);
-        queue.push(e.target);
-      }
+    for (const child of outgoing.get(id) || []) {
+      if (!reachable.has(child)) continue;
+      layer.set(child, Math.max(layer.get(child) ?? 0, (layer.get(id) ?? 0) + 1));
+      indegree.set(child, (indegree.get(child) || 0) - 1);
+      if (indegree.get(child) === 0) queue.push(child);
     }
   }
+
+  // Anything unreached from Start (e.g. a Global node, which by design has no incoming edge) —
+  // place it one row above whichever of its own targets is already placed, so its outgoing
+  // edge stays local instead of spanning the whole canvas; only stack far below as a last
+  // resort if it has no placed target either.
   let maxLayer = Math.max(0, ...Array.from(layer.values()));
-  // Anything unreached from Start (e.g. a Global node, which by design has no incoming edge)
-  // gets its own trailing row rather than colliding with row 0.
-  for (const n of wf.nodes) {
-    if (!layer.has(n.id)) layer.set(n.id, maxLayer + 1);
+  let remaining = wf.nodes.map((n) => n.id).filter((id) => !layer.has(id));
+  let progress = true;
+  while (remaining.length > 0 && progress) {
+    progress = false;
+    const stillRemaining: string[] = [];
+    for (const id of remaining) {
+      const targetLayers = (outgoing.get(id) || []).map((t) => layer.get(t)).filter((l): l is number => l !== undefined);
+      if (targetLayers.length > 0) {
+        layer.set(id, Math.max(0, Math.min(...targetLayers) - 1));
+        progress = true;
+      } else {
+        stillRemaining.push(id);
+      }
+    }
+    remaining = stillRemaining;
   }
-  maxLayer = Math.max(0, ...Array.from(layer.values()));
+  for (const id of remaining) {
+    maxLayer += 1;
+    layer.set(id, maxLayer);
+  }
 
   const countByLayer = new Map<number, number>();
   const nextNodes = wf.nodes.map((n) => {

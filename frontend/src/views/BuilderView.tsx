@@ -369,6 +369,7 @@ export function BuilderView({
                   value={draftName}
                   placeholder={selectedBot?.name || 'Agent name'}
                   onChange={(e) => setDraftName(e.target.value)}
+                  onBlur={() => nameChanged && onRename?.(draftName, draftDescription)}
                 />
               </label>
               <label>
@@ -377,20 +378,9 @@ export function BuilderView({
                   value={draftDescription}
                   placeholder="Short description (optional)"
                   onChange={(e) => setDraftDescription(e.target.value)}
+                  onBlur={() => nameChanged && onRename?.(draftName, draftDescription)}
                 />
               </label>
-              {onRename && (
-                <div className="rename-action">
-                  <button
-                    className={renameState === 'failed' ? 'fallback-button' : nameChanged ? 'primary' : ''}
-                    disabled={!nameChanged || renameState === 'running'}
-                    onClick={() => onRename(draftName, draftDescription)}
-                  >
-                    <Pencil size={14} />
-                    {renameState === 'running' ? 'Saving…' : renameState === 'failed' ? 'Retry rename' : 'Save name'}
-                  </button>
-                </div>
-              )}
             </div>
 
             {/* Tabbed settings: Agent · Speed · STT · TTS · LLM · Functions · Advanced */}

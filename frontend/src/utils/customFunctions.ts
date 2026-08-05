@@ -28,6 +28,32 @@ export function newStoreVariable(): StoreVariable {
   return { variable: '', json_path: '' };
 }
 
+function newFunctionId(): string {
+  return `fn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Guarantee every function has a unique, non-empty id, and that no two functions share
+ * object references for their nested collections. Legacy configs (and the backend model's
+ * `id: str = ""` default) can produce functions with a blank or duplicate id — since the
+ * editor matches functions by id, that silently merges edits across unrelated functions. */
+export function ensureFunctionIds(functions: CustomFunction[]): CustomFunction[] {
+  const seen = new Set<string>();
+  return functions.map((fn) => {
+    const needsId = !fn.id || seen.has(fn.id);
+    const id = needsId ? newFunctionId() : fn.id;
+    seen.add(id);
+    return {
+      ...fn,
+      id,
+      headers: { ...fn.headers },
+      query_params: { ...fn.query_params },
+      parameters: fn.parameters.map((p) => ({ ...p })),
+      store_variables: fn.store_variables.map((sv) => ({ ...sv })),
+      raw_body_schema: { ...fn.raw_body_schema },
+    };
+  });
+}
+
 /** Names reserved by the built-in tools — a during_call custom function may not reuse them. */
 export const RESERVED_TOOL_NAMES = ['FetchLead', 'FetchCategorySchema'];
 

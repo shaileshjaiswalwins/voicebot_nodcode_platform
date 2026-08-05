@@ -45,6 +45,7 @@ from .models import (
 _BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 MOCK_VENDOR_LOOKUP_URL = f"{_BACKEND_URL}/api/mock/vendor-lookup"
 MOCK_CATEGORY_CHANGE_URL = f"{_BACKEND_URL}/api/mock/crm/category-change"
+MOCK_ECHO_URL = f"{_BACKEND_URL}/api/mock/echo"
 
 
 # ---------------------------------------------------------------------------
@@ -237,12 +238,113 @@ def build_conversational_polish_bot() -> BotConfig:
     )
 
 
+# ---------------------------------------------------------------------------
+# 6. Query parameters — each during_call function carries its own fixed URL params
+# ---------------------------------------------------------------------------
+
+def build_query_params_bot() -> BotConfig:
+    check_stock_fn = CustomFunction(
+        id="fn-check-stock",
+        name="check_stock",
+        description="Checks stock for a SKU at the vendor's store — call this when the caller asks if an item is in stock.",
+        url=MOCK_ECHO_URL,
+        method="GET",
+        body_mode="json",
+        trigger="during_call",
+        query_params={"store_id": "STORE-42", "sku": ""},
+        parameters=[
+            FunctionParam(name="sku", type="string", description="The product SKU the caller is asking about.", required=True),
+        ],
+    )
+    shipping_quote_fn = CustomFunction(
+        id="fn-shipping-quote",
+        name="get_shipping_quote",
+        description="Gets a shipping quote to the caller's pincode — call this when the caller asks about delivery cost or time.",
+        url=MOCK_ECHO_URL,
+        method="GET",
+        body_mode="json",
+        trigger="during_call",
+        query_params={"region": "north", "currency": "INR"},
+        parameters=[
+            FunctionParam(name="pincode", type="string", description="The delivery pincode.", required=True),
+        ],
+    )
+    return BotConfig(
+        organization_name="JustDial",
+        agent_name="Priya",
+        persona_gender="female",
+        language="en",
+        system_prompt=(
+            "You are Priya, a JustDial store assistant. check_stock always hits the store's "
+            "STORE-42 stock endpoint; get_shipping_quote always hits the north-region INR "
+            "pricing endpoint — those query params are fixed per tool, set once by the PM, "
+            "not something you decide. Use check_stock when asked about stock, and "
+            "get_shipping_quote when asked about delivery. Keep turns short."
+        ),
+        initial_message="Hi, this is Priya from the store — stock check or a shipping quote today?",
+        call_end_text="Thanks for calling, have a great day!",
+        functions=[check_stock_fn, shipping_quote_fn],
+        function_calling=True,
+        temperature=0.3,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 7. Dynamic variables — pre_call lookup fills the prompt/greeting, and a
+#    during_call function's URL template pulls a variable into its query params too
+# ---------------------------------------------------------------------------
+
+def build_dynamic_variables_bot() -> BotConfig:
+    lookup_fn = CustomFunction(
+        id="fn-lookup-vendor-dv",
+        name="lookup_vendor",
+        description="Fetches the vendor's current JustDial listing details before the call connects.",
+        url=MOCK_VENDOR_LOOKUP_URL,
+        method="GET",
+        body_mode="json",
+        trigger="pre_call",
+        store_variables=[
+            StoreVariable(variable="owner_name", json_path="owner_name"),
+            StoreVariable(variable="business_name", json_path="business_name"),
+            StoreVariable(variable="business_category", json_path="business_category"),
+        ],
+    )
+    lead_lookup_fn = CustomFunction(
+        id="fn-lead-lookup-dv",
+        name="lookup_lead_notes",
+        description="Looks up prior notes for this lead — call this if the caller asks what was discussed last time.",
+        url=MOCK_ECHO_URL,
+        method="GET",
+        body_mode="json",
+        trigger="during_call",
+        query_params={"lead_id": "{{lead_id}}"},
+    )
+    return BotConfig(
+        organization_name="JustDial",
+        agent_name="Arjun",
+        persona_gender="male",
+        language="en",
+        system_prompt=(
+            "You are Arjun, calling {{owner_name}} of {{business_name}} ({{business_category}}) "
+            "about their JustDial listing — those three values came from a pre-call lookup, not "
+            "from you. Greet them by name and reference their business category naturally."
+        ),
+        initial_message="Hi {{owner_name}}, this is Arjun from JustDial calling about {{business_name}}.",
+        call_end_text="Thanks for your time, have a great day!",
+        functions=[lookup_fn, lead_lookup_fn],
+        function_calling=True,
+        temperature=0.4,
+    )
+
+
 DEMO_BOTS: list[tuple[str, str, "callable[[], BotConfig]"]] = [
     ("Deepgram STT Showcase (Alex)", "STT provider toggle demo — Deepgram (English) vs. the platform's Sarvam default.", build_deepgram_stt_bot),
     ("Justdial In-House TTS (Meera)", "In-house TTS demo — our own fine-tuned IndicF5 voice (tts_provider=justdial), not a third-party API.", build_indic5_tts_bot),
     ("Zero-Code Action Webhooks (Rohan)", "Zero-code webhook demo — pre-call vendor lookup + a during-call CRM category-change tool.", build_zero_code_webhook_bot),
     ("Human Escalation Demo (Kabir)", "Multi-agent/workflow demo — a global node transfers to a human whenever the caller asks, from anywhere in the call.", build_human_escalation_bot),
     ("Fine-Tuned Conversational Polish (Zara)", "Bot fine-tuning demo — temperature, backchanneling, noise filter, and interruption sensitivity tuned for a warm, expressive persona.", build_conversational_polish_bot),
+    ("Query Parameters Showcase (Priya)", "Query params demo — two during_call tools, each with its own fixed URL query_params set by the PM, not the LLM.", build_query_params_bot),
+    ("Dynamic Variables Showcase (Arjun)", "Dynamic variables demo — a pre-call lookup fills {{owner_name}}/{{business_name}}/{{business_category}} into the prompt and greeting, and a during_call tool's URL template pulls {{lead_id}} into its query params.", build_dynamic_variables_bot),
 ]
 
 

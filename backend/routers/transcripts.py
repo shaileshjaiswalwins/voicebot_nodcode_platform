@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi.responses import StreamingResponse
@@ -42,9 +43,10 @@ def _build_filter(bot_id: str = "", campaign_id: str = "", status: str = "", tex
         # rather than silently excluding them from either tab.
         and_clauses.append({"$or": [{"source": "batch"}, {"source": {"$exists": False}}]})
     if text:
+        escaped = re.escape(text)
         and_clauses.append({"$or": [
-            {"lead_id": {"$regex": text, "$options": "i"}},
-            {"call_id": {"$regex": text, "$options": "i"}},
+            {"lead_id": {"$regex": escaped, "$options": "i"}},
+            {"call_id": {"$regex": escaped, "$options": "i"}},
         ]})
     if and_clauses:
         query["$and"] = and_clauses
@@ -62,7 +64,13 @@ def list_transcripts(
     _: dict = Depends(require_user),
 ) -> list[dict]:
     query = _build_filter(bot_id, campaign_id, status, text, source)
-    docs = transcripts.find(query).sort("created_at", -1).limit(limit)
+    # config_snapshot (a full copy of the bot config, ~20-40KB) and call_events are
+    # never read by the frontend from this response — config_snapshot has no reader
+    # anywhere in the codebase, and call_events is fetched separately via
+    # GET /api/transcripts/{id}/events on select. Excluding both is what actually
+    # cuts payload size for the list (config_snapshot alone was the majority of
+    # bytes transferred per document).
+    docs = transcripts.find(query, {"call_events": 0, "config_snapshot": 0}).sort("created_at", -1).limit(limit)
     return [_serialize(d) for d in docs]
 
 

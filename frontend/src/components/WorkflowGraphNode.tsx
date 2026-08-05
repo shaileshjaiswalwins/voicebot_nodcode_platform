@@ -1,7 +1,8 @@
 import React from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { MessageSquare, Phone, PhoneOff, Play, Radio, Split, Zap } from 'lucide-react';
+import { AlertCircle, MessageSquare, Phone, PhoneOff, Play, Radio, Split, Zap } from 'lucide-react';
 import type { WorkflowNode, WorkflowNodeKind } from '../api';
+import { nodeNeedsAttention } from '../utils/workflowPlaceholders';
 
 export const WF_NODE_TYPE_META: Record<WorkflowNodeKind, { label: string; icon: React.ReactNode; color: string; bg: string }> = {
   start: { label: 'Start', icon: <Play size={13} />, color: '#059669', bg: '#ecfdf5' },
@@ -92,18 +93,31 @@ export function WorkflowGraphNode({ data, selected }: { data: WorkflowGraphNodeD
   const outcomes = wfNodeOutcomes(node);
   const isTerminal = kind === 'end_call';
   const isGlobal = kind === 'global';
+  const needsAttention = nodeNeedsAttention(node);
 
   return (
     <div
-      className={`flow-graph-node${isTerminal ? ' flow-graph-node-terminal' : ''}${isGlobal ? ' flow-graph-node-global' : ''}`}
-      style={{ borderColor: meta.color, boxShadow: selected ? `0 0 0 2px ${meta.color}55` : undefined }}
+      className={`flow-graph-node${isTerminal ? ' flow-graph-node-terminal' : ''}${isGlobal ? ' flow-graph-node-global' : ''}${needsAttention ? ' flow-graph-node-needs-attention' : ''}`}
+      style={{
+        borderColor: needsAttention ? '#dc2626' : meta.color,
+        boxShadow: selected ? `0 0 0 2px ${meta.color}55` : undefined,
+      }}
     >
+      {needsAttention && (
+        <div
+          className="flow-graph-node-attention-badge"
+          title="Placeholder endpoint — set the real URL before this node can run"
+        >
+          <AlertCircle size={13} />
+        </div>
+      )}
       {wfHasTargetHandle(kind) && <Handle type="target" position={Position.Top} style={{ background: meta.color }} />}
       <div className="flow-graph-node-header" style={{ background: meta.bg, color: meta.color }}>
         <span className="flow-graph-node-icon">{meta.icon}</span>
         <span className="flow-graph-node-type">{node.data.label || meta.label}</span>
         {isTerminal && <span className="flow-graph-node-terminal-tag">Terminal</span>}
         {isGlobal && <span className="flow-graph-node-terminal-tag" style={{ color: meta.color, background: meta.bg }}>Global</span>}
+        {needsAttention && <span className="flow-graph-node-terminal-tag" style={{ color: '#dc2626', background: '#fef2f2' }}>Needs URL</span>}
       </div>
       <div className="flow-graph-node-body">&ldquo;{body}&rdquo;</div>
       {outcomes.length > 0 && (

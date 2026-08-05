@@ -620,13 +620,26 @@ class GeneratePromptRequest(BaseModel):
     current_prompt: str = ""  # only used/required when mode == "refine"
     # Which field this powers — system_prompt (default, back-compat), closing_line, or
     # analysis_prompt. See prompt_assist.generate_prompt for the per-target framing.
-    target: Literal["system_prompt", "closing_line", "analysis_prompt"] = "system_prompt"
+    target: Literal["system_prompt", "closing_line", "analysis_prompt", "global_prompt"] = "system_prompt"
 
 
 class GenerateAgentRequest(BaseModel):
     """Create Agent > Create with AI: a free-text description of the agent to build."""
 
     description: str
+
+
+class GenerateWorkflowRequest(BaseModel):
+    """Create Agent > Create workflow with AI (mode='generate', the default — no bot exists
+    yet) AND the Workflow tab's "Refine with AI" button (mode='refine' — edits an existing
+    bot's graph in place). `description` doubles as the free-text instruction in refine mode."""
+
+    description: str
+    mode: Literal["generate", "refine"] = "generate"
+    # refine mode only — the graph/functions/global_prompt to edit; ignored for mode='generate'.
+    current_workflow: WorkflowGraphDef = Field(default_factory=WorkflowGraphDef)
+    current_functions: list[CustomFunction] = Field(default_factory=list)
+    current_global_prompt: str = ""
 
 
 class ChatTurn(BaseModel):
