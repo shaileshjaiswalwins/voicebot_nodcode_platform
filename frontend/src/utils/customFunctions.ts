@@ -1,4 +1,4 @@
-import type { CustomFunction, FunctionParam, StoreVariable } from '../types';
+import type { CustomFunction, FunctionParam, HttpMethod, StoreVariable } from '../types';
 
 /** Create a blank custom function with sane defaults matching backend/models.py. */
 export function newCustomFunction(): CustomFunction {
@@ -123,4 +123,86 @@ export function sampleArgsFromParams(params: FunctionParam[]): Record<string, un
       p.type === 'number' ? 0 : p.type === 'boolean' ? false : p.type === 'object' ? {} : p.type === 'array' ? [] : '';
   }
   return args;
+}
+
+/** Split a shell command line into tokens, respecting single/double quotes (no escape-sequence
+ * handling beyond that — good enough for curl commands copy-pasted from docs/DevTools). */
+function tokenizeShellCommand(input: string): string[] {
+  const tokens: string[] = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(input))) {
+    tokens.push(m[1] ?? m[2] ?? m[3]);
+  }
+  return tokens;
+}
+
+function inferParamType(value: unknown): FunctionParam['type'] {
+  if (typeof value === 'number') return 'number';
+  if (typeof value === 'boolean') return 'boolean';
+  if (Array.isArray(value)) return 'array';
+  if (value !== null && typeof value === 'object') return 'object';
+  return 'string';
+}
+
+/** Deterministic curl-command parser — no LLM round-trip, so it's instant and offline. Handles
+ * the common flags a PM would copy from API docs or DevTools "Copy as cURL": -X/--request,
+ * -H/--header, -d/--data(-raw|-binary) (parsed as JSON into Request Body parameters), and the
+ * bare URL argument. Anything it can't confidently parse (auth flags, multipart -F, -G query
+ * mode, etc.) is left alone rather than guessed — same "safe default over guess" rule as the
+ * AI-assist path (generate_function_from_description). Throws with a plain-English message on
+ * unparseable input so the caller can show it inline instead of silently returning junk. */
+export function parseCurlCommand(raw: string): Partial<CustomFunction> {
+  const text = raw.trim().replace(/\\\n/g, ' ');
+  if (!text) throw new Error('Paste a curl command first.');
+  const tokens = tokenizeShellCommand(text);
+  const start = tokens[0]?.toLowerCase() === 'curl' ? 1 : 0;
+
+  let url = '';
+  let method: HttpMethod | undefined;
+  const headers: Record<string, string> = {};
+  let bodyRaw: string | undefined;
+
+  for (let i = start; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (tok === '-X' || tok === '--request') {
+      method = (tokens[++i] || '').toUpperCase() as HttpMethod;
+    } else if (tok === '-H' || tok === '--header') {
+      const header = tokens[++i] || '';
+      const idx = header.indexOf(':');
+      if (idx > 0) headers[header.slice(0, idx).trim()] = header.slice(idx + 1).trim();
+    } else if (tok === '-d' || tok === '--data' || tok === '--data-raw' || tok === '--data-binary' || tok === '--data-ascii') {
+      bodyRaw = tokens[++i];
+    } else if (tok === '-u' || tok === '--user' || tok === '-b' || tok === '--cookie' || tok === '-A' || tok === '--user-agent') {
+      i++; // skip value — not modeled by CustomFunction, don't guess
+    } else if (tok.startsWith('-')) {
+      // unrecognized flag (e.g. -k, -s, -L, -F) — skip, no associated value assumed
+    } else if (!url) {
+      url = tok;
+    }
+  }
+
+  if (!url) throw new Error("Couldn't find a URL in that curl command.");
+
+  const parameters: FunctionParam[] = [];
+  if (bodyRaw !== undefined) {
+    try {
+      const parsed = JSON.parse(bodyRaw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        for (const [key, value] of Object.entries(parsed)) {
+          parameters.push({ name: key, description: '', type: inferParamType(value), required: true });
+        }
+      }
+    } catch {
+      // Not JSON (e.g. form-encoded "a=1&b=2") — leave parameters empty rather than guess.
+    }
+  }
+
+  return {
+    url,
+    method: method || (bodyRaw !== undefined ? 'POST' : 'GET'),
+    headers,
+    body_mode: 'json',
+    parameters,
+  };
 }

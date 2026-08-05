@@ -90,6 +90,7 @@ const EMPTY_TEST_FORM: TestForm = {
   test_bot_version_id: '',
   custom_lead_json: '',
   pre_call_params: {},
+  dynamic_variables: {},
 };
 
 // Hindi only — the runtime (bot_dev_param.py) hardcodes HINDI_LANG_CONFIG and Sarvam
@@ -1283,6 +1284,7 @@ function AppShell() {
         test_worker_agent_name: testForm.test_worker_agent_name || undefined,
         custom_lead_json: testForm.custom_lead_json || undefined,
         pre_call_params: Object.keys(testForm.pre_call_params || {}).length ? testForm.pre_call_params : undefined,
+        dynamic_variables: Object.keys(testForm.dynamic_variables || {}).length ? testForm.dynamic_variables : undefined,
       };
       const result = await api.startTestCall(payload);
       setRoomName(result.room_name);
@@ -1393,6 +1395,7 @@ function AppShell() {
           onSelectBot={setTestBotId}
           runtimeSettings={runtimeSettings}
           functions={parsedConfig.ok ? (parsedConfig.value.functions || []) : []}
+          dynamicVariables={parsedConfig.ok ? (parsedConfig.value.dynamic_variables || []) : []}
           form={testForm}
           setForm={setTestForm}
           status={testStatus}
@@ -1410,6 +1413,11 @@ function AppShell() {
           onLiveKitError={handleLiveKitError}
           onMicChange={setMicEnabled}
           onAudioReady={handleAudioReady}
+          onTriage={
+            selectedBot?._id
+              ? (rn, status, error, closeNote) => api.triageTestCall(selectedBot!._id, rn, status, error, closeNote)
+              : undefined
+          }
         />
       )}
 

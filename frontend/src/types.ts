@@ -95,6 +95,10 @@ export type RuntimeConfig = {
   max_call_duration?: number;
   system_prompt?: string;
   initial_message?: string;
+  /** PM-declared {{var_name}} placeholders usable in system_prompt/initial_message —
+   * see backend/models.py DynamicVariable. default_value is what a real call falls back to
+   * when the caller doesn't supply that variable. */
+  dynamic_variables?: { name: string; default_value?: string }[];
   call_end_text?: string;
   inactivity_end_text?: string;
   function_calling?: boolean;
@@ -157,6 +161,8 @@ export type TestForm = {
   /** Tester-seeded overrides for this bot's own pre_call functions' query_params, flat
    * across all pre_call functions (matches bot.py's _pre_call_params merge). */
   pre_call_params: Record<string, string>;
+  /** Tester-supplied values for the bot's declared dynamic_variables, keyed by name. */
+  dynamic_variables: Record<string, string>;
 };
 
 export type ConversationItem =

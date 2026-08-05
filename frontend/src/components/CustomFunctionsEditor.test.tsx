@@ -79,9 +79,9 @@ describe('CustomFunctionsEditor', () => {
     ]} />);
 
     fireEvent.click(screen.getAllByLabelText('Expand')[0]);
-    // Headers and Query Parameters each have their own "New key value pair" button —
-    // Query Parameters is the second one in DOM order.
-    fireEvent.click(screen.getAllByText(/New key value pair/i)[1]);
+    // Query Parameters and Request Body — Parameters both have an "Add Parameter" button;
+    // Query Parameters renders first in DOM order.
+    fireEvent.click(screen.getAllByText(/Add Parameter/i)[0]);
     // Query Parameters is the only KeyValueEditor using the default "key"/"value" placeholders
     // (Headers uses "Header-Name" for its key), and no Headers row exists yet.
     fireEvent.change(screen.getByPlaceholderText('key'), { target: { value: 'a' } });
@@ -117,7 +117,7 @@ describe('KeyValueEditor', () => {
 
   it('adds a pair and emits a record with the typed key/value', () => {
     render(<KVHarness />);
-    fireEvent.click(screen.getByText(/New key value pair/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Add$/i }));
     fireEvent.change(screen.getByLabelText('Headers key 1'), { target: { value: 'Authorization' } });
     fireEvent.change(screen.getByLabelText('Headers value 1'), { target: { value: 'Bearer t' } });
     expect(screen.getByTestId('out').textContent).toBe(JSON.stringify({ Authorization: 'Bearer t' }));
@@ -125,14 +125,14 @@ describe('KeyValueEditor', () => {
 
   it('does not emit rows with a blank key', () => {
     render(<KVHarness />);
-    fireEvent.click(screen.getByText(/New key value pair/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Add$/i }));
     fireEvent.change(screen.getByLabelText('Headers value 1'), { target: { value: 'orphan' } });
     expect(screen.getByTestId('out').textContent).toBe('{}');
   });
 
   it('removes a pair', () => {
     render(<KVHarness />);
-    fireEvent.click(screen.getByText(/New key value pair/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Add$/i }));
     fireEvent.change(screen.getByLabelText('Headers key 1'), { target: { value: 'X' } });
     fireEvent.change(screen.getByLabelText('Headers value 1'), { target: { value: '1' } });
     fireEvent.click(screen.getByTitle('Remove'));

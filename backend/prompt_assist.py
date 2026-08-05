@@ -201,6 +201,33 @@ do not pad with unnecessary nodes.
 """
 
 
+def _sanitize_graph(nodes: list[dict], edges: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Defends against two ways a model's JSON graph can be silently broken rather than
+    obviously wrong — a bad graph that LOOKS fine in the JSON but corrupts state at call time:
+
+    1. An edge referencing a node id that isn't in `nodes` (a typo, or the model renaming a
+       node in one place but not the other). Left alone, this ships straight into the bot's
+       saved config; workflow_engine.py's WorkflowGraph would then try to follow that edge to a
+       node that doesn't exist. Dropped here instead — better an edge silently missing (visible
+       immediately as a validation issue: unreachable node / dead-end) than a call that breaks
+       days later on whatever branch happens to hit it.
+    2. Two nodes sharing an id. React keys on them collide (canvas rendering glitches), and
+       whatever indexes nodes by id at runtime keeps only one — so the bot's actual behavior
+       silently diverges from what the builder displays. Keeps the first occurrence, drops the
+       rest (and any of their now-dangling edges, via the same pass).
+    """
+    seen_ids: set[str] = set()
+    deduped_nodes = []
+    for n in nodes:
+        nid = n.get("id")
+        if nid in seen_ids:
+            continue
+        seen_ids.add(nid)
+        deduped_nodes.append(n)
+    valid_edges = [e for e in edges if e.get("source") in seen_ids and e.get("target") in seen_ids]
+    return deduped_nodes, valid_edges
+
+
 def _autolayout(nodes: list[dict], edges: list[dict]) -> None:
     """The model doesn't reliably produce sane x/y positions, and a bad layout (nodes stacked
     on top of each other, or edges strung between far-apart rows) makes the generated graph
@@ -306,6 +333,7 @@ def generate_workflow_from_description(description: str) -> dict:
     edges = parsed.get("edges") or []
     for n in nodes:
         n.setdefault("data", {})
+    nodes, edges = _sanitize_graph(nodes, edges)
     _autolayout(nodes, edges)
 
     return {
@@ -314,6 +342,159 @@ def generate_workflow_from_description(description: str) -> dict:
         "workflow": {"nodes": nodes, "edges": edges},
         "functions": parsed.get("functions") or [],
     }
+
+
+_GENERATE_FUNCTION_INSTRUCTIONS = """\
+You are helping a non-technical user configure an HTTP API call for a voice call center bot's
+Custom Function builder, from a pasted API description, curl example, or docs snippet.
+
+Produce ONLY a raw JSON object (no markdown fences, no commentary) with exactly these keys:
+
+- "name": short snake_case identifier for the function (e.g. "get_order_status").
+- "description": one sentence, what this call does and when it should run — shown to the LLM
+  for during-call tools.
+- "url": the endpoint URL. If genuinely not present anywhere in the input, use the literal
+  string "TODO_SET_URL" — never invent one.
+- "method": one of "GET", "POST", "PUT", "PATCH", "DELETE".
+- "headers": object of header name -> value. Use a placeholder like "YOUR_API_KEY" for any
+  secret/token the input references but doesn't give the real value for — never invent a
+  plausible-looking real key.
+- "query_params": object of query string key -> value (or "" if the value is dynamic/unknown).
+- "body_mode": "json" or "form" — which the request body uses.
+- "parameters": array of {"name","description","type": "string"|"number"|"boolean"|"object"|"array",
+  "required": bool} — each dynamic input the call needs (path/query/body params, whatever the
+  input implies the LLM or caller must supply).
+- "store_variables": array of {"variable","json_path"} — sensible fields to extract from an
+  example/typical JSON response into named variables (dot path, e.g. "data.status"). Empty
+  array if the input gives no clue about the response shape.
+
+Base every field only on what the input actually states or strongly implies — leave a field at
+its empty/placeholder default rather than guessing when genuinely unclear.
+"""
+
+
+def generate_function_from_description(description: str) -> dict:
+    """Functions tab AI-assist button: turns a pasted curl command / API description / docs
+    snippet into a draft CustomFunction the user still reviews before saving — mirrors
+    generate_agent_from_description's one-shot-JSON pattern. Any field the input doesn't
+    support is left at a safe default (empty/placeholder) rather than guessed."""
+    prompt = f"{_GENERATE_FUNCTION_INSTRUCTIONS}\n\nInput:\n{description}"
+    client = _client()
+    raw = client.models.generate_content(model=_GEMINI_MODEL, contents=prompt).text
+    parsed = _extract_json_object(raw)  # let JSONDecodeError propagate — no half-built function to fall back to
+    return {
+        "name": str(parsed.get("name", "")).strip(),
+        "description": str(parsed.get("description", "")).strip(),
+        "url": str(parsed.get("url", "")).strip() or PLACEHOLDER_URL,
+        "method": str(parsed.get("method", "POST")).strip().upper() or "POST",
+        "headers": {str(k): str(v) for k, v in (parsed.get("headers") or {}).items()},
+        "query_params": {str(k): str(v) for k, v in (parsed.get("query_params") or {}).items()},
+        "body_mode": parsed.get("body_mode") if parsed.get("body_mode") in ("json", "form") else "json",
+        "parameters": [
+            {
+                "name": str(p.get("name", "")).strip(),
+                "description": str(p.get("description", "")).strip(),
+                "type": p.get("type") if p.get("type") in ("string", "number", "boolean", "object", "array") else "string",
+                "required": bool(p.get("required", False)),
+            }
+            for p in (parsed.get("parameters") or [])
+            if str(p.get("name", "")).strip()
+        ],
+        "store_variables": [
+            {"variable": str(sv.get("variable", "")).strip(), "json_path": str(sv.get("json_path", "")).strip()}
+            for sv in (parsed.get("store_variables") or [])
+            if str(sv.get("variable", "")).strip()
+        ],
+    }
+
+
+_SUMMARIZE_VERSION_DIFF_INSTRUCTIONS = """\
+You are summarizing a config diff between two versions of a voice call center bot, for a PM
+who is about to publish and wants a quick sanity check of what actually changed and why it
+likely matters — they are not a developer and won't read raw JSON.
+
+You are given, per changed top-level config field, its old and new value as JSON. Write a
+PLAIN-ENGLISH summary: what changed, field by field, in the fewest words that stay clear (short
+phrases/bullets are fine, e.g. "System prompt: now asks for a callback number before ending the
+call."). Skip fields whose change is purely cosmetic/formatting with no behavioral effect. If
+literally nothing meaningfully changed, say so in one line. No markdown headers, no preamble —
+just the summary itself, plain text (bullet lines using "- " are fine).
+"""
+
+
+def summarize_version_diff(diffs: dict) -> str:
+    """VersionDiffModal's AI summary line: given the {field: {old, new}} diff already computed
+    client-side (same top-level-key comparison the modal itself does), produce a one-glance
+    plain-English summary for a PM reviewing before publish — no separate diff computation here,
+    just narration of a diff that already exists."""
+    prompt = f"{_SUMMARIZE_VERSION_DIFF_INSTRUCTIONS}\n\nDiff:\n{json.dumps(diffs, indent=2)}"
+    client = _client()
+    return client.models.generate_content(model=_GEMINI_MODEL, contents=prompt).text.strip()
+
+
+_TRIAGE_TEST_CALL_INSTRUCTIONS = """\
+You are helping a non-technical user debug a bad test call with their voice call center bot in
+a no-code builder. You are given the bot's current instructions (system prompt, or workflow
+graph summary), the test call's transcript, and how the call ended.
+
+Diagnose what went wrong and tell them exactly how to fix it. Respond in plain English, no
+markdown headers, structured as:
+1. What went wrong — one or two sentences, the concrete moment/behavior that was the problem
+   (e.g. "The bot never asked for a callback number even though the caller offered one").
+2. Likely cause — is it the prompt wording, a missing workflow node/transition, a missing
+   fallback branch, a function/webhook issue, or something outside the bot's control (caller
+   hung up, audio issue)?
+3. Suggested fix — a specific, concrete edit: what to change in the system prompt / global
+   prompt / which node to add or edit, worded so they could paste it straight into the
+   "Refine with AI" box or type it into the prompt field themselves.
+
+If the transcript shows nothing actually wrong (e.g. the caller just hung up, or the call
+completed as intended), say so plainly rather than inventing a problem.
+
+CRITICAL — if the transcript is empty (no turns were captured), you have NO evidence of what
+happened on the call. Do not invent a specific technical cause (phone number config, SIP trunk,
+webhook, telephony provider, or any other guessed root cause) — you cannot see any of that from
+a transcript alone. Instead say plainly that no conversation was captured, so this can't be
+diagnosed as a prompt/graph issue from the transcript, and suggest simply retrying the test call
+and checking the connection/mic before diagnosing further.
+"""
+
+
+def triage_test_call(transcript: list, status: str, error: str, close_note: str, instructions: str) -> str:
+    """Test panel's "What went wrong?" button: feeds the failed test call's transcript plus the
+    bot's current prompt/graph instructions to Gemini and gets back a plain-English diagnosis +
+    concrete fix, so a non-technical user doesn't have to reverse-engineer the transcript
+    themselves. `instructions` is whatever text best represents the bot's current behavior
+    (system_prompt for conversational bots, a workflow summary for workflow bots) — the caller
+    decides which, this function is agnostic to bot_type.
+
+    Short-circuits before calling the model when there's truly nothing to go on (empty
+    transcript, no error, no close note) — with zero signal the model has nothing to diagnose
+    but tends to invent a specific, confident-sounding technical cause anyway (observed:
+    fabricated SIP-trunk/phone-number-config narratives), which is worse than admitting there's
+    no evidence."""
+    if not transcript and not error.strip() and not close_note.strip():
+        return (
+            "No conversation was captured for this call, and no error or close note came "
+            "through either — there isn't enough information here to diagnose a prompt or "
+            "workflow problem. This usually means the call never actually connected (mic/"
+            "network/room setup) rather than something wrong with the bot's instructions. "
+            "Try the test call again and check the connection before assuming it's the "
+            "prompt or graph."
+        )
+    transcript_text = "\n".join(
+        f"{turn.get('role', '?')}: {turn.get('text', '')}" for turn in (transcript or []) if turn.get("text")
+    ) or "(empty — no turns were captured)"
+    prompt = (
+        f"{_TRIAGE_TEST_CALL_INSTRUCTIONS}\n\n"
+        f"Bot's current instructions:\n{instructions or '(none set)'}\n\n"
+        f"Call ended with status: {status or 'unknown'}\n"
+        f"Client-side error (if any): {error or 'none'}\n"
+        f"Session close note (if any): {close_note or 'none'}\n\n"
+        f"Transcript:\n{transcript_text}"
+    )
+    client = _client()
+    return client.models.generate_content(model=_GEMINI_MODEL, contents=prompt).text.strip()
 
 
 _REFINE_WORKFLOW_INSTRUCTIONS = f"""\
@@ -366,6 +547,7 @@ def refine_workflow_from_instruction(
     edges = parsed.get("edges") or []
     for n in nodes:
         n.setdefault("data", {})
+    nodes, edges = _sanitize_graph(nodes, edges)
     _autolayout(nodes, edges)
 
     return {

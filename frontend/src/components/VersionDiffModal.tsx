@@ -1,12 +1,38 @@
-import React from 'react';
-import { GitBranch } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { GitBranch, Sparkles } from 'lucide-react';
 import type { BotVersion } from '../api';
 import { Dialog } from './Dialog';
+import { api } from '../api';
 
-export function VersionDiffModal({ versionA, versionB, onClose }: { versionA: BotVersion; versionB: BotVersion; onClose: () => void }) {
+export function VersionDiffModal({
+  versionA,
+  versionB,
+  onClose,
+}: {
+  versionA: BotVersion;
+  versionB: BotVersion;
+  onClose: () => void;
+}) {
   const allKeys = Array.from(new Set([...Object.keys(versionA.config), ...Object.keys(versionB.config)]));
   const diffs = allKeys.filter(k => JSON.stringify(versionA.config[k]) !== JSON.stringify(versionB.config[k]));
   const same = allKeys.filter(k => !diffs.includes(k));
+
+  const [summary, setSummary] = useState<string | null>(null);
+  const [summaryState, setSummaryState] = useState<'idle' | 'loading' | 'failed'>('idle');
+
+  useEffect(() => {
+    if (diffs.length === 0) return;
+    let cancelled = false;
+    setSummaryState('loading');
+    setSummary(null);
+    const payload: Record<string, { old: unknown; new: unknown }> = {};
+    for (const key of diffs) payload[key] = { old: versionA.config[key], new: versionB.config[key] };
+    api.summarizeVersionDiff(payload)
+      .then((res) => { if (!cancelled) { setSummary(res.summary); setSummaryState('idle'); } })
+      .catch(() => { if (!cancelled) setSummaryState('failed'); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [versionA.version, versionB.version]);
 
   return (
     <Dialog
@@ -20,6 +46,17 @@ export function VersionDiffModal({ versionA, versionB, onClose }: { versionA: Bo
         {diffs.length === 0 && <p className="muted">No differences found between these two versions.</p>}
         {diffs.length > 0 && (
           <>
+            {summaryState === 'loading' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem', color: 'var(--muted)', marginBottom: '0.75rem' }}>
+                <Sparkles size={13} /> Summarizing…
+              </div>
+            )}
+            {summary && (
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.6rem 0.75rem', marginBottom: '0.9rem', fontSize: '0.83rem', whiteSpace: 'pre-wrap' }}>
+                <Sparkles size={14} style={{ flexShrink: 0, marginTop: '0.15rem' }} />
+                <div>{summary}</div>
+              </div>
+            )}
             <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>Changed fields ({diffs.length})</div>
             {diffs.map(key => (
               <div key={key} style={{ marginBottom: '0.75rem', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border)' }}>

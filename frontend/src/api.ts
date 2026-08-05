@@ -611,6 +611,19 @@ export type DashboardSummary = {
   daily_volume: DailyCount[];
 };
 
+export type ExecMetrics = {
+  window_days: number;
+  north_star: { qualified_live_call_hours: number; total_calls: number };
+  business_value: { task_completion_rate_pct: number; conversion_yield_pct: number };
+  system_quality: {
+    p95_turn_latency_ms: number;
+    avg_first_response_latency_ms: number;
+    avg_mid_call_latency_ms: number;
+    platform_error_rate_pct: number;
+  };
+  platform_adoption: { active_production_workflows: number };
+};
+
 // ---------------------------------------------------------------------------
 // api client
 // ---------------------------------------------------------------------------
@@ -679,6 +692,9 @@ export const api = {
   },
   dashboardSummary(): Promise<DashboardSummary> {
     return request('/api/dashboard/summary');
+  },
+  execMetrics(): Promise<ExecMetrics> {
+    return request('/api/dashboard/exec-metrics');
   },
   /** Triggers a browser download of the CSV — can't use request()'s json() parsing, and a
    * plain <a href> can't carry the Bearer auth header, so this fetches as a blob directly. */
@@ -786,6 +802,31 @@ export const api = {
   // Create Agent > Create with AI — no bot exists yet, so this is bot-less.
   generateAgent(description: string): Promise<{ agent_name: string; initial_message: string; system_prompt: string }> {
     return request('/api/bots/generate-agent', { method: 'POST', body: JSON.stringify({ description }) }, 30000);
+  },
+  // Functions tab AI-assist — paste a curl example/API description, get a draft CustomFunction
+  // (minus id) to review before saving. No bot exists lookup needed.
+  generateFunction(description: string): Promise<Omit<CustomFunction, 'id' | 'enabled' | 'timeout_ms' | 'trigger' | 'raw_body_schema'>> {
+    return request('/api/bots/generate-function', { method: 'POST', body: JSON.stringify({ description }) }, 30000);
+  },
+  // VersionDiffModal AI summary — diffs is {field: {old, new}} for every changed top-level key,
+  // already computed client-side; this just narrates it in plain English.
+  summarizeVersionDiff(diffs: Record<string, { old: unknown; new: unknown }>): Promise<{ summary: string }> {
+    return request('/api/bots/summarize-version-diff', { method: 'POST', body: JSON.stringify({ diffs }) }, 30000);
+  },
+  // Test panel's "What went wrong?" button — server looks up the transcript by room name and
+  // pairs it with the bot's current instructions before asking for a diagnosis.
+  triageTestCall(
+    botId: string,
+    roomName: string,
+    status: string,
+    error: string,
+    closeNote: string,
+  ): Promise<{ diagnosis: string; transcript_found: boolean }> {
+    return request(
+      `/api/bots/${botId}/triage-test-call`,
+      { method: 'POST', body: JSON.stringify({ room_name: roomName, status, error, close_note: closeNote }) },
+      30000,
+    );
   },
   // Create Agent > Create workflow with AI — same idea, but generates a full WorkflowGraphDef
   // (nodes/edges/conditions/function-calls) instead of just prompt fields. Any HTTP endpoint the
@@ -1099,6 +1140,7 @@ export const api = {
     test_worker_agent_name?: string;
     custom_lead_json?: string;
     pre_call_params?: Record<string, string>;
+    dynamic_variables?: Record<string, string>;
   }): Promise<{ room_name: string; livekit_token: string; livekit_url: string }> {
     return request('/api/testcall/start', { method: 'POST', body: JSON.stringify(payload) });
   },

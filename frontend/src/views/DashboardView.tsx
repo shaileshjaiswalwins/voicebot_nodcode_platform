@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Activity, Bot, LayoutDashboard, TrendingDown, TrendingUp } from 'lucide-react';
-import type { DashboardSummary } from '../api';
+import { Activity, AlertTriangle, Bot, Gauge, LayoutDashboard, Layers, Target, TrendingDown, TrendingUp } from 'lucide-react';
+import type { DashboardSummary, ExecMetrics } from '../api';
 import { api } from '../api';
 import { ErrorState } from '../components/ErrorState';
 import { EmptyState } from '../components/EmptyState';
@@ -29,8 +29,108 @@ function CardEmptyState({ text }: { text: string }) {
   );
 }
 
+function ExecDashboardSection({ exec }: { exec: ExecMetrics }) {
+  return (
+    <div className="mb-6">
+      <Card className="mb-4 border-l-4 border-l-primary">
+        <CardContent className="flex flex-wrap items-center justify-between gap-4 pt-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
+              <Target size={18} className="text-primary" />
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                North Star · Qualified Live Call Hours
+              </p>
+              <p className="text-3xl font-bold text-foreground">
+                {exec.north_star.qualified_live_call_hours}
+                <span className="ml-1 text-base font-medium text-muted-foreground">hrs</span>
+              </p>
+            </div>
+          </div>
+          <div className="text-right text-sm text-muted-foreground">
+            <p>{exec.north_star.total_calls} calls, last {exec.window_days} days</p>
+            <p className="text-xs">Qualified = completed or naturally-concluded calls, not system drops</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <TrendingUp size={13} />Pillar 1 · Business Value
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-foreground">Task completion rate</span>
+              <Badge variant={exec.business_value.task_completion_rate_pct >= 70 ? 'success' : 'secondary'}>
+                {exec.business_value.task_completion_rate_pct}%
+              </Badge>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-foreground">Conversion yield</span>
+              <Badge variant={exec.business_value.conversion_yield_pct >= 50 ? 'success' : 'secondary'}>
+                {exec.business_value.conversion_yield_pct}%
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground">AI-classified outcome, not a verified business event</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <Gauge size={13} />Pillar 2 · Voice &amp; System Quality
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-foreground">P95 turn-taking latency</span>
+              <span className="font-semibold text-foreground">{exec.system_quality.p95_turn_latency_ms} ms</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-foreground">First response / mid-call</span>
+              <span className="font-semibold text-foreground">
+                {exec.system_quality.avg_first_response_latency_ms} / {exec.system_quality.avg_mid_call_latency_ms} ms
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-foreground">Platform error / drop rate</span>
+              <Badge variant={exec.system_quality.platform_error_rate_pct > 20 ? 'destructive' : 'success'}>
+                <AlertTriangle size={10} className="mr-1" />
+                {exec.system_quality.platform_error_rate_pct}%
+              </Badge>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <Layers size={13} />Pillar 3 · Platform Adoption
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-foreground">Active production workflows</span>
+              <span className="text-2xl font-bold text-foreground">{exec.platform_adoption.active_production_workflows}</span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Active bots + active campaigns. Cost-per-resolution and time-to-deploy metrics are
+              deferred — no per-call cost or deploy-milestone data is captured yet.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 export function DashboardView({ onGoToAgents }: { onGoToAgents?: () => void }) {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [exec, setExec] = useState<ExecMetrics | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
@@ -40,9 +140,10 @@ export function DashboardView({ onGoToAgents }: { onGoToAgents?: () => void }) {
     setLoading(true);
     setError('');
     try {
-      const data = await api.dashboardSummary();
+      const [data, execData] = await Promise.all([api.dashboardSummary(), api.execMetrics()]);
       if (!mountedRef.current) return;
       setSummary(data);
+      setExec(execData);
       setLastRefreshedAt(Date.now());
     } catch (err) {
       if (!mountedRef.current) return;
@@ -72,6 +173,7 @@ export function DashboardView({ onGoToAgents }: { onGoToAgents?: () => void }) {
 
   return (
     <section className="content-grid">
+      {exec && <ExecDashboardSection exec={exec} />}
       <div className="panel">
         <div className="panel-header">
           <div>

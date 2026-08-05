@@ -7,6 +7,7 @@ import {
   sampleArgsFromParams,
   ensureFunctionIds,
   RESERVED_TOOL_NAMES,
+  parseCurlCommand,
 } from './customFunctions';
 
 describe('newCustomFunction', () => {
@@ -169,5 +170,51 @@ describe('sampleArgsFromParams', () => {
       { name: '', type: 'string', required: false },
     ]);
     expect(args).toEqual({ mobile: '', count: 0, flag: false });
+  });
+});
+
+describe('parseCurlCommand', () => {
+  it('parses method, headers, URL, and a JSON body into typed parameters', () => {
+    const result = parseCurlCommand(
+      `curl -X POST https://api.example.com/orders \\
+        -H "Authorization: Bearer abc123" \\
+        -H "Content-Type: application/json" \\
+        -d '{"order_id": "123", "count": 2, "urgent": true}'`
+    );
+    expect(result.method).toBe('POST');
+    expect(result.url).toBe('https://api.example.com/orders');
+    expect(result.headers).toEqual({ Authorization: 'Bearer abc123', 'Content-Type': 'application/json' });
+    expect(result.body_mode).toBe('json');
+    expect(result.parameters).toEqual([
+      { name: 'order_id', description: '', type: 'string', required: true },
+      { name: 'count', description: '', type: 'number', required: true },
+      { name: 'urgent', description: '', type: 'boolean', required: true },
+    ]);
+  });
+
+  it('defaults to GET when there is no body and no -X flag', () => {
+    const result = parseCurlCommand('curl https://api.example.com/status -H "Accept: application/json"');
+    expect(result.method).toBe('GET');
+    expect(result.url).toBe('https://api.example.com/status');
+    expect(result.headers).toEqual({ Accept: 'application/json' });
+  });
+
+  it('defaults to POST when a body is present but -X is not given', () => {
+    const result = parseCurlCommand(`curl https://api.example.com/orders -d '{"a": 1}'`);
+    expect(result.method).toBe('POST');
+  });
+
+  it('leaves parameters empty when the body is not valid JSON, without throwing', () => {
+    const result = parseCurlCommand(`curl https://api.example.com/orders -d 'a=1&b=2'`);
+    expect(result.parameters).toEqual([]);
+    expect(result.method).toBe('POST');
+  });
+
+  it('throws a plain-English error on blank input', () => {
+    expect(() => parseCurlCommand('   ')).toThrow(/paste a curl command/i);
+  });
+
+  it('throws when no URL can be found', () => {
+    expect(() => parseCurlCommand('curl -H "Accept: application/json"')).toThrow(/couldn.t find a url/i);
   });
 });

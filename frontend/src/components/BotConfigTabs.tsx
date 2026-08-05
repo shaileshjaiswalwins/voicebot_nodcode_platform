@@ -1,30 +1,28 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AlertTriangle, Database, Sparkles } from 'lucide-react';
 import type { RuntimeConfig, CustomFunction, FunctionTestResult } from '../types';
 import type { BotMetrics, LanguageOption, PricingConfig, PricingModelEntry } from '../api';
 import { api } from '../api';
+import { diffWords } from '../utils/diffText';
 import { EmptyState } from './EmptyState';
 import { MiniBarChart, MiniLineChart } from './MiniCharts';
 import { SARVAM_TTS_VOICES, SARVAM_TTS_LANGUAGES, TTS_PROVIDER_MODEL_KEY } from '../constants/ui';
 import { CustomFunctionsEditor } from './CustomFunctionsEditor';
-import { CloseMarkersEditor } from './CloseMarkersEditor';
 import { ChipListEditor } from './ChipListEditor';
+import { DynamicVariablesEditor } from './DynamicVariablesEditor';
 import { ProviderOptionsEditor } from './ProviderOptionsEditor';
 import { CostEstimateStrip } from './CostEstimateStrip';
 import { WorkflowBuilderView } from '../views/WorkflowBuilderView';
-import { SARVAM_STT_FIELDS, SARVAM_TTS_FIELDS, GEMINI_LLM_FIELDS } from '../constants/providerParams';
-import type { ParamField } from '../constants/providerParams';
+import { SARVAM_STT_FIELDS, SARVAM_TTS_FIELDS } from '../constants/providerParams';
 import type { AgentCostEstimate } from '../utils/agentCost';
 
-export type BuilderTab = 'metrics' | 'agent' | 'speed' | 'stt' | 'tts' | 'llm' | 'functions' | 'workflow' | 'advanced';
+export type BuilderTab = 'metrics' | 'basic' | 'prompt' | 'voice' | 'functions' | 'workflow' | 'advanced';
 
 const TABS: { id: BuilderTab; label: string }[] = [
   { id: 'metrics', label: 'Metrics' },
-  { id: 'agent', label: 'Agent' },
-  { id: 'speed', label: 'Speed' },
-  { id: 'stt', label: 'STT' },
-  { id: 'tts', label: 'TTS' },
-  { id: 'llm', label: 'LLM' },
+  { id: 'basic', label: 'Basic Info' },
+  { id: 'prompt', label: 'Prompt' },
+  { id: 'voice', label: 'Voice' },
   { id: 'functions', label: 'Functions' },
   { id: 'workflow', label: 'Workflow' },
   { id: 'advanced', label: 'Advanced' },
@@ -149,6 +147,23 @@ type PromptAssistTarget = 'system_prompt' | 'closing_line' | 'analysis_prompt' |
  * System prompt, generalized so Closing line and Analysis prompt override can reuse the exact
  * same interaction (click Sparkles, describe the change, apply) against their own backend
  * framing (see backend/prompt_assist.py's per-target instructions). */
+/** Renders a word-level diff (diffText.ts) as inline spans — deletions struck through in red,
+ * insertions highlighted in green, unchanged text plain — so a refine result reads like a
+ * tracked-changes document instead of a silent text replacement the user has to reread in full
+ * to spot what moved. */
+function PromptDiffView({ before, after }: { before: string; after: string }) {
+  const ops = useMemo(() => diffWords(before, after), [before, after]);
+  return (
+    <div className="prompt-diff-view">
+      {ops.map((op, i) => {
+        if (op.type === 'equal') return <span key={i}>{op.text}</span>;
+        if (op.type === 'del') return <del key={i} className="prompt-diff-del">{op.text}</del>;
+        return <ins key={i} className="prompt-diff-ins">{op.text}</ins>;
+      })}
+    </div>
+  );
+}
+
 function PromptAssistButton({
   target,
   currentText,
@@ -177,6 +192,16 @@ function PromptAssistButton({
   // generate from scratch until there's existing text, then switch to refine.
   const hasExisting = target === 'analysis_prompt' || Boolean(currentText.trim());
 
+  // Review step: a generate/refine result no longer applies itself straight into the field —
+  // it lands here first as a proposal, diffed against whatever the field held right before
+  // this round started, so the user can see exactly what changed (not just reread the whole
+  // text and try to spot it) before choosing to keep it. `reviewBaseline` stays fixed across
+  // any number of follow-up refinements of the same proposal, so the diff always reads against
+  // what was actually saved, not against the previous draft.
+  const [reviewBaseline, setReviewBaseline] = useState<string | null>(null);
+  const [proposal, setProposal] = useState('');
+  const reviewing = reviewBaseline !== null;
+
   useEffect(() => {
     if (!open) return;
     function onDocClick(e: MouseEvent) {
@@ -200,7 +225,8 @@ function PromptAssistButton({
     try {
       const mode = hasExisting ? 'refine' : 'generate';
       const result = await onGenerate(mode, instruction.trim(), currentText, target);
-      onApply(result.text);
+      setReviewBaseline(currentText);
+      setProposal(result.text);
       setInstruction('');
       setState('idle');
       setOpen(false);
@@ -209,6 +235,62 @@ function PromptAssistButton({
       setState('failed');
     }
   };
+
+  const handleFollowUp = async () => {
+    if (!instruction.trim() || reviewBaseline === null) return;
+    setState('running');
+    setError('');
+    try {
+      // Refines the proposal itself, not the original — "make it shorter" should act on the
+      // draft just shown, not re-derive from the untouched original text.
+      const result = await onGenerate('refine', instruction.trim(), proposal, target);
+      setProposal(result.text);
+      setInstruction('');
+      setState('idle');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Refine failed.');
+      setState('failed');
+    }
+  };
+
+  const handleAccept = () => {
+    onApply(proposal);
+    setReviewBaseline(null);
+    setProposal('');
+  };
+
+  const handleDiscard = () => {
+    setReviewBaseline(null);
+    setProposal('');
+    setError('');
+    setState('idle');
+  };
+
+  if (reviewing) {
+    return (
+      <div className="prompt-assist-review-overlay">
+        <div className="prompt-assist-review-bar">
+          <input
+            className="prompt-assist-review-followup"
+            placeholder="Add follow-ups or refinements…"
+            value={instruction}
+            disabled={state === 'running'}
+            onChange={(e) => setInstruction(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && instruction.trim()) { e.preventDefault(); handleFollowUp(); } }}
+          />
+          <button type="button" disabled={state === 'running' || !instruction.trim()} onClick={handleFollowUp}>
+            {state === 'running' ? 'Working…' : 'Rewrite'}
+          </button>
+        </div>
+        <div className="prompt-assist-review-actions">
+          <button type="button" disabled={state === 'running'} onClick={handleDiscard}>Discard</button>
+          <button type="button" className="primary" disabled={state === 'running'} onClick={handleAccept}>Accept changes</button>
+        </div>
+        {error && <div className="notice error" role="alert">{error}</div>}
+        <PromptDiffView before={reviewBaseline} after={proposal} />
+      </div>
+    );
+  }
 
   return (
     <div className="prompt-assist" ref={ref}>
@@ -256,7 +338,9 @@ export function BotConfigTabs({
   configError,
   botId,
   onTestFunction,
+  onGenerateFunction,
   onGeneratePrompt,
+  onRefineWorkflow,
   costEstimate,
   pricing,
   onTabChange,
@@ -271,12 +355,24 @@ export function BotConfigTabs({
   configError?: string;
   botId?: string;
   onTestFunction?: (fn: CustomFunction, args: Record<string, unknown>) => Promise<FunctionTestResult>;
+  /** Functions tab AI-assist button: paste a curl example/API description, get a draft function
+   * back. Optional, same reasoning as onRefineWorkflow below. */
+  onGenerateFunction?: (description: string) => Promise<Partial<CustomFunction>>;
   onGeneratePrompt?: (
     mode: 'generate' | 'refine',
     instruction: string,
     currentPrompt: string,
     target: 'system_prompt' | 'closing_line' | 'analysis_prompt' | 'global_prompt',
   ) => Promise<{ text: string }>;
+  /** Workflow tab's "Refine with AI" button — edits the graph/functions/global_prompt in place
+   * per a free-text instruction. Optional so this doesn't force every BotConfigTabs call site
+   * to wire it up at once (see WorkflowBuilderView's onRefineWithAI docstring). */
+  onRefineWorkflow?: (
+    instruction: string,
+    currentWorkflow: RuntimeConfig['workflow'],
+    currentFunctions: CustomFunction[],
+    currentGlobalPrompt: string,
+  ) => Promise<{ global_prompt: string; workflow: NonNullable<RuntimeConfig['workflow']>; functions: CustomFunction[] }>;
   costEstimate?: AgentCostEstimate | null;
   pricing?: PricingConfig | null;
   /** Lets the workspace shell know when the Workflow tab is active, so it can drop the
@@ -284,10 +380,27 @@ export function BotConfigTabs({
    * full viewport — it's unusable squeezed into a 340px-narrower shared column. */
   onTabChange?: (tab: BuilderTab) => void;
 }) {
-  const [tab, setTabState] = useState<BuilderTab>('agent');
+  const [tab, setTabState] = useState<BuilderTab>('basic');
   function setTab(next: BuilderTab) {
     setTabState(next);
     onTabChange?.(next);
+  }
+  // Which of the two prompt fields last had focus — click-to-insert on a dynamic-variable
+  // chip needs to know where to drop the {{name}} token, since the chip itself is outside
+  // both fields and never steals focus.
+  const systemPromptRef = useRef<HTMLTextAreaElement>(null);
+  const openingLineRef = useRef<HTMLInputElement>(null);
+  const [lastFocusedPromptField, setLastFocusedPromptField] = useState<'system_prompt' | 'initial_message'>('system_prompt');
+  function insertDynamicVariableToken(token: string) {
+    const el = lastFocusedPromptField === 'initial_message' ? openingLineRef.current : systemPromptRef.current;
+    const key = lastFocusedPromptField;
+    const current = String(value[key] || '');
+    if (!el) { onUpdateConfig(key, current + token); return; }
+    const start = el.selectionStart ?? current.length;
+    const end = el.selectionEnd ?? current.length;
+    const next = current.slice(0, start) + token + current.slice(end);
+    onUpdateConfig(key, next);
+    requestAnimationFrame(() => { el.focus(); el.setSelectionRange(start + token.length, start + token.length); });
   }
   // Scoped JSON editor for just the `workflow` graph field (rather than the whole bot's
   // Developer JSON below) — local text state so an operator can type transiently-invalid
@@ -329,17 +442,8 @@ export function BotConfigTabs({
   // (Google TTS/STT, Cartesia, Anthropic, ...) that would silently no-op on a real call.
   const byCompany = (entries: PricingModelEntry[] | undefined, company: string): PricingModelEntry[] =>
     (entries || []).filter((e) => e.company === company);
-  const openAiModels = byCompany(pricing?.llm, 'OpenAI');
-  const geminiModels = byCompany(pricing?.llm, 'Google').filter((e) => e.key.startsWith('gemini'));
   const deepgramSttModels = byCompany(pricing?.stt, 'Deepgram');
-  const geminiLlmFields: ParamField[] = GEMINI_LLM_FIELDS.map((f) =>
-    f.key === 'model' && geminiModels.length
-      ? { ...f, options: geminiModels.map((e) => e.label) }
-      : f
-  );
-  const recording = (typeof value.recording === 'object' && value.recording ? value.recording : {}) as RuntimeConfig['recording'];
-  const apiUrls = (typeof value.api_urls === 'object' && value.api_urls ? value.api_urls : {}) as Record<string, string>;
-  const optsFor = (key: 'stt_options' | 'tts_options' | 'llm_options'): Record<string, unknown> =>
+  const optsFor = (key: 'stt_options' | 'tts_options'): Record<string, unknown> =>
     (typeof value[key] === 'object' && value[key] ? value[key] : {}) as Record<string, unknown>;
 
   // Soft numeric range check: returns a warning string when `n` violates min/max, else null.
@@ -362,7 +466,7 @@ export function BotConfigTabs({
   // tabs where *nothing* on the tab applies; the fields below flag individual controls on
   // tabs that are a mix of applicable and inert.
   const isWorkflow = value.bot_type === 'workflow';
-  const INERT_TABS: BuilderTab[] = ['stt', 'functions'];
+  const INERT_TABS: BuilderTab[] = ['functions'];
 
   const InertNotice = ({ children }: { children: React.ReactNode }) => (
     <div className="notice" style={{ marginBottom: '0.75rem', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
@@ -401,10 +505,10 @@ export function BotConfigTabs({
 
       {tab === 'metrics' && <MetricsTab botId={botId} />}
 
-      {tab === 'agent' && (
+      {tab === 'basic' && (
         <div role="tabpanel">
           <div className="form-grid">
-            <label title="'Workflow' bots are a real state-machine graph (see the Workflow tab) driven entirely by workflow_engine.py, bypassing System prompt/Opening line/Closing line below. 'Standard' is the existing fixed-assistant pipeline.">
+            <label title="'Workflow' bots are a real state-machine graph (see the Workflow tab) driven entirely by workflow_engine.py, bypassing System prompt/Opening line/Closing line on the Prompt tab. 'Standard' is the existing fixed-assistant pipeline.">
               Bot type
               <select
                 value={String(value.bot_type || 'standard')}
@@ -413,12 +517,23 @@ export function BotConfigTabs({
                 <option value="standard">Standard (system prompt)</option>
                 <option value="workflow">Workflow (visual graph)</option>
               </select>
-              <small>Workflow bots use the Workflow tab's graph instead of the fields below.</small>
+              <small>Workflow bots use the Workflow tab's graph instead of the Prompt tab's fields.</small>
             </label>
             <label title="The name the bot introduces itself with. Used in the opening line and system prompt." style={isWorkflow ? inertFieldStyle : undefined}>
               Persona name
               <input value={String(value.agent_name || '')} placeholder="e.g. Tarun, Priya, Aman" onChange={(e) => onUpdateConfig('agent_name', e.target.value)} />
               <small>The name the bot introduces itself with — appears in the opening line and system prompt.</small>
+            </label>
+            <label style={isWorkflow ? inertFieldStyle : undefined}>
+              Language
+              <select value={String(value.language || '')} onChange={(e) => onUpdateLanguage(e.target.value)}>
+                {languages.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+              </select>
+              <small>Not yet wired into the runtime — bot_pipeline.py's Sarvam STT/TTS always runs in Hindi (hi-IN) regardless of this setting.</small>
+            </label>
+            <label>
+              Max call duration: {Number(value.max_call_duration || 300)}s ({Math.round(Number(value.max_call_duration || 300) / 60)} min)
+              <input type="range" min={60} max={600} step={30} value={Number(value.max_call_duration || 300)} onChange={(e) => onUpdateConfig('max_call_duration', Number(e.target.value))} />
             </label>
           </div>
           <div title="Free-form labels for organizing/filtering agents on the Agents page — has no effect on call behavior.">
@@ -433,31 +548,123 @@ export function BotConfigTabs({
           </div>
           {isWorkflow && (
             <InertNotice>
-              <strong>System prompt, Opening/Closing line, Inactivity phrase, Language, and Persona name</strong> below
-              are ignored for workflow bots — set the equivalent shared context on the <strong>Workflow</strong> tab's
-              Global prompt, and the greeting on the graph's Start node. Only <strong>Max call duration</strong> here
-              still applies.
+              <strong>Persona name and Language</strong> above are ignored for workflow bots — set the equivalent
+              shared context on the <strong>Workflow</strong> tab's Global prompt. Only <strong>Bot type</strong> and{' '}
+              <strong>Max call duration</strong> here still apply.
             </InertNotice>
           )}
-          <label className="full" style={isWorkflow ? inertFieldStyle : undefined}>
-            System prompt
-            <div className="prompt-editor-wrap">
-              <textarea className="prompt-editor prompt-editor-main" value={String(value.system_prompt || '')} onChange={(e) => onUpdateConfig('system_prompt', e.target.value)} />
-              {onGeneratePrompt && (
-                <PromptAssistButton
-                  target="system_prompt"
-                  currentText={String(value.system_prompt || '')}
-                  onGenerate={onGeneratePrompt}
-                  onApply={(text) => onUpdateConfig('system_prompt', text)}
-                  generateLabel="Generate prompt"
-                  refineLabel="Refine prompt"
-                  generatePlaceholder='Describe the bot you want, e.g. "a friendly agent that qualifies real estate leads"'
-                  refinePlaceholder='Describe the change to make, e.g. "make the tone more casual"'
+        </div>
+      )}
+
+      {tab === 'prompt' && (
+        <div role="tabpanel">
+          {isWorkflow && (
+            <InertNotice>
+              Everything below is ignored for workflow bots — set the equivalent shared context on the{' '}
+              <strong>Workflow</strong> tab's Global prompt, and the greeting on the graph's Start node.
+            </InertNotice>
+          )}
+          <div style={isWorkflow ? inertFieldStyle : undefined}>
+            <DynamicVariablesEditor
+              variables={Array.isArray(value.dynamic_variables) ? value.dynamic_variables : []}
+              onChange={(vars) => onUpdateConfig('dynamic_variables', vars)}
+              onInsert={insertDynamicVariableToken}
+            />
+            <label className="full">
+              System prompt
+              <div className="prompt-editor-wrap">
+                <textarea
+                  ref={systemPromptRef}
+                  className="prompt-editor prompt-editor-main"
+                  value={String(value.system_prompt || '')}
+                  onFocus={() => setLastFocusedPromptField('system_prompt')}
+                  onChange={(e) => onUpdateConfig('system_prompt', e.target.value)}
                 />
-              )}
+                {onGeneratePrompt && (
+                  <PromptAssistButton
+                    target="system_prompt"
+                    currentText={String(value.system_prompt || '')}
+                    onGenerate={onGeneratePrompt}
+                    onApply={(text) => onUpdateConfig('system_prompt', text)}
+                    generateLabel="Generate prompt"
+                    refineLabel="Refine prompt"
+                    generatePlaceholder='Describe the bot you want, e.g. "a friendly agent that qualifies real estate leads"'
+                    refinePlaceholder='Describe the change to make, e.g. "make the tone more casual"'
+                  />
+                )}
+              </div>
+            </label>
+            <div className="form-grid">
+              <label title="The first thing the bot says when the call connects.">
+                Opening line
+                <input
+                  ref={openingLineRef}
+                  value={String(value.initial_message || '')}
+                  placeholder="e.g. Hello, this is Priya from JustDial…"
+                  onFocus={() => setLastFocusedPromptField('initial_message')}
+                  onChange={(e) => onUpdateConfig('initial_message', e.target.value)}
+                />
+                <small>The first sentence spoken when the call connects.</small>
+              </label>
+              <label title="The bot says this right before hanging up normally.">
+                Closing line
+                <div className="prompt-editor-wrap prompt-editor-wrap-inline">
+                  <input value={String(value.call_end_text || '')} placeholder="e.g. Thank you, have a great day!" onChange={(e) => onUpdateConfig('call_end_text', e.target.value)} />
+                  {onGeneratePrompt && (
+                    <PromptAssistButton
+                      target="closing_line"
+                      currentText={String(value.call_end_text || '')}
+                      onGenerate={onGeneratePrompt}
+                      onApply={(text) => onUpdateConfig('call_end_text', text)}
+                      generateLabel="Generate closing line"
+                      refineLabel="Refine closing line"
+                      generatePlaceholder='Describe the tone, e.g. "warm and brief, in Hinglish"'
+                      refinePlaceholder="Describe the change, e.g. &quot;mention we'll call back within 24 hours&quot;"
+                    />
+                  )}
+                </div>
+                <small>Spoken just before the bot ends the call normally.</small>
+              </label>
+              <label>
+                Inactivity end phrase
+                <input value={String(value.inactivity_end_text || '')} placeholder="Platform default used if blank" onChange={(e) => onUpdateConfig('inactivity_end_text', e.target.value)} />
+                <small>Spoken before hanging up when the caller never responds to the nudges below.</small>
+              </label>
             </div>
-          </label>
-          <label className="full">
+          </div>
+
+          <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '1rem 0 0.25rem' }}>
+            Inactivity & silence handling
+          </div>
+          <p style={{ fontSize: '0.78rem', color: 'var(--muted)', margin: '0 0 0.5rem' }}>Timers used when the caller goes silent mid-call.</p>
+          <div className="form-grid" style={isWorkflow ? inertFieldStyle : undefined}>
+            <label title="Seconds of silence at the start of a turn before the bot gently re-engages the caller.">
+              First rescue (s)
+              <input type="number" min={0.5} max={60} step="0.5" value={Number(value.inactivity_first_rescue_secs ?? 4)} onChange={(e) => onUpdateConfig('inactivity_first_rescue_secs', Number(e.target.value))} />
+              <small>Silence before the first re-engagement prompt.</small>
+              <Warn msg={numWarn(Number(value.inactivity_first_rescue_secs ?? 4), { min: 0.5, max: 60 })} />
+            </label>
+            <label title="Seconds to wait after the first rescue before starting the repeating nudge cycle.">
+              First nudge gap (s)
+              <input type="number" min={0.5} max={60} step="0.5" value={Number(value.inactivity_first_nudge_gap_secs ?? 4)} onChange={(e) => onUpdateConfig('inactivity_first_nudge_gap_secs', Number(e.target.value))} />
+              <small>Delay between the first rescue and the recurring nudges.</small>
+              <Warn msg={numWarn(Number(value.inactivity_first_nudge_gap_secs ?? 4), { min: 0.5, max: 60 })} />
+            </label>
+            <label title="Seconds between each repeating nudge while the caller stays silent.">
+              Nudge interval (s)
+              <input type="number" min={0.5} max={120} step="0.5" value={Number(value.inactivity_nudge_secs ?? 10)} onChange={(e) => onUpdateConfig('inactivity_nudge_secs', Number(e.target.value))} />
+              <small>Gap between repeated “are you still there?” prompts.</small>
+              <Warn msg={numWarn(Number(value.inactivity_nudge_secs ?? 10), { min: 0.5, max: 120 })} />
+            </label>
+            <label title="Seconds of continued silence after the nudges before the bot ends the call.">
+              Auto-close (s)
+              <input type="number" min={0.5} max={120} step="0.5" value={Number(value.inactivity_close_secs ?? 5)} onChange={(e) => onUpdateConfig('inactivity_close_secs', Number(e.target.value))} />
+              <small>Final silence window before the call is hung up.</small>
+              <Warn msg={numWarn(Number(value.inactivity_close_secs ?? 5), { min: 0.5, max: 120 })} />
+            </label>
+          </div>
+
+          <label className="full" style={{ marginTop: '1rem' }}>
             Analysis prompt override (optional)
             <div className="prompt-editor-wrap">
               <textarea
@@ -482,64 +689,18 @@ export function BotConfigTabs({
             <small>
               Runs once after each call ends, to classify the outcome from the saved transcript — unrelated to
               the system prompt above, which only drives the live conversation. Applies to both standard and
-              workflow bots. Leave blank to use the shared default (AI-assist edits a copy of that default when
-              this field is empty, so the required placeholders/JSON schema are always preserved — enforced on
-              save either way).
+              workflow bots (not inert). Leave blank to use the shared default.
             </small>
           </label>
-          <div className="form-grid">
-            <label title="The first thing the bot says when the call connects." style={isWorkflow ? inertFieldStyle : undefined}>
-              Opening line
-              <input value={String(value.initial_message || '')} placeholder="e.g. Hello, this is Priya from JustDial…" onChange={(e) => onUpdateConfig('initial_message', e.target.value)} />
-              <small>The first sentence spoken when the call connects.</small>
-            </label>
-            <label title="The bot says this right before hanging up normally." style={isWorkflow ? inertFieldStyle : undefined}>
-              Closing line
-              <div className="prompt-editor-wrap prompt-editor-wrap-inline">
-                <input value={String(value.call_end_text || '')} placeholder="e.g. Thank you, have a great day!" onChange={(e) => onUpdateConfig('call_end_text', e.target.value)} />
-                {onGeneratePrompt && (
-                  <PromptAssistButton
-                    target="closing_line"
-                    currentText={String(value.call_end_text || '')}
-                    onGenerate={onGeneratePrompt}
-                    onApply={(text) => onUpdateConfig('call_end_text', text)}
-                    generateLabel="Generate closing line"
-                    refineLabel="Refine closing line"
-                    generatePlaceholder='Describe the tone, e.g. "warm and brief, in Hinglish"'
-                    refinePlaceholder="Describe the change, e.g. &quot;mention we'll call back within 24 hours&quot;"
-                  />
-                )}
-              </div>
-              <small>Spoken just before the bot ends the call normally.</small>
-            </label>
-            <label style={isWorkflow ? inertFieldStyle : undefined}>
-              Inactivity end phrase
-              <input value={String(value.inactivity_end_text || '')} placeholder="Platform default used if blank" onChange={(e) => onUpdateConfig('inactivity_end_text', e.target.value)} />
-            </label>
-            <label style={isWorkflow ? inertFieldStyle : undefined}>
-              Language
-              <select value={String(value.language || '')} onChange={(e) => onUpdateLanguage(e.target.value)}>
-                {languages.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
-              </select>
-              <small>Not yet wired into the runtime — bot_pipeline.py's Sarvam STT/TTS always runs in Hindi (hi-IN) regardless of this setting.</small>
-            </label>
-            <label>
-              Max call duration: {Number(value.max_call_duration || 300)}s ({Math.round(Number(value.max_call_duration || 300) / 60)} min)
-              <input type="range" min={60} max={600} step={30} value={Number(value.max_call_duration || 300)} onChange={(e) => onUpdateConfig('max_call_duration', Number(e.target.value))} />
-            </label>
-          </div>
         </div>
       )}
 
-      {tab === 'speed' && (
+      {tab === 'voice' && costEstimate && (
+        <CostEstimateStrip estimate={costEstimate} />
+      )}
+
+      {tab === 'voice' && (
         <div role="tabpanel">
-          {isWorkflow && (
-            <InertNotice>
-              Only <strong>Post-speech hold</strong> below applies to workflow bots. Voice-activity threshold,
-              inactivity timers, backchanneling, and noise filter are ignored — workflow_engine.py's session
-              doesn't read them.
-            </InertNotice>
-          )}
           <div className="form-grid">
             <label title="Silence (ms) the bot waits after the caller stops before replying. Lower feels snappier but risks cutting the caller off.">
               Post-speech hold (ms)
@@ -547,218 +708,128 @@ export function BotConfigTabs({
               <small>Pause after the caller stops speaking before the bot responds. Typical 200–800 ms.</small>
               <Warn msg={numWarn(Number(value.post_speech_hold_ms ?? 400), { min: 0, max: 5000, integer: true })} />
             </label>
-            <label title="Speech-detection sensitivity (0–1). Higher = stricter, ignores more background noise but may miss soft speech." style={isWorkflow ? inertFieldStyle : undefined}>
-              Voice-activity threshold
-              <input type="number" min="0" max="1" step="0.05" value={Number(value.silero_threshold ?? 0.6)} onChange={(e) => onUpdateConfig('silero_threshold', Number(e.target.value))} />
-              <small>Sensitivity for real speech vs. background noise (0–1). Default 0.6.</small>
-              <Warn msg={numWarn(Number(value.silero_threshold ?? 0.6), { min: 0, max: 1 })} />
-            </label>
-            <label title="Minimum length (ms) of sound before it counts as speech. Filters out coughs and clicks." style={isWorkflow ? inertFieldStyle : undefined}>
-              Min speech duration (ms)
-              <input type="number" min={0} max={10000} step={50} value={Number(value.silero_min_speech_ms ?? 1000)} onChange={(e) => onUpdateConfig('silero_min_speech_ms', Number(e.target.value))} />
-              <small>Shortest utterance treated as real speech. Raise to ignore brief noises.</small>
-              <Warn msg={numWarn(Number(value.silero_min_speech_ms ?? 1000), { min: 0, max: 10000, integer: true })} />
-            </label>
-            <label title="Seconds of silence at the start of a turn before the bot gently re-engages the caller." style={isWorkflow ? inertFieldStyle : undefined}>
-              First rescue (s)
-              <input type="number" min={0.5} max={60} step="0.5" value={Number(value.inactivity_first_rescue_secs ?? 4)} onChange={(e) => onUpdateConfig('inactivity_first_rescue_secs', Number(e.target.value))} />
-              <small>Silence before the first re-engagement prompt.</small>
-              <Warn msg={numWarn(Number(value.inactivity_first_rescue_secs ?? 4), { min: 0.5, max: 60 })} />
-            </label>
-            <label title="Seconds to wait after the first rescue before starting the repeating nudge cycle." style={isWorkflow ? inertFieldStyle : undefined}>
-              First nudge gap (s)
-              <input type="number" min={0.5} max={60} step="0.5" value={Number(value.inactivity_first_nudge_gap_secs ?? 4)} onChange={(e) => onUpdateConfig('inactivity_first_nudge_gap_secs', Number(e.target.value))} />
-              <small>Delay between the first rescue and the recurring nudges.</small>
-              <Warn msg={numWarn(Number(value.inactivity_first_nudge_gap_secs ?? 4), { min: 0.5, max: 60 })} />
-            </label>
-            <label title="Seconds between each repeating nudge while the caller stays silent." style={isWorkflow ? inertFieldStyle : undefined}>
-              Nudge interval (s)
-              <input type="number" min={0.5} max={120} step="0.5" value={Number(value.inactivity_nudge_secs ?? 10)} onChange={(e) => onUpdateConfig('inactivity_nudge_secs', Number(e.target.value))} />
-              <small>Gap between repeated “are you still there?” prompts.</small>
-              <Warn msg={numWarn(Number(value.inactivity_nudge_secs ?? 10), { min: 0.5, max: 120 })} />
-            </label>
-            <label title="Seconds of continued silence after the nudges before the bot ends the call." style={isWorkflow ? inertFieldStyle : undefined}>
-              Auto-close (s)
-              <input type="number" min={0.5} max={120} step="0.5" value={Number(value.inactivity_close_secs ?? 5)} onChange={(e) => onUpdateConfig('inactivity_close_secs', Number(e.target.value))} />
-              <small>Final silence window before the call is hung up.</small>
-              <Warn msg={numWarn(Number(value.inactivity_close_secs ?? 5), { min: 0.5, max: 120 })} />
-            </label>
-            <label style={isWorkflow ? inertFieldStyle : undefined}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                <input type="checkbox" checked={Boolean(value.backchanneling_enabled)} onChange={(e) => onUpdateConfig('backchanneling_enabled', e.target.checked)} />
-                Backchanneling
-              </span>
-              <small>Plays a short hold/acknowledgment sound during tool calls.</small>
-            </label>
-            <label style={isWorkflow ? inertFieldStyle : undefined}>
-              Noise filter sensitivity
-              <select value={String(value.noise_filter_sensitivity || 'medium')} onChange={(e) => onUpdateConfig('noise_filter_sensitivity', e.target.value)}>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-            </label>
-          </div>
-        </div>
-      )}
-
-      {(tab === 'stt' || tab === 'tts' || tab === 'llm') && costEstimate && (
-        <CostEstimateStrip estimate={costEstimate} />
-      )}
-
-      {tab === 'stt' && (
-        <div role="tabpanel">
-          {isWorkflow && (
-            <InertNotice>
-              STT is ignored for workflow bots — workflow_engine.py hardcodes Sarvam <code>saaras:v3</code>,
-              Hindi (hi-IN), regardless of anything set below.
-            </InertNotice>
-          )}
-          <div className="form-grid" style={isWorkflow ? inertFieldStyle : undefined}>
             <label>
-              Speech-to-text (STT)
-              <select value={String(value.stt_provider || '')} onChange={(e) => onUpdateConfig('stt_provider', e.target.value)}>
+              Text-to-speech (TTS)
+              <select
+                value={String(value.tts_provider || '')}
+                onChange={(e) => {
+                  const provider = e.target.value;
+                  onUpdateConfig('tts_provider', provider);
+                  // Keep tts_model in sync with the provider so the cost estimate (agentCost.ts,
+                  // keyed off tts_model against the Admin pricing catalog) matches the TTS
+                  // actually running the call instead of silently falling back to Sarvam's rate.
+                  onUpdateConfig('tts_model', TTS_PROVIDER_MODEL_KEY[provider] ?? '');
+                }}
+              >
                 <option value="">Sarvam (default)</option>
                 <option value="sarvam">Sarvam</option>
-                <option value="deepgram">Deepgram</option>
+                <option value="elevenlabs">ElevenLabs</option>
+                <option value="justdial">Justdial (in-house IndicF5)</option>
               </select>
+              <small>The voice/provider this bot speaks with — applies to workflow bots too.</small>
             </label>
-            {value.stt_provider === 'deepgram' && (
+            {(value.tts_provider === 'sarvam' || !value.tts_provider) && (
               <>
                 <label>
-                  STT model
-                  <select value={String(value.stt_model || '')} onChange={(e) => onUpdateConfig('stt_model', e.target.value)}>
-                    <option value="">nova-3 (default)</option>
-                    {deepgramSttModels.map((e) => <option key={e.key} value={e.label}>{e.label}</option>)}
+                  Voice
+                  <select value={String(value.tts_voice || '')} onChange={(e) => onUpdateConfig('tts_voice', e.target.value)}>
+                    <option value="">simran (default)</option>
+                    {SARVAM_TTS_VOICES.map((voice) => <option key={voice} value={voice}>{voice}</option>)}
                   </select>
                 </label>
-                <label>
-                  STT language
-                  <input value={String(value.stt_language || '')} placeholder="en-US (default)" onChange={(e) => onUpdateConfig('stt_language', e.target.value)} />
+                <label style={isWorkflow ? inertFieldStyle : undefined}>
+                  Language
+                  <select value={String(value.tts_language || '')} onChange={(e) => onUpdateConfig('tts_language', e.target.value)}>
+                    <option value="">Hindi (default)</option>
+                    {SARVAM_TTS_LANGUAGES.map((lang) => <option key={lang.id} value={lang.id}>{lang.label}</option>)}
+                  </select>
                 </label>
               </>
             )}
-            {(value.stt_provider === 'sarvam' || !value.stt_provider) && (
-              <div style={{ gridColumn: '1 / -1' }}>
-                <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
-                  Sarvam STT parameters
-                </div>
-                <ProviderOptionsEditor fields={SARVAM_STT_FIELDS} value={optsFor('stt_options')} onChange={(next) => onUpdateConfig('stt_options', next)} />
-              </div>
+            {value.tts_provider === 'elevenlabs' && (
+              <label style={isWorkflow ? inertFieldStyle : undefined}>
+                Voice ID
+                <input value={String(value.tts_voice || '')} placeholder="Paste a voice ID from your ElevenLabs dashboard" onChange={(e) => onUpdateConfig('tts_voice', e.target.value)} />
+                <small>Find voice IDs at elevenlabs.io under Voices.</small>
+              </label>
+            )}
+            {value.tts_provider === 'justdial' && (
+              <label>
+                Voice
+                <select value={String(value.tts_voice || 'simran')} onChange={(e) => onUpdateConfig('tts_voice', e.target.value)}>
+                  <option value="simran">Simran (default)</option>
+                  <option value="anushka">Anushka</option>
+                  <option value="niharika">Niharika</option>
+                </select>
+                <small>Our own fine-tuned Hindi TTS. These are the only 3 speakers our IndicF5 model is fine-tuned on.</small>
+              </label>
             )}
           </div>
-        </div>
-      )}
 
-      {tab === 'tts' && (
-        <div role="tabpanel" className="form-grid">
-          <label>
-            Text-to-speech (TTS)
-            <select
-              value={String(value.tts_provider || '')}
-              onChange={(e) => {
-                const provider = e.target.value;
-                onUpdateConfig('tts_provider', provider);
-                // Keep tts_model in sync with the provider so the cost estimate (agentCost.ts,
-                // keyed off tts_model against the Admin pricing catalog) matches the TTS
-                // actually running the call instead of silently falling back to Sarvam's rate.
-                onUpdateConfig('tts_model', TTS_PROVIDER_MODEL_KEY[provider] ?? '');
-              }}
-            >
-              <option value="">Sarvam (default)</option>
-              <option value="sarvam">Sarvam</option>
-              <option value="elevenlabs">ElevenLabs</option>
-              <option value="justdial">Justdial (in-house IndicF5)</option>
-            </select>
-          </label>
-          {(value.tts_provider === 'sarvam' || !value.tts_provider) && (
-            <>
-              <label>
-                Sarvam voice
-                <select value={String(value.tts_voice || '')} onChange={(e) => onUpdateConfig('tts_voice', e.target.value)}>
-                  <option value="">simran (default)</option>
-                  {SARVAM_TTS_VOICES.map((voice) => <option key={voice} value={voice}>{voice}</option>)}
-                </select>
-              </label>
-              <label>
-                Sarvam language
-                <select value={String(value.tts_language || '')} onChange={(e) => onUpdateConfig('tts_language', e.target.value)}>
-                  <option value="">Hindi (default)</option>
-                  {SARVAM_TTS_LANGUAGES.map((lang) => <option key={lang.id} value={lang.id}>{lang.label}</option>)}
-                </select>
-              </label>
-            </>
-          )}
-          {value.tts_provider === 'elevenlabs' && (
-            <label>
-              ElevenLabs voice ID
-              <input value={String(value.tts_voice || '')} placeholder="Paste a voice ID from your ElevenLabs dashboard" onChange={(e) => onUpdateConfig('tts_voice', e.target.value)} />
-              <small>Find voice IDs at elevenlabs.io under Voices.</small>
-            </label>
-          )}
-          {value.tts_provider === 'justdial' && (
-            <label>
-              IndicF5 speaker
-              <select value={String(value.tts_voice || 'simran')} onChange={(e) => onUpdateConfig('tts_voice', e.target.value)}>
-                <option value="simran">Simran (default)</option>
-                <option value="anushka">Anushka</option>
-                <option value="niharika">Niharika</option>
-              </select>
-              <small>Our own fine-tuned Hindi TTS — hits an internal WebSocket server (INDIC_TTS_WS_URL), not a third-party API. These are the only 3 speakers our IndicF5 model is fine-tuned on.</small>
-            </label>
-          )}
-          {(value.tts_provider === 'sarvam' || !value.tts_provider) && (
-            <div style={{ gridColumn: '1 / -1' }}>
-              <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
-                Sarvam TTS parameters
+          <details style={{ marginTop: '1rem' }}>
+            <summary style={{ cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 }}>Advanced voice tuning</summary>
+            <div style={{ marginTop: '0.75rem' }}>
+              {isWorkflow && (
+                <InertNotice>
+                  Everything in this section is ignored for workflow bots — workflow_engine.py hardcodes Sarvam
+                  STT (<code>saaras:v3</code>, Hindi hi-IN) and its own VAD tuning, regardless of anything set here.
+                </InertNotice>
+              )}
+              <div className="form-grid" style={isWorkflow ? inertFieldStyle : undefined}>
+                <label title="Speech-detection sensitivity (0–1). Higher = stricter, ignores more background noise but may miss soft speech.">
+                  Voice-activity threshold
+                  <input type="number" min="0" max="1" step="0.05" value={Number(value.silero_threshold ?? 0.6)} onChange={(e) => onUpdateConfig('silero_threshold', Number(e.target.value))} />
+                  <small>Sensitivity for real speech vs. background noise (0–1). Default 0.6.</small>
+                  <Warn msg={numWarn(Number(value.silero_threshold ?? 0.6), { min: 0, max: 1 })} />
+                </label>
+                <label title="Minimum length (ms) of sound before it counts as speech. Filters out coughs and clicks.">
+                  Min speech duration (ms)
+                  <input type="number" min={0} max={10000} step={50} value={Number(value.silero_min_speech_ms ?? 1000)} onChange={(e) => onUpdateConfig('silero_min_speech_ms', Number(e.target.value))} />
+                  <small>Shortest utterance treated as real speech. Raise to ignore brief noises.</small>
+                  <Warn msg={numWarn(Number(value.silero_min_speech_ms ?? 1000), { min: 0, max: 10000, integer: true })} />
+                </label>
+                <label>
+                  Speech-to-text (STT)
+                  <select value={String(value.stt_provider || '')} onChange={(e) => onUpdateConfig('stt_provider', e.target.value)}>
+                    <option value="">Sarvam (default)</option>
+                    <option value="sarvam">Sarvam</option>
+                    <option value="deepgram">Deepgram</option>
+                  </select>
+                </label>
+                {value.stt_provider === 'deepgram' && (
+                  <>
+                    <label>
+                      STT model
+                      <select value={String(value.stt_model || '')} onChange={(e) => onUpdateConfig('stt_model', e.target.value)}>
+                        <option value="">nova-3 (default)</option>
+                        {deepgramSttModels.map((e) => <option key={e.key} value={e.label}>{e.label}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      STT language
+                      <input value={String(value.stt_language || '')} placeholder="en-US (default)" onChange={(e) => onUpdateConfig('stt_language', e.target.value)} />
+                    </label>
+                  </>
+                )}
               </div>
-              <ProviderOptionsEditor fields={SARVAM_TTS_FIELDS} value={optsFor('tts_options')} onChange={(next) => onUpdateConfig('tts_options', next)} />
+              {(value.stt_provider === 'sarvam' || !value.stt_provider) && (
+                <div style={isWorkflow ? inertFieldStyle : undefined}>
+                  <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
+                    Sarvam STT parameters (engineering)
+                  </div>
+                  <ProviderOptionsEditor fields={SARVAM_STT_FIELDS} value={optsFor('stt_options')} onChange={(next) => onUpdateConfig('stt_options', next)} />
+                </div>
+              )}
+              {(value.tts_provider === 'sarvam' || !value.tts_provider) && (
+                <div>
+                  <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
+                    Sarvam TTS parameters (engineering)
+                  </div>
+                  <ProviderOptionsEditor fields={SARVAM_TTS_FIELDS} value={optsFor('tts_options')} onChange={(next) => onUpdateConfig('tts_options', next)} />
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      )}
-
-      {tab === 'llm' && (
-        <div role="tabpanel">
-          {isWorkflow && (
-            <InertNotice>
-              Only <strong>Temperature</strong> below applies to workflow bots. LLM provider/model selection and
-              the Gemini parameters are ignored — workflow_engine.py hardcodes <code>gemini-3.1-flash-lite</code>.
-            </InertNotice>
-          )}
-          <div className="form-grid">
-            <label style={isWorkflow ? inertFieldStyle : undefined}>
-              LLM
-              <select value={String(value.llm_provider || '')} onChange={(e) => onUpdateConfig('llm_provider', e.target.value)}>
-                <option value="">Gemini (default)</option>
-                <option value="gemini">Gemini</option>
-                <option value="openai">OpenAI</option>
-              </select>
-            </label>
-            {value.llm_provider === 'openai' && (
-              <label title="Which OpenAI model handles the conversation. Affects both response quality/speed and cost per minute." style={isWorkflow ? inertFieldStyle : undefined}>
-                OpenAI model
-                <select value={String(value.llm_model || '')} onChange={(e) => onUpdateConfig('llm_model', e.target.value)}>
-                  <option value="">gpt-4.1 (default)</option>
-                  {openAiModels.map((e) => <option key={e.key} value={e.label}>{e.label}</option>)}
-                </select>
-              </label>
-            )}
-            <label title="LLM randomness (0–2). Lower = more consistent and on-script; higher = more varied and creative.">
-              Temperature
-              <input type="number" min="0" max="2" step="0.1" value={Number(value.temperature ?? 0.4)} onChange={(e) => onUpdateConfig('temperature', Number(e.target.value))} />
-              <small>Sampling randomness (0–2). Default 0.4 — keep low for predictable scripted calls.</small>
-              <Warn msg={numWarn(Number(value.temperature ?? 0.4), { min: 0, max: 2 })} />
-            </label>
-            {(value.llm_provider === 'gemini' || !value.llm_provider) && (
-              <div style={{ gridColumn: '1 / -1', ...(isWorkflow ? inertFieldStyle : {}) }}>
-                <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
-                  Gemini parameters
-                </div>
-                <ProviderOptionsEditor fields={geminiLlmFields} value={optsFor('llm_options')} onChange={(next) => onUpdateConfig('llm_options', next)} />
-              </div>
-            )}
-          </div>
+          </details>
         </div>
       )}
 
@@ -779,6 +850,7 @@ export function BotConfigTabs({
                 onUpdateConfig('function_calling', next.some((fn) => fn.trigger === 'during_call'));
               }}
               onTest={botId ? onTestFunction : undefined}
+              onGenerateFunction={onGenerateFunction}
             />
           </div>
         </div>
@@ -820,6 +892,11 @@ export function BotConfigTabs({
             <WorkflowBuilderView
               workflow={value.workflow || { nodes: [], edges: [] }}
               onChange={(wf) => onUpdateConfig('workflow', wf)}
+              functions={Array.isArray(value.functions) ? value.functions : []}
+              onFunctionsChange={(fns) => onUpdateConfig('functions', fns)}
+              globalPrompt={String(value.global_prompt || '')}
+              onGlobalPromptChange={(text) => onUpdateConfig('global_prompt', text)}
+              onRefineWithAI={onRefineWorkflow}
             />
           </div>
 
@@ -858,37 +935,6 @@ export function BotConfigTabs({
 
       {tab === 'advanced' && (
         <div role="tabpanel">
-          {isWorkflow && (
-            <InertNotice>
-              Dialer service ID/city, MIS API base URL, and Close markers below are read by the standard pipeline
-              only — workflow bots don't use them (a workflow bot's own <strong>Function</strong> nodes call
-              whatever endpoints they're configured with directly). <strong>Developer JSON</strong> still works.
-            </InertNotice>
-          )}
-          <div className="form-grid" style={isWorkflow ? inertFieldStyle : undefined}>
-            <label title="Numeric dialer/recording service ID this bot's calls are attributed to. Change only if telephony ops tells you to.">
-              Dialer service ID
-              <input type="number" min={0} step={1} value={Number(recording?.service_id || 293)} onChange={(e) => onUpdateConfig('recording', { ...recording, service_id: Number(e.target.value) })} />
-              <small>Recording/telephony service this bot dials through. Default 293.</small>
-              <Warn msg={numWarn(Number(recording?.service_id || 293), { min: 0, integer: true })} />
-            </label>
-            <label title="City the dialer routes this bot's outbound calls from.">
-              Dialer city
-              <input value={String(recording?.dialer_city || 'bangalore')} placeholder="e.g. bangalore" onChange={(e) => onUpdateConfig('recording', { ...recording, dialer_city: e.target.value })} />
-              <small>City the dialer places calls from.</small>
-            </label>
-            <label>
-              MIS API base URL
-              <input value={String(apiUrls?.mis_api_base || '')} placeholder="Leave blank to use platform default" onChange={(e) => onUpdateConfig('api_urls', { ...apiUrls, mis_api_base: e.target.value })} />
-              <small>Per-bot override for MIS lead fetch endpoint.</small>
-            </label>
-          </div>
-          <div style={isWorkflow ? inertFieldStyle : undefined}>
-            <CloseMarkersEditor
-              markers={Array.isArray(value.close_markers) ? (value.close_markers as string[]) : []}
-              onChange={(v) => onUpdateConfig('close_markers', v)}
-            />
-          </div>
           <div style={{ marginTop: '1rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
               <Database size={16} />
