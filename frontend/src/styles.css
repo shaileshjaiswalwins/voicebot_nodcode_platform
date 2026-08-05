@@ -1105,26 +1105,39 @@ kbd.kbd { display: inline-flex; align-items: center; justify-content: center; mi
   text-transform: uppercase;
   letter-spacing: 0.02em;
 }
-.flow-graph-node-icon { display: inline-flex; }
+.flow-graph-node-icon { display: inline-flex; flex-shrink: 0; }
+/* No rule existed here before — the type label (e.g. "FUNCTION (API CALL)") free-wrapped onto
+   a second line with nothing stopping it, colliding with the "NEEDS URL"/"Terminal" badge
+   sharing the same header row. Truncate instead, matching how the badges/icon already behave. */
+.flow-graph-node-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
 .flow-graph-node-body {
   padding: 0.5rem 0.6rem 0.6rem;
   color: var(--text-2);
-  line-height: 1.4;
+  line-height: 17px;
   word-break: break-word;
   white-space: normal;
   min-height: 1.2em;
-  /* Clamp to a fixed number of lines so a long prompt can't blow up the card's height and
-     overlap whatever's laid out below it on the canvas — full text is still in the node
-     inspector on the right when the card is selected.
-     Only -webkit-line-clamp constrains the box height here — a redundant max-height used to
-     sit alongside it and, for AI-generated prompts long enough to actually hit the 3-line
-     limit, its px-rounded value came out fractionally shorter than the clamp's own computed
-     height, so overflow:hidden clipped mid-line-3 instead of at the clamp's ellipsis boundary,
-     visually overlapping the outcomes row directly below it. Dropped the max-height entirely;
-     -webkit-box-orient:vertical alone is sufficient to cap the height at 3 lines. */
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+  /* Clamp to 3 lines so a long prompt can't blow up the card's height and overlap whatever's
+     laid out below it — full text is still in the node inspector when the card is selected.
+     Previously used -webkit-line-clamp, which in real Chromium rendering can leave a cropped
+     sliver of the 4th line peeking through (the clamped line isn't fully removed from layout,
+     just visually cut by the box's rounded height) — worse than a plain truncation since a
+     half-cut line of glyphs reads as broken, not "there's more text". A hard pixel height that
+     is an exact multiple of a pixel (not em/rem, which round to fractional px and are what
+     caused the sliver) line-height guarantees the boundary always falls exactly between two
+     lines, never through the middle of one. */
+  /* The global `* { box-sizing: border-box }` rule means max-height on its own would count
+     this element's own padding (0.5rem + 0.6rem ≈ 17.6px) against the 51px budget, leaving
+     room for only ~2 lines of actual text before overflow:hidden clipped the 3rd — content-box
+     scopes max-height to just the text content, independent of padding, so all 3 full lines
+     (3 × 17px) actually fit. */
+  box-sizing: content-box;
+  max-height: 51px;
   overflow: hidden;
 }
 .flow-graph-node .react-flow__handle {
@@ -1157,6 +1170,35 @@ kbd.kbd { display: inline-flex; align-items: center; justify-content: center; mi
   padding: 0.3rem 0.6rem;
   font-size: 0.72rem;
   color: var(--text-2);
+}
+/* Workflow graph only (WorkflowGraphNode.tsx) — outcomes rendered as wrapped chips instead of
+   the plain divider-row list above (still used by the older FlowGraphNode.tsx), so a node's
+   branches read as selectable options at a glance rather than a small data table. */
+.flow-graph-node-outcomes-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.55rem 0.6rem 0.6rem;
+  border-top: 1px solid var(--border);
+}
+.flow-graph-node-outcome-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.22rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border: 1px solid;
+  border-radius: 999px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.flow-graph-node-outcome-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .flow-graph-node-outcome:not(:last-child) { border-bottom: 1px dashed var(--border); }
 .flow-graph-node-outcome span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1291,6 +1333,13 @@ kbd.kbd { display: inline-flex; align-items: center; justify-content: center; mi
 .prompt-editor-wrap-inline input { flex: 1; min-width: 0; }
 .prompt-editor-wrap-inline .prompt-assist { position: relative; top: 0; right: 0; flex-shrink: 0; }
 .prompt-editor-wrap-inline .prompt-assist-popover { right: 0; left: auto; }
+/* Toolbar-anchored variant: for a labeled trigger button sitting inline in a normal flex
+   toolbar (e.g. the Functions tab's "Import from cURL" / AI-assist buttons) rather than
+   tucked into a textarea's corner — a plain relative anchor, not the absolute corner-tuck
+   above, which would otherwise resolve against whatever positioned ancestor is nearest and
+   fly off to the wrong spot on the page. */
+.prompt-assist-toolbar { position: relative; display: inline-flex; }
+.prompt-assist-toolbar .prompt-assist-popover { right: 0; left: auto; }
 .prompt-assist-trigger {
   display: flex; align-items: center; justify-content: center;
   width: 1.9rem; height: 1.9rem; padding: 0; min-height: 0;
@@ -1309,6 +1358,51 @@ kbd.kbd { display: inline-flex; align-items: center; justify-content: center; mi
 }
 .prompt-assist-popover textarea { font-size: 0.82rem; min-height: 0; }
 .prompt-assist-popover .notice.error { font-size: 0.76rem; padding: 0.4rem 0.5rem; }
+/* "Refine with AI" review overlay — covers the actual textarea (its wrapper, .prompt-editor-wrap,
+   is already position:relative) with a tracked-changes view of the proposed edit, rather than
+   silently swapping the field's text and leaving the user to reread the whole thing to spot
+   what changed. Sits fully on top rather than beside it since the diff needs the same width/
+   height budget the real text does. */
+.prompt-assist-review-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.prompt-assist-review-bar {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.prompt-assist-review-followup { flex: 1; min-width: 0; }
+.prompt-assist-review-actions {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.prompt-assist-review-actions button { flex: 1; }
+.prompt-diff-view {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.prompt-diff-del { color: var(--danger); background: var(--danger-bg); text-decoration: line-through; text-decoration-color: var(--danger); }
+.prompt-diff-ins { color: var(--success); background: var(--success-bg); text-decoration: none; }
 .json-panel { padding: 0.85rem; }
 .json-editor { width: 100%; min-height: 260px; font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 0.8rem; line-height: 1.5; background: var(--surface-2); border-color: var(--border); }
 .json-editor[aria-invalid="true"] { border-color: var(--danger); outline: 1px solid var(--danger); }
