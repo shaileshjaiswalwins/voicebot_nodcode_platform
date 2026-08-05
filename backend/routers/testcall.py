@@ -87,6 +87,7 @@ async def start_test_call(payload: TestCallStartRequest, user: dict = Depends(re
             "city": payload.city,
             "custom_lead_json": payload.custom_lead_json,
             "pre_call_params": payload.pre_call_params,
+            "dynamic_variables": payload.dynamic_variables,
             "test_mode": True,
         }
     )

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AlertTriangle, ChevronRight, PhoneCall, Play, Square } from 'lucide-react';
+import { AlertTriangle, ChevronRight, PhoneCall, Play, Sparkles, Square } from 'lucide-react';
 import type { Bot as BotType, BotVersion, RuntimeSettings } from '../api';
 import { api } from '../api';
 import type { CustomFunction, TestCallStatus, TestForm } from '../types';
@@ -101,6 +101,93 @@ function PreCallFunctionFields({
   );
 }
 
+/** One field per bot-declared dynamic variable (BotConfig.dynamic_variables), so the tester
+ * can supply {{var_name}} values for this test call the same way pre_call query params
+ * already work above — falls back to the variable's own default_value (set in the prompt
+ * editor) when left blank here. */
+function DynamicVariableFields({
+  variables,
+  values,
+  onChange,
+}: {
+  variables: { name: string; default_value?: string }[];
+  values: Record<string, string>;
+  onChange: (key: string, value: string) => void;
+}) {
+  if (!variables.length) return null;
+  return (
+    <div>
+      <div className="test-section-label">Dynamic variables</div>
+      <div className="test-rail-fields">
+        {variables.map((v) => (
+          <label key={v.name}>
+            {v.name}
+            <input
+              value={values[v.name] ?? ''}
+              placeholder={v.default_value || `Enter ${v.name}…`}
+              onChange={(e) => onChange(v.name, e.target.value)}
+            />
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** "What went wrong?" trigger for a just-ended test call — one click feeds the transcript +
+ * close note/error to the backend and shows back a plain-English diagnosis + suggested fix,
+ * so the user doesn't have to reverse-engineer the transcript by hand. */
+function TriageButton({
+  roomName,
+  status,
+  error,
+  closeNote,
+  onTriage,
+}: {
+  roomName: string;
+  status: TestCallStatus;
+  error: string;
+  closeNote: string;
+  onTriage: (roomName: string, status: TestCallStatus, error: string, closeNote: string) => Promise<{ diagnosis: string; transcript_found: boolean }>;
+}) {
+  const [state, setState] = useState<'idle' | 'running' | 'failed'>('idle');
+  const [result, setResult] = useState<{ diagnosis: string; transcript_found: boolean } | null>(null);
+  const [errMsg, setErrMsg] = useState('');
+
+  async function run() {
+    setState('running');
+    setErrMsg('');
+    setResult(null);
+    try {
+      const res = await onTriage(roomName, status, error, closeNote);
+      setResult(res);
+      setState('idle');
+    } catch (e) {
+      setErrMsg(e instanceof Error ? e.message : 'Triage failed.');
+      setState('failed');
+    }
+  }
+
+  return (
+    <div style={{ marginTop: '0.5rem' }}>
+      <button type="button" onClick={run} disabled={state === 'running'} style={{ fontSize: '0.78rem' }}>
+        <Sparkles size={13} /> {state === 'running' ? 'Analyzing…' : 'What went wrong?'}
+      </button>
+      {state === 'failed' && <div className="notice error" role="alert" style={{ marginTop: '0.4rem', fontSize: '0.78rem' }}>{errMsg}</div>}
+      {result && (
+        <div style={{ marginTop: '0.5rem', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.6rem 0.75rem', fontSize: '0.8rem', background: 'var(--surface-2)', whiteSpace: 'pre-wrap' }}>
+          {!result.transcript_found && (
+            <div style={{ color: 'var(--muted)', fontStyle: 'italic', marginBottom: '0.4rem' }}>
+              No transcript found for this call yet — diagnosis is based only on the session status/error.
+            </div>
+          )}
+          {result.diagnosis}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TestCallPanel({
   bots,
   selectedBot,
@@ -108,6 +195,7 @@ export function TestCallPanel({
   onSelectBot,
   runtimeSettings,
   functions,
+  dynamicVariables,
   form,
   setForm,
   status,
@@ -125,6 +213,7 @@ export function TestCallPanel({
   onLiveKitError,
   onMicChange,
   onAudioReady,
+  onTriage,
   variant = 'page'
 }: {
   bots: BotType[];
@@ -133,6 +222,7 @@ export function TestCallPanel({
   onSelectBot: (botId: string) => void;
   runtimeSettings: RuntimeSettings | null;
   functions?: CustomFunction[];
+  dynamicVariables?: { name: string; default_value?: string }[];
   form: TestForm;
   setForm: React.Dispatch<React.SetStateAction<TestForm>>;
   status: TestCallStatus;
@@ -150,6 +240,10 @@ export function TestCallPanel({
   onLiveKitError: (err: Error) => void;
   onMicChange: (enabled: boolean) => void;
   onAudioReady: (ready: boolean) => void;
+  /** "What went wrong?" button: sends the just-ended call's room/status/error/close-note to
+   * the backend, which pairs it with the transcript and current bot instructions for a
+   * plain-English diagnosis. Optional — omitted where there's no bot_id yet to scope it to. */
+  onTriage?: (roomName: string, status: TestCallStatus, error: string, closeNote: string) => Promise<{ diagnosis: string; transcript_found: boolean }>;
   /**
    * 'page'  — the standalone two-column /test screen (legacy).
    * 'rail'  — a single-column panel docked beside the agent builder. The agent is the one
@@ -191,6 +285,10 @@ export function TestCallPanel({
 
   function updatePreCallParam(key: string, value: string) {
     setForm((current) => ({ ...current, pre_call_params: { ...current.pre_call_params, [key]: value } }));
+  }
+
+  function updateDynamicVariable(key: string, value: string) {
+    setForm((current) => ({ ...current, dynamic_variables: { ...current.dynamic_variables, [key]: value } }));
   }
 
   // Prefer the saved runtime setting; fall back to the backend's actual env var
@@ -256,6 +354,7 @@ export function TestCallPanel({
         </label>
 
         <PreCallFunctionFields functions={functions || []} values={form.pre_call_params} onChange={updatePreCallParam} />
+        <DynamicVariableFields variables={dynamicVariables || []} values={form.dynamic_variables} onChange={updateDynamicVariable} />
 
         <div className="button-row test-rail-actions">
           <button
@@ -295,6 +394,9 @@ export function TestCallPanel({
               <Metric label="Bot audio" value={remoteAudioReady ? 'connected' : 'waiting'} />
             </div>
             {closeNote && <p className="session-close-note">{closeNote}</p>}
+            {onTriage && roomName && (status === 'Failed' || Boolean(closeNote) || Boolean(error)) && (
+              <TriageButton roomName={roomName} status={status} error={error} closeNote={closeNote} onTriage={onTriage} />
+            )}
           </div>
         )}
 
@@ -356,6 +458,7 @@ export function TestCallPanel({
           </div>
         </div>
         <PreCallFunctionFields functions={functions || []} values={form.pre_call_params} onChange={updatePreCallParam} />
+        <DynamicVariableFields variables={dynamicVariables || []} values={form.dynamic_variables} onChange={updateDynamicVariable} />
 
         <div className="button-row">
           <button className={error ? 'fallback-button' : 'primary'} onClick={onStart} disabled={!selectedBot || starting}>
@@ -392,6 +495,9 @@ export function TestCallPanel({
             <Metric label="Bot audio" value={remoteAudioReady ? 'connected' : 'waiting'} />
           </div>
           {closeNote && <p className="session-close-note">{closeNote}</p>}
+          {onTriage && roomName && (status === 'Failed' || Boolean(closeNote) || Boolean(error)) && (
+            <TriageButton roomName={roomName} status={status} error={error} closeNote={closeNote} onTriage={onTriage} />
+          )}
         </div>
         {errorBlock}
       </div>
