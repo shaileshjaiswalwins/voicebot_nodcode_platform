@@ -492,6 +492,23 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _call_vars.setdefault("mobile", _room_mobile)
     _call_vars.setdefault("call_id", call_state.get("call_id") or room_name)
 
+    # Bot-declared dynamic variables (BotConfig.dynamic_variables, dashboard prompt editor):
+    # seed each one's default_value first, then let a test call's tester-supplied values
+    # (dashboard's "Dynamic Variables" panel, carried in room metadata) override — reuses
+    # the exact {{var}} interpolation call_state["vars"] already feeds into both the system
+    # prompt (line 528) and the opening line (line 2381), so no new substitution engine is
+    # needed. Real production calls never carry this metadata key, so this is a no-op there
+    # beyond the config-declared defaults.
+    for _dv in (_bot_config.get("dynamic_variables") or []):
+        _dv_name = _dv.get("name") if isinstance(_dv, dict) else None
+        if _dv_name:
+            _call_vars.setdefault(_dv_name, _dv.get("default_value", ""))
+    _meta_dynamic_vars = _room_meta_raw.get("dynamic_variables")
+    if isinstance(_meta_dynamic_vars, dict):
+        for _dv_key, _dv_val in _meta_dynamic_vars.items():
+            if _dv_val:
+                _call_vars[_dv_key] = _dv_val
+
     _pre_call_params = {
         "lead_id": _call_vars["lead_id"],
         "mobile": _call_vars["mobile"],
