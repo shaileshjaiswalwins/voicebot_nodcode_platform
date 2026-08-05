@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState, useEffect } from 'react';
 import {
   Background,
   Controls,
@@ -11,9 +11,10 @@ import {
 } from '@xyflow/react';
 import type { Connection, Edge, Node, NodeChange, EdgeChange, ReactFlowInstance, XYPosition } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { BookOpen, CheckCircle2, GitBranch, LayoutGrid, Plus, XCircle } from 'lucide-react';
+import { BookOpen, CheckCircle2, GitBranch, LayoutGrid, Plus, Sparkles, XCircle } from 'lucide-react';
 
 import type { WorkflowGraphDef, WorkflowNode, WorkflowNodeKind, WorkflowNodeData } from '../api';
+import type { CustomFunction } from '../types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Dialog } from '../components/Dialog';
 import { workflowNodeTypes, wfNodeOutcomes, WF_NODE_TYPE_META } from '../components/WorkflowGraphNode';
@@ -57,13 +58,27 @@ function toRfEdges(nodes: WorkflowNode[], edges: WorkflowGraphDef['edges']): Edg
   return edges.map((e, i) => {
     const sourceNode = e.source ? nodesById.get(e.source) : undefined;
     const outcome = sourceNode && e.sourceHandle ? wfNodeOutcomes(sourceNode).find((o) => o.id === e.sourceHandle) : undefined;
+    // Solid, source-colored lines rather than react-flow's default dashed/marching-ants
+    // `animated` style — a call-script graph is a fixed, decided path, not something mid-flight,
+    // so a dashed "tentative" line was sending the wrong signal about every edge in the graph.
+    const color = sourceNode ? WF_NODE_TYPE_META[sourceNode.data.kind].color : 'var(--muted)';
     return {
       id: e.id || `edge_${i}`,
       source: e.source,
       target: e.target,
       sourceHandle: e.sourceHandle || undefined,
+      // The floating label on the line itself (which branch this edge is) turned out to matter
+      // for readability even though the source node's own outcome chip already names it —
+      // removing it made the graph read as a bare wiring diagram. Styled as a solid pill rather
+      // than react-flow's plain default text so it doesn't visually merge into the dotted
+      // canvas background or the edge line under it.
       label: outcome?.label || undefined,
-      animated: Boolean(e.sourceHandle),
+      labelBgPadding: [6, 4] as [number, number],
+      labelBgBorderRadius: 999,
+      labelBgStyle: { fill: 'var(--surface)', stroke: color, strokeWidth: 1 },
+      labelStyle: { fill: color, fontWeight: 700, fontSize: 11 },
+      type: 'smoothstep',
+      style: { stroke: color, strokeWidth: 1.75 },
     };
   });
 }
@@ -75,6 +90,63 @@ function validateWorkflow(wf: WorkflowGraphDef): string[] {
   if (startNodes.length === 0) issues.push('Add a Start node — every flow needs exactly one entry point.');
   if (startNodes.length > 1) issues.push('Only one Start node is allowed — remove the extra one.');
   if (!wf.nodes.some((n) => n.data.kind === 'end_call')) issues.push('Add at least one End Call node so the bot knows how to hang up.');
+
+  // Reachability — BFS from Start over edges, same walk autoLayout does for row-assignment.
+  // Global nodes fire from anywhere by design, so they're exempt from this check.
+  const startId = startNodes[0]?.id;
+  if (startId) {
+    const outgoing = new Map<string, string[]>(wf.nodes.map((n) => [n.id, []]));
+    for (const e of wf.edges) {
+      if (outgoing.has(e.source)) outgoing.get(e.source)!.push(e.target);
+    }
+    const reachable = new Set<string>([startId]);
+    let frontier = [startId];
+    while (frontier.length > 0) {
+      const next: string[] = [];
+      for (const id of frontier) {
+        for (const child of outgoing.get(id) || []) {
+          if (!reachable.has(child)) {
+            reachable.add(child);
+            next.push(child);
+          }
+        }
+      }
+      frontier = next;
+    }
+    for (const n of wf.nodes) {
+      if (n.data.kind !== 'global' && !reachable.has(n.id)) {
+        issues.push(`"${n.id}" is unreachable — no path from Start leads to it.`);
+      }
+    }
+  }
+
+  // Conversation nodes with no outgoing transition, or a transition not wired to an edge.
+  for (const n of wf.nodes) {
+    if (n.data.kind !== 'conversation') continue;
+    const transitions = n.data.transitions || [];
+    if (transitions.length === 0) {
+      issues.push(`"${n.id}" is a conversation node with no transitions — the call has nowhere to go after it.`);
+      continue;
+    }
+    const wiredHandles = new Set(wf.edges.filter((e) => e.source === n.id).map((e) => e.sourceHandle));
+    for (const t of transitions) {
+      if (!wiredHandles.has(t.id)) {
+        issues.push(`"${n.id}" transition "${t.label || t.id}" has no outgoing edge connected to it.`);
+      }
+    }
+  }
+
+  // Condition nodes missing a catch-all fallback branch.
+  for (const n of wf.nodes) {
+    if (n.data.kind !== 'condition') continue;
+    const conditions = n.data.conditions || [];
+    if (conditions.length === 0) {
+      issues.push(`"${n.id}" is a condition node with no conditions defined.`);
+    } else if (!conditions.some((c) => c.is_fallback)) {
+      issues.push(`"${n.id}" has no fallback branch — add a catch-all condition for values that match none of the others.`);
+    }
+  }
+
   return issues;
 }
 
@@ -249,12 +321,100 @@ function WorkflowCanvas({
   );
 }
 
+/** Sparkles trigger + popover for "Refine workflow with AI" — same interaction shape as
+ * BotConfigTabs' PromptAssistButton (click Sparkles, describe the change, apply) but edits a
+ * full WorkflowGraphDef instead of a text field, so it needs its own component: the apply step
+ * has to update three fields at once (workflow/functions/global_prompt) and re-run autoLayout
+ * + refit, none of which the text-only widget's onApply(text: string) shape can express. */
+function WorkflowRefineButton({ onRefine, disabled }: { onRefine: (instruction: string) => Promise<void>; disabled?: boolean }) {
+  const [instruction, setInstruction] = useState('');
+  const [state, setState] = useState<'idle' | 'running' | 'failed'>('idle');
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent) {
+      // `Node` in this file's scope is @xyflow/react's flow-node type (imported above), not
+      // the DOM Node interface — globalThis.Node disambiguates.
+      if (ref.current && !ref.current.contains(e.target as globalThis.Node)) setOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  const handleRefine = async () => {
+    if (!instruction.trim()) return;
+    setState('running');
+    setError('');
+    try {
+      await onRefine(instruction.trim());
+      setInstruction('');
+      setState('idle');
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Refine failed.');
+      setState('failed');
+    }
+  };
+
+  return (
+    <div className="prompt-assist" ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
+      <button type="button" disabled={disabled} title="Describe a change to make to the graph — add/remove steps, branches, or API calls" onClick={() => setOpen((v) => !v)}>
+        <Sparkles size={14} /> Refine with AI
+      </button>
+      {open && (
+        <div className="prompt-assist-popover" style={{ right: 0, left: 'auto', minWidth: '320px' }}>
+          <textarea
+            rows={3}
+            autoFocus
+            placeholder='e.g. "add a step before ending the call that asks if they want a reminder text" or "also handle the case where the caller wants to reschedule"'
+            value={instruction}
+            disabled={state === 'running'}
+            onChange={(e) => setInstruction(e.target.value)}
+          />
+          <button type="button" className="primary" disabled={state === 'running' || !instruction.trim()} onClick={handleRefine}>
+            <Sparkles size={13} /> {state === 'running' ? 'Updating graph…' : 'Apply change'}
+          </button>
+          {state === 'failed' && <div className="notice error" role="alert">{error}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function WorkflowBuilderView({
   workflow,
   onChange,
+  functions = [],
+  onFunctionsChange,
+  globalPrompt = '',
+  onGlobalPromptChange,
+  onRefineWithAI,
 }: {
   workflow: WorkflowGraphDef;
   onChange: (wf: WorkflowGraphDef) => void;
+  /** The three fields "Refine with AI" can touch — all optional so existing callers that
+   * don't wire them simply don't get the Refine button (see the `onRefineWithAI &&` guard
+   * below), rather than needing every call site updated in lockstep with this feature. */
+  functions?: CustomFunction[];
+  onFunctionsChange?: (fns: CustomFunction[]) => void;
+  globalPrompt?: string;
+  onGlobalPromptChange?: (text: string) => void;
+  onRefineWithAI?: (
+    instruction: string,
+    currentWorkflow: WorkflowGraphDef,
+    currentFunctions: CustomFunction[],
+    currentGlobalPrompt: string,
+  ) => Promise<{ global_prompt: string; workflow: WorkflowGraphDef; functions: CustomFunction[] }>;
 }) {
   const wf = workflow || { nodes: [], edges: [] };
   const [selectedNodeId, setSelectedNodeId] = useState<string>('');
@@ -267,6 +427,20 @@ export function WorkflowBuilderView({
    * canvas looking empty (the ReactFlow `fitView` prop only ever applies on first mount). */
   function handleAutoArrange() {
     onChange(autoLayout(wf));
+    setTimeout(() => rfInstance?.fitView({ padding: 0.2 }), 60);
+  }
+
+  /** Applies a "Refine with AI" result the same way handleAutoArrange applies a manual
+   * re-layout: swap in the new graph (re-laid-out with the builder's own algorithm, not
+   * whatever positions the backend guessed — same reasoning as Create workflow with AI), then
+   * refit once the new positions have rendered. Also pushes the returned functions/global_prompt
+   * back up, since a refine instruction can touch either. */
+  async function handleRefine(instruction: string) {
+    if (!onRefineWithAI) return;
+    const result = await onRefineWithAI(instruction, wf, functions, globalPrompt);
+    onChange(autoLayout(result.workflow));
+    onFunctionsChange?.(result.functions);
+    onGlobalPromptChange?.(result.global_prompt);
     setTimeout(() => rfInstance?.fitView({ padding: 0.2 }), 60);
   }
 
@@ -389,6 +563,7 @@ export function WorkflowBuilderView({
           </span>
         </div>
         <div className="flow-toolbar-actions">
+          {onRefineWithAI && <WorkflowRefineButton onRefine={handleRefine} disabled={wf.nodes.length === 0} />}
           <button disabled={wf.nodes.length === 0} onClick={handleAutoArrange} title="Recompute a clean top-to-bottom layout from the Start node — useful after seeding/importing a graph whose positions overlap">
             <LayoutGrid size={14} /> Auto arrange
           </button>

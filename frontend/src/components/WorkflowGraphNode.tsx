@@ -119,11 +119,11 @@ export function WorkflowGraphNode({ data, selected }: { data: WorkflowGraphNodeD
         {isGlobal && <span className="flow-graph-node-terminal-tag" style={{ color: meta.color, background: meta.bg }}>Global</span>}
         {needsAttention && <span className="flow-graph-node-terminal-tag" style={{ color: '#dc2626', background: '#fef2f2' }}>Needs URL</span>}
       </div>
-      <div className="flow-graph-node-body">&ldquo;{body}&rdquo;</div>
+      <div className="flow-graph-node-body">{body}</div>
       {outcomes.length > 0 && (
-        <div className="flow-graph-node-outcomes">
+        <div className="flow-graph-node-outcomes-chips">
           {outcomes.map((o) => (
-            <div key={o.id} className="flow-graph-node-outcome">
+            <div key={o.id} className="flow-graph-node-outcome-chip" style={{ borderColor: meta.color + '55', background: meta.bg, color: meta.color }}>
               <span>{o.label || 'Continue'}</span>
               <Handle
                 type="source"
