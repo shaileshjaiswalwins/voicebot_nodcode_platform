@@ -295,6 +295,9 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--primary); outlin
    flex row, which wrapped unpredictably (each control landing on its own line) once the
    window got narrower than the sum of every control's natural width. */
 .agents-toolbar { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 0.85rem; }
+/* A third of the toolbar — the agent names it searches are short, so a full-width field
+   just left a long empty box under the header. Widens back to full on narrow viewports. */
+.agents-search { width: 33%; min-width: 240px; }
 .agents-search input { width: 100%; }
 .agents-toolbar-controls { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .agents-toolbar-controls button.active { background: var(--primary-bg); color: var(--primary); border-color: var(--primary-bg); }
@@ -965,6 +968,7 @@ kbd.kbd { display: inline-flex; align-items: center; justify-content: center; mi
   .transcripts-grid { grid-template-columns: 1fr; }
   .flow-builder-grid { grid-template-columns: 1fr; height: auto; }
   .table-scroll table { min-width: 480px; }
+  .agents-search { width: 100%; min-width: 0; }
   .login-screen form { width: 90%; max-width: 320px; }
   .admin-tools-grid { grid-template-columns: 1fr; }
   .phone-detail-grid { grid-template-columns: repeat(2, 1fr); }
