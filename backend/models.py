@@ -220,6 +220,11 @@ class WorkflowGraphDef(BaseModel):
     edges: list[WorkflowEdge] = Field(default_factory=list)
 
 
+class DynamicVariable(BaseModel):
+    name: str
+    default_value: str = ""
+
+
 class BotConfig(BaseModel):
     """Mirrors RuntimeConfig in frontend/src/types.ts — the fields a PM can edit.
 
@@ -245,6 +250,11 @@ class BotConfig(BaseModel):
     voice: str = ""
     system_prompt: str = ""
     initial_message: str = ""
+    # PM-declared placeholders usable as {{var_name}} in system_prompt/initial_message.
+    # default_value is what a real call falls back to when the caller (test-call payload
+    # or, in future, lead data) doesn't supply that variable — keeps {{var_name}} from
+    # ever reaching the caller verbatim if it's left unfilled.
+    dynamic_variables: list[DynamicVariable] = Field(default_factory=list)
     call_end_text: str = ""
     inactivity_end_text: str = ""
     close_markers: list[str] = Field(default_factory=list)
@@ -590,6 +600,10 @@ class TestCallStartRequest(BaseModel):
     # param name (flat across all pre_call functions — matches how bot.py's _pre_call_params
     # already merges lead_id/mobile/call_id into every pre_call function's request args).
     pre_call_params: dict[str, str] = Field(default_factory=dict)
+    # Tester-supplied values for the bot's declared dynamic_variables (BotConfig above),
+    # keyed by variable name. Falls back to each variable's own default_value in bot.py
+    # when a name here is missing/blank.
+    dynamic_variables: dict[str, str] = Field(default_factory=dict)
 
 
 class TestCallStopRequest(BaseModel):
@@ -627,6 +641,31 @@ class GenerateAgentRequest(BaseModel):
     """Create Agent > Create with AI: a free-text description of the agent to build."""
 
     description: str
+
+
+class GenerateFunctionRequest(BaseModel):
+    """Functions tab AI-assist: paste an API description / curl example / docs snippet and
+    have the method/url/headers/query_params/parameters/store_variables filled in."""
+
+    description: str
+
+
+class SummarizeVersionDiffRequest(BaseModel):
+    """VersionDiffModal's AI summary: the already-computed {field: {old, new}} diff, keyed by
+    top-level config field, for the PM-friendly plain-English summary."""
+
+    diffs: dict[str, Any]
+
+
+class TriageTestCallRequest(BaseModel):
+    """Test panel's "What went wrong?" button: identifies the test call by room name (its
+    call_id in the transcripts collection) so the transcript can be looked up server-side,
+    plus whatever client-side error/close note the test session already surfaced."""
+
+    room_name: str
+    status: str = ""
+    error: str = ""
+    close_note: str = ""
 
 
 class GenerateWorkflowRequest(BaseModel):

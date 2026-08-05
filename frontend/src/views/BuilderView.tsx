@@ -401,10 +401,14 @@ export function BuilderView({
                   ? (fn: CustomFunction, args: Record<string, unknown>) => api.testCustomFunction(selectedBot!._id, fn, args)
                   : undefined
               }
+              onGenerateFunction={(description) => api.generateFunction(description)}
               onGeneratePrompt={
                 selectedBot?._id
                   ? (mode, instruction, currentPrompt, target) => api.generatePrompt(selectedBot!._id, mode, instruction, currentPrompt, target)
                   : undefined
+              }
+              onRefineWorkflow={(instruction, currentWorkflow, currentFunctions, currentGlobalPrompt) =>
+                api.refineWorkflow(instruction, currentWorkflow || { nodes: [], edges: [] }, currentFunctions, currentGlobalPrompt)
               }
             />
           </div>

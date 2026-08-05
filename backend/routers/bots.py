@@ -20,16 +20,22 @@ from ..models import (
     CompileFlowPreviewRequest,
     FunctionTestRequest,
     GenerateAgentRequest,
+    GenerateFunctionRequest,
     GenerateWorkflowRequest,
     GeneratePromptRequest,
     LlmChatReplyRequest,
     LlmChatSimulateRequest,
+    SummarizeVersionDiffRequest,
+    TriageTestCallRequest,
 )
 from ..prompt_assist import (
     generate_agent_from_description,
+    generate_function_from_description,
     generate_prompt,
     generate_workflow_from_description,
     refine_workflow_from_instruction,
+    summarize_version_diff,
+    triage_test_call,
 )
 
 # flow_compiler.py lives at the repo root (shared with bot.py/bot_pipeline.py/bot_dev.py),
@@ -310,6 +316,35 @@ def generate_workflow(payload: GenerateWorkflowRequest, _: dict = Depends(requir
     return result
 
 
+@router.post("/generate-function")
+def generate_function(payload: GenerateFunctionRequest, _: dict = Depends(require_user)) -> dict:
+    """Functions tab AI-assist button: paste a curl example / API description / docs snippet,
+    get back a draft CustomFunction (method/url/headers/params/store_variables) to review
+    before saving. No bot lookup needed — same free-standing shape as /generate-agent."""
+    if not payload.description.strip():
+        raise HTTPException(400, "description is required")
+    try:
+        result = generate_function_from_description(payload.description)
+    except Exception as exc:
+        raise HTTPException(502, f"Function generation failed: {exc}") from exc
+    return result
+
+
+@router.post("/summarize-version-diff")
+def summarize_version_diff_endpoint(payload: SummarizeVersionDiffRequest, _: dict = Depends(require_user)) -> dict:
+    """VersionDiffModal AI summary: the caller has already computed the {field: {old, new}}
+    diff client-side (same logic the modal renders from) — this just narrates it in plain
+    English for a PM reviewing before publish. No bot_id needed, same free-standing shape as
+    /generate-agent."""
+    if not payload.diffs:
+        raise HTTPException(400, "diffs is required")
+    try:
+        summary = summarize_version_diff(payload.diffs)
+    except Exception as exc:
+        raise HTTPException(502, f"Diff summary failed: {exc}") from exc
+    return {"summary": summary}
+
+
 @router.get("/{bot_id}")
 def get_bot(bot_id: str, _: dict = Depends(require_user)) -> dict:
     bot = bots.find_one({"_id": _oid(bot_id)})
@@ -366,6 +401,35 @@ def llm_chat_simulate_turn(bot_id: str, payload: LlmChatSimulateRequest, _: dict
     except Exception as exc:
         raise HTTPException(502, f"Simulated chat failed: {exc}") from exc
     return result
+
+
+@router.post("/{bot_id}/triage-test-call")
+def triage_test_call_endpoint(bot_id: str, payload: TriageTestCallRequest, _: dict = Depends(require_user)) -> dict:
+    """Test panel's "What went wrong?" button: looks up the just-ended test call's transcript
+    by room name (its call_id — see testcall.py's start_test_call, which defaults call_id to
+    room_name), pairs it with the bot's current live instructions, and asks Gemini for a
+    plain-English diagnosis + concrete fix."""
+    bot = bots.find_one({"_id": _oid(bot_id)})
+    if not bot:
+        raise HTTPException(404, "Bot not found")
+    if not payload.room_name.strip():
+        raise HTTPException(400, "room_name is required")
+
+    doc = transcripts.find_one({"call_id": payload.room_name}, sort=[("created_at", -1)])
+    transcript = (doc or {}).get("transcript") or []
+
+    target_id = bot.get("active_version_id") or bot.get("draft_version_id")
+    version = bot_versions.find_one({"_id": _oid(target_id)}) if target_id else None
+    if not version:
+        version = bot_versions.find_one({"bot_id": _oid(bot_id)}, sort=[("version", -1)])
+    config = (version or {}).get("config") or {}
+    instructions = config.get("system_prompt") or config.get("global_prompt") or ""
+
+    try:
+        diagnosis = triage_test_call(transcript, payload.status, payload.error, payload.close_note, instructions)
+    except Exception as exc:
+        raise HTTPException(502, f"Triage failed: {exc}") from exc
+    return {"diagnosis": diagnosis, "transcript_found": doc is not None}
 
 
 @router.get("/{bot_id}/functions")
