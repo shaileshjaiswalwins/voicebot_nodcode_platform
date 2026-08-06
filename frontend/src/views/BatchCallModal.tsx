@@ -174,7 +174,7 @@ export function BatchCallModal({ onClose, onCreated }: { onClose: () => void; on
         </label>
 
         <fieldset className="full" style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '0.75rem 1rem' }}>
-          <legend style={{ fontSize: '0.85rem', fontWeight: 600 }}>Dialer settings (required — sent to TSPL on every call)</legend>
+          <legend style={{ fontSize: 'var(--font-size-lg)', fontWeight: 600 }}>Dialer settings (required — sent to TSPL on every call)</legend>
           {showDevDefaultsButton && (
             <button type="button" onClick={loadDevDefaults} style={{ marginBottom: '0.6rem' }}>
               <Sparkles size={14} /> Load default values for dev

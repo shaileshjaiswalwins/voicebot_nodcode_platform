@@ -52,20 +52,20 @@ export function FallbackEventsPanel() {
           <RefreshCw size={14} />
         </button>
       </div>
-      <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginTop: 0 }}>
+      <p style={{ fontSize: 'var(--font-size-lg)', color: 'var(--muted)', marginTop: 0 }}>
         Calls that ran on the hardcoded default assistant instead of the bot you actually configured —
         this happens when a test call's bot_id/version couldn't be resolved (missing metadata, a bad ID,
         or the platform database being briefly unreachable). It is <em>not</em> caused by which LiveKit
         worker picked up the call — a worker either runs your bot's real config or this fallback; it
         doesn't matter which process answered.
       </p>
-      {error && <p style={{ color: 'var(--error, #c0392b)' }}>{error}</p>}
+      {error && <p style={{ color: 'var(--error, #e5342b)' }}>{error}</p>}
       {events && events.length === 0 && !error && (
-        <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>None recorded — good sign.</p>
+        <p style={{ fontSize: 'var(--font-size-lg)', color: 'var(--muted)' }}>None recorded — good sign.</p>
       )}
       {events && events.length > 0 && (
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', fontSize: '0.82rem', borderCollapse: 'collapse' }}>
+          <table style={{ width: '100%', fontSize: 'var(--font-size-md)', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
                 <th style={{ padding: '0.3rem 0.5rem' }}>When</th>
@@ -76,7 +76,7 @@ export function FallbackEventsPanel() {
             </thead>
             <tbody>
               {events.map((e) => (
-                <tr key={e._id} style={{ borderTop: '1px solid var(--border, #e5e5e5)' }}>
+                <tr key={e._id} style={{ borderTop: '1px solid var(--border, #e1e4ea)' }}>
                   <td style={{ padding: '0.3rem 0.5rem', whiteSpace: 'nowrap' }}>
                     {new Date(e.created_at).toLocaleString()}
                   </td>

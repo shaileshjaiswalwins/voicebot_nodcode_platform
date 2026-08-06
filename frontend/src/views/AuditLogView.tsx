@@ -6,6 +6,7 @@ import { CopyableId } from '../components/CopyableId';
 import { TimeAgo } from '../components/TimeAgo';
 import { EmptyState } from '../components/EmptyState';
 import { SkeletonTableBody } from '../components/SkeletonTableBody';
+import { IconButton } from '../components/ui/icon-button';
 import { titleCase } from '../utils/formatting';
 
 const PAGE_SIZE = 50;
@@ -59,13 +60,13 @@ export function AuditLogView() {
             <p>Every admin mutation — publish, rollback, delete, reassign, and settings changes — recorded with who did it and when.</p>
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <select value={resourceType} onChange={(e) => setResourceType(e.target.value)} style={{ fontSize: '0.85rem' }}>
+            <select value={resourceType} onChange={(e) => setResourceType(e.target.value)} style={{ fontSize: 'var(--font-size-lg)' }}>
               <option value="">All resource types</option>
               {RESOURCE_TYPES.map((t) => <option key={t} value={t}>{titleCase(t)}</option>)}
             </select>
-            <button title="Refresh" onClick={load}>
+            <IconButton title="Refresh" aria-label="Refresh" onClick={load}>
               <RefreshCw size={14} />
-            </button>
+            </IconButton>
           </div>
         </div>
 

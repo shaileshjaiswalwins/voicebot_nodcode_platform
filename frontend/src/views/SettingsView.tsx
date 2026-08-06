@@ -7,6 +7,7 @@ import { WorkerHealthPanel } from '../components/WorkerHealthPanel';
 import { DispatchFailuresPanel } from '../components/DispatchFailuresPanel';
 import { AuditLogView } from './AuditLogView';
 import { AdminView } from './AdminView';
+import { Spinner } from '../components/Spinner';
 import { isValidUrl } from '../utils/validation';
 import { FEEDBACK_TIMEOUT_MS } from '../constants/ui';
 
@@ -116,8 +117,8 @@ export function SettingsView({
               display: 'flex', alignItems: 'center', gap: '0.4rem',
               padding: '0.45rem 0.85rem', border: 'none', background: 'none', cursor: 'pointer',
               fontWeight: tab === t.id ? 700 : 500,
-              borderBottom: tab === t.id ? '2px solid var(--primary, #2563eb)' : '2px solid transparent',
-              color: tab === t.id ? 'var(--primary, #2563eb)' : 'var(--muted)',
+              borderBottom: tab === t.id ? '2px solid var(--primary, #116db6)' : '2px solid transparent',
+              color: tab === t.id ? 'var(--primary, #116db6)' : 'var(--muted)',
             }}
           >
             {t.icon} {t.label}
@@ -135,7 +136,11 @@ export function SettingsView({
         </>
       )}
 
-      {tab === 'general' && (
+      {tab === 'general' && !runtimeSettings && !platformSettings ? (
+        <div className="panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '200px' }}>
+          <Spinner label="Loading settings" size={22} />
+        </div>
+      ) : tab === 'general' && (
       <>
       <div className="content-grid two-col">
         <div className="panel">
@@ -176,7 +181,7 @@ export function SettingsView({
                     Environment default: <code>{runtimeSettings.livekit_agent_name_env_default}</code>
                     <button
                       type="button"
-                      style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem', minHeight: 0 }}
+                      style={{ fontSize: 'var(--font-size-sm)', padding: '0.15rem 0.5rem', minHeight: 0 }}
                       onClick={() => setDraft({ ...draft, livekit_agent_name: runtimeSettings.livekit_agent_name_env_default! })}
                     >
                       Use it
@@ -197,7 +202,7 @@ export function SettingsView({
           <div className="button-row">
             <button className="primary" onClick={() => onUpdateRuntime(draft)} disabled={runtimeUrlsInvalid}><Save size={16} /> Save runtime settings</button>
             {runtimeUrlsInvalid && (
-              <span style={{ fontSize: '0.78rem', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+              <span style={{ fontSize: 'var(--font-size-sm)', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                 <AlertTriangle size={13} /> Fix the invalid URL(s) above before saving.
               </span>
             )}
@@ -229,12 +234,12 @@ export function SettingsView({
             </h2>
             <p>Platform-wide defaults for bot behaviour. These are used when a bot has no per-bot override configured in Advanced mode.</p>
           </div>
-          <span style={{ fontSize: '0.72rem', background: 'var(--warning-bg)', color: 'var(--warning)', border: '1px solid var(--warning-border)', borderRadius: '4px', padding: '2px 8px', fontWeight: 600 }}>Admin only</span>
+          <span style={{ fontSize: 'var(--font-size-xs)', background: 'var(--warning-bg)', color: 'var(--warning)', border: '1px solid var(--warning-border)', borderRadius: '4px', padding: '2px 8px', fontWeight: 600 }}>Admin only</span>
         </div>
 
         <div className="admin-tools-grid">
           <div>
-            <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Platform defaults</div>
+            <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Platform defaults</div>
             <div className="form-grid">
               <label>
                 MIS API base URL ({platformSettings?.active_environment || 'dev'})
@@ -266,19 +271,19 @@ export function SettingsView({
                   value={adminDraft.default_close_markers}
                   onChange={(e) => setAdminDraft({ ...adminDraft, default_close_markers: e.target.value })}
                   placeholder="thank you for your time, goodbye, धन्यवाद, …"
-                  style={{ fontFamily: 'inherit', fontSize: '0.83rem' }}
+                  style={{ fontFamily: 'inherit', fontSize: 'var(--font-size-md)' }}
                 />
                 <small>Bot ends the call when any of these phrases are detected. Override per-bot in Advanced mode.</small>
               </label>
             </div>
           </div>
           <div>
-            <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Builder modes</div>
+            <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Builder modes</div>
             <div className="callout">
               <Settings size={16} />
               <div>
                 <strong>Builder modes</strong>
-                <p style={{ margin: '4px 0 0', fontSize: '0.82rem' }}>The <strong>PM</strong> toggle shows only core fields (prompt, voice, opening/closing line). The <strong>Advanced</strong> toggle reveals all admin fields. Mode is remembered per browser session.</p>
+                <p style={{ margin: '4px 0 0', fontSize: 'var(--font-size-md)' }}>The <strong>PM</strong> toggle shows only core fields (prompt, voice, opening/closing line). The <strong>Advanced</strong> toggle reveals all admin fields. Mode is remembered per browser session.</p>
               </div>
             </div>
           </div>
@@ -292,12 +297,12 @@ export function SettingsView({
               : adminSaveState === 'failed' ? 'Retry save'
               : 'Save admin settings'}
           </button>
-          <span style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
+          <span style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)' }}>
             Note: MIS API base and phrase defaults require a bot worker restart to take effect.
           </span>
         </div>
         {adminSaveState === 'failed' && (
-          <p style={{ fontSize: '0.82rem', color: 'var(--danger)', marginTop: '0.4rem' }}>
+          <p style={{ fontSize: 'var(--font-size-md)', color: 'var(--danger)', marginTop: '0.4rem' }}>
             Save failed — check the diagnostics bar above for details, then retry.
           </p>
         )}

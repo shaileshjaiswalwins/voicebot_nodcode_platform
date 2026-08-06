@@ -61,8 +61,8 @@ export function NumbersView({
               display: 'flex', alignItems: 'center', gap: '0.4rem',
               padding: '0.45rem 0.85rem', border: 'none', background: 'none', cursor: 'pointer',
               fontWeight: tab === t.id ? 700 : 500,
-              borderBottom: tab === t.id ? '2px solid var(--primary, #2563eb)' : '2px solid transparent',
-              color: tab === t.id ? 'var(--primary, #2563eb)' : 'var(--muted)',
+              borderBottom: tab === t.id ? '2px solid var(--primary, #116db6)' : '2px solid transparent',
+              color: tab === t.id ? 'var(--primary, #116db6)' : 'var(--muted)',
             }}
           >
             {t.icon} {t.label}

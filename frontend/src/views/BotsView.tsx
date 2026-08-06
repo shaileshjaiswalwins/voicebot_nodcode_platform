@@ -185,7 +185,7 @@ export function BotsView({ bots, loading, onEdit, onDelete, onNew, onDuplicate, 
               </div>
               <div className="tag-filter-list">
                 {allTags.length === 0 ? (
-                  <p className="muted" style={{ fontSize: '0.8rem', margin: '0.4rem' }}>No tags assigned yet.</p>
+                  <p className="muted" style={{ fontSize: 'var(--font-size-md)', margin: '0.4rem' }}>No tags assigned yet.</p>
                 ) : (
                   <>
                     <div className="tag-filter-section-label">Available Tags</div>
@@ -399,11 +399,6 @@ export function NewAgentWizard({
     });
   }
 
-  const previewOpening = form.initial_message
-    .replace('{agent_name}', form.agent_name || '<agent_name>')
-    .replace('{organization_name}', form.organization_name || '<org_name>')
-    .replace('{product}', '<product>');
-
   return (
     <Dialog
       title="New voice agent"
@@ -426,16 +421,14 @@ export function NewAgentWizard({
             <label>
               <span>Bot name <span style={{ color: 'var(--danger)' }}>*</span></span>
               <input value={form.name} onChange={set('name')} placeholder="e.g. JD Outbound — Hindi" autoFocus />
-              <small>A label for the agent</small>
             </label>
           </div>
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
-            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Persona</div>
+            <div style={{ fontSize: 'var(--font-size-sm)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Persona</div>
             <div className="form-grid">
               <label>
                 <span>Agent name <span style={{ color: 'var(--danger)' }}>*</span></span>
                 <input value={form.agent_name} onChange={set('agent_name')} placeholder="e.g. Tarun, Priya, Aman" />
-                <small>Name of the agent</small>
               </label>
               <label>
                 Gender
@@ -448,7 +441,7 @@ export function NewAgentWizard({
             </div>
           </div>
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
-            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Language</div>
+            <div style={{ fontSize: 'var(--font-size-sm)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Language</div>
             <div className="form-grid">
               <label>
                 Language
@@ -460,21 +453,16 @@ export function NewAgentWizard({
             </div>
           </div>
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
-            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Opening line</div>
+            <div style={{ fontSize: 'var(--font-size-sm)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Opening line</div>
             <label>
               <textarea
                 value={form.initial_message}
                 onChange={set('initial_message')}
                 rows={2}
-                style={{ fontFamily: 'inherit', fontSize: '0.85rem' }}
+                style={{ fontFamily: 'inherit', fontSize: 'var(--font-size-lg)' }}
               />
-              <small>Use <code style={{ fontSize: '0.75rem' }}>{'{product}'}</code>, <code style={{ fontSize: '0.75rem' }}>{'{agent_name}'}</code>, <code style={{ fontSize: '0.75rem' }}>{'{organization_name}'}</code> as placeholders.</small>
+              <small>Use <code style={{ fontSize: 'var(--font-size-sm)' }}>{'{product}'}</code>, <code style={{ fontSize: 'var(--font-size-sm)' }}>{'{agent_name}'}</code>, <code style={{ fontSize: 'var(--font-size-sm)' }}>{'{organization_name}'}</code> as placeholders.</small>
             </label>
-            {previewOpening && (
-              <div style={{ background: 'var(--surface-2)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.82rem', fontStyle: 'italic', marginTop: '0.4rem', color: 'var(--text-2)' }}>
-                Preview: "{previewOpening}"
-              </div>
-            )}
           </div>
         </div>
     </Dialog>

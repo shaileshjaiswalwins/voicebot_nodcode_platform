@@ -13,6 +13,7 @@ import { CopyableId } from '../components/CopyableId';
 import { BotConfigTabs } from '../components/BotConfigTabs';
 import type { BuilderTab as BuilderConfigTab } from '../components/BotConfigTabs';
 import { CostBreakdownPopover } from '../components/CostBreakdownPopover';
+import { Spinner } from '../components/Spinner';
 import { estimateAgentCost } from '../utils/agentCost';
 import { api } from '../api';
 import type { CustomFunction } from '../types';
@@ -236,6 +237,18 @@ export function BuilderView({
   const editingVer = versions.find(v => v._id === editingVersionId);
   const isPublishedVer = editingVer?.state === 'published';
 
+  // On a deep-link reload (e.g. a hard refresh on /bots/:id) this view can mount before
+  // App.tsx's loadBots() resolves, so selectedBot is briefly undefined even though
+  // workspaceMode is already 'builder'. Without this, the form below renders with
+  // defaultConfig placeholders that look like the agent's real (but wrong) settings.
+  if (!selectedBot) {
+    return (
+      <section className="builder-layout" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '300px' }}>
+        <Spinner label="Loading agent" size={24} />
+      </section>
+    );
+  }
+
   return (
     <section className="builder-layout">
       {/* ── Draft recovery banner ─────────────────────────────── */}
@@ -418,7 +431,7 @@ export function BuilderView({
       {sidePanel !== 'none' && <div className="side-panel-backdrop" onClick={() => setSidePanel('none')} />}
       <aside className={sidePanel !== 'none' ? 'side-panel open' : 'side-panel'} aria-hidden={sidePanel === 'none'}>
         <div className="side-panel-header">
-          <h2 style={{ margin: 0, fontSize: '0.95rem' }}>{sidePanel === 'versions' ? 'Version history' : 'Test Agent'}</h2>
+          <h2 style={{ margin: 0, fontSize: 'var(--font-size-lg)' }}>{sidePanel === 'versions' ? 'Version history' : 'Test Agent'}</h2>
           <button className="modal-close" onClick={() => setSidePanel('none')} aria-label="Close"><X size={16} /></button>
         </div>
 
@@ -446,9 +459,9 @@ export function BuilderView({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                       <span>v{version.version}</span>
                       <StatusPill value={version.state} />
-                      {isActive && <span style={{ fontSize: '0.68rem', background: 'var(--primary-bg)', color: 'var(--primary)', borderRadius: '4px', padding: '1px 5px', fontWeight: 600 }}>LIVE</span>}
+                      {isActive && <span style={{ fontSize: 'var(--font-size-xs)', background: 'var(--primary-bg)', color: 'var(--primary)', borderRadius: '4px', padding: '1px 5px', fontWeight: 600 }}>LIVE</span>}
                       {liveCalls > 0 && (
-                        <span style={{ fontSize: '0.68rem', background: '#dcfce7', color: '#15803d', borderRadius: '4px', padding: '1px 5px', fontWeight: 600 }}>
+                        <span style={{ fontSize: 'var(--font-size-xs)', background: 'var(--success-bg)', color: 'var(--success)', borderRadius: '4px', padding: '1px 5px', fontWeight: 600 }}>
                           {liveCalls} live
                         </span>
                       )}
@@ -458,7 +471,7 @@ export function BuilderView({
                     <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', marginTop: '0.2rem' }}>
                       {version.state === 'published' && !isActive && onRollback && (
                         <button
-                          style={{ fontSize: '0.72rem', padding: '2px 8px' }}
+                          style={{ fontSize: 'var(--font-size-xs)', padding: '2px 8px' }}
                           disabled={rolling}
                           onClick={(e) => { e.stopPropagation(); onRollback(version._id); }}
                         >
@@ -467,7 +480,7 @@ export function BuilderView({
                       )}
                       {i > 0 && onShowDiff && (
                         <button
-                          style={{ fontSize: '0.72rem', padding: '2px 8px' }}
+                          style={{ fontSize: 'var(--font-size-xs)', padding: '2px 8px' }}
                           onClick={(e) => { e.stopPropagation(); onShowDiff(versions[i - 1]._id, version._id); }}
                         >
                           <GitBranch size={11} /> vs prev

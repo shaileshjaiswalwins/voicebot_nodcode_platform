@@ -65,29 +65,29 @@ export function PublishConfirmModal({
             No active calls detected. Safe to publish.
           </div>
         )}
-        <p style={{ fontSize: '0.88rem', color: 'var(--text-2)' }}>
+        <p style={{ fontSize: 'var(--font-size-lg)', color: 'var(--text-2)' }}>
           Publishing makes v{latestDraft?.version} the active config for all <strong>new</strong> inbound and outbound calls. Existing in-flight calls are unaffected.
         </p>
         {activeVersion && (
           <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '0.6rem 0.75rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
-              <strong style={{ fontSize: '0.82rem' }}>
+              <strong style={{ fontSize: 'var(--font-size-md)' }}>
                 Changes since v{activeVersion.version} ({changedKeys.length} field{changedKeys.length === 1 ? '' : 's'})
               </strong>
               {onViewFullDiff && changedKeys.length > 0 && (
                 <button
                   type="button"
                   onClick={onViewFullDiff}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.78rem', background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0 }}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: 'var(--font-size-sm)', background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0 }}
                 >
                   <GitBranch size={13} /> View full diff
                 </button>
               )}
             </div>
             {changedKeys.length === 0 ? (
-              <p className="muted" style={{ fontSize: '0.8rem', margin: '0.35rem 0 0' }}>No config fields differ from the currently live version.</p>
+              <p className="muted" style={{ fontSize: 'var(--font-size-md)', margin: '0.35rem 0 0' }}>No config fields differ from the currently live version.</p>
             ) : (
-              <ul style={{ margin: '0.4rem 0 0', paddingLeft: '1.1rem', fontSize: '0.8rem', color: 'var(--text-2)' }}>
+              <ul style={{ margin: '0.4rem 0 0', paddingLeft: '1.1rem', fontSize: 'var(--font-size-md)', color: 'var(--text-2)' }}>
                 {changedKeys.map((k) => <li key={k}><code>{k}</code></li>)}
               </ul>
             )}

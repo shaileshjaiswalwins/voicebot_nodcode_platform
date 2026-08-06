@@ -73,7 +73,7 @@ function MetricsTab({ botId }: { botId?: string }) {
       </div>
 
       {error && <div className="notice error" role="alert">{error}</div>}
-      {loading && !metrics && <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading…</p>}
+      {loading && !metrics && <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-size-lg)' }}>Loading…</p>}
 
       {metrics && metrics.total_calls === 0 ? (
         <EmptyState
@@ -87,12 +87,12 @@ function MetricsTab({ botId }: { botId?: string }) {
             <div className="metric">
               <span>Total calls</span>
               <strong>{metrics.total_calls}</strong>
-              <small style={{ fontWeight: 400, fontSize: '0.75rem' }}>{fmtTrend(metrics.trend_vs_previous_pct.total_calls)}</small>
+              <small style={{ fontWeight: 400, fontSize: 'var(--font-size-sm)' }}>{fmtTrend(metrics.trend_vs_previous_pct.total_calls)}</small>
             </div>
             <div className="metric">
               <span>Success rate</span>
               <strong>{metrics.success_rate_pct}%</strong>
-              <small style={{ fontWeight: 400, fontSize: '0.75rem' }}>{fmtTrend(metrics.trend_vs_previous_pct.success_rate)}</small>
+              <small style={{ fontWeight: 400, fontSize: 'var(--font-size-sm)' }}>{fmtTrend(metrics.trend_vs_previous_pct.success_rate)}</small>
             </div>
             <div className="metric">
               <span>Avg duration</span>
@@ -107,28 +107,28 @@ function MetricsTab({ botId }: { botId?: string }) {
 
           <div className="content-grid two-col" style={{ marginBottom: '16px' }}>
             <div className="panel">
-              <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Volume Trends</h3>
+              <h3 style={{ fontSize: 'var(--font-size-lg)', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Volume Trends</h3>
               <MiniBarChart data={metrics.daily_volume.map(d => ({ label: d.date.slice(5), value: d.count }))} />
             </div>
             <div className="panel">
-              <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Duration Trends</h3>
+              <h3 style={{ fontSize: 'var(--font-size-lg)', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Duration Trends</h3>
               <MiniLineChart data={metrics.daily_avg_duration.map(d => ({ label: d.date.slice(5), value: d.avg_duration_sec }))} unit="s" />
             </div>
           </div>
 
           {metrics.outcome_breakdown.length > 0 && (
             <>
-              <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Success Analysis</h3>
+              <h3 style={{ fontSize: 'var(--font-size-lg)', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Success Analysis</h3>
               <div className="detail-list">
                 {metrics.outcome_breakdown.map(({ outcome, count }) => {
                   const total = metrics.outcome_breakdown.reduce((s, o) => s + o.count, 0) || 1;
                   return (
                     <div key={outcome} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <span style={{ minWidth: '140px', fontSize: '0.82rem' }}>{outcome}</span>
+                      <span style={{ minWidth: '140px', fontSize: 'var(--font-size-md)' }}>{outcome}</span>
                       <div style={{ flex: 1, background: 'var(--bg-tertiary)', borderRadius: '3px', height: '8px', overflow: 'hidden' }}>
                         <div style={{ width: `${(count / total) * 100}%`, background: 'var(--success)', height: '100%', transition: 'width 0.3s' }} />
                       </div>
-                      <span style={{ fontSize: '0.82rem', minWidth: '40px', textAlign: 'right' }}>{count}</span>
+                      <span style={{ fontSize: 'var(--font-size-md)', minWidth: '40px', textAlign: 'right' }}>{count}</span>
                     </div>
                   );
                 })}
@@ -529,7 +529,15 @@ export function BotConfigTabs({
               <select value={String(value.language || '')} onChange={(e) => onUpdateLanguage(e.target.value)}>
                 {languages.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
               </select>
-              <small>Not yet wired into the runtime — bot_pipeline.py's Sarvam STT/TTS always runs in Hindi (hi-IN) regardless of this setting.</small>
+              <small>Drives bot.py's LANG_CONFIGS and auto-fills STT/TTS language defaults when those are unset — override them separately in the STT/TTS tabs if needed.</small>
+            </label>
+            <label style={isWorkflow ? inertFieldStyle : undefined}>
+              Tone
+              <select value={String(value.tone || 'casual')} onChange={(e) => onUpdateConfig('tone', e.target.value)}>
+                <option value="casual">Casual</option>
+                <option value="formal">Formal</option>
+              </select>
+              <small>Conversational tone for the bot's prompt/opening line — drives bot.py's TONE_CONFIGS.</small>
             </label>
             <label>
               Max call duration: {Number(value.max_call_duration || 300)}s ({Math.round(Number(value.max_call_duration || 300) / 60)} min)
@@ -633,10 +641,10 @@ export function BotConfigTabs({
             </div>
           </div>
 
-          <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '1rem 0 0.25rem' }}>
+          <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '1rem 0 0.25rem' }}>
             Inactivity & silence handling
           </div>
-          <p style={{ fontSize: '0.78rem', color: 'var(--muted)', margin: '0 0 0.5rem' }}>Timers used when the caller goes silent mid-call.</p>
+          <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)', margin: '0 0 0.5rem' }}>Timers used when the caller goes silent mid-call.</p>
           <div className="form-grid" style={isWorkflow ? inertFieldStyle : undefined}>
             <label title="Seconds of silence at the start of a turn before the bot gently re-engages the caller.">
               First rescue (s)
@@ -767,7 +775,7 @@ export function BotConfigTabs({
           </div>
 
           <details style={{ marginTop: '1rem' }}>
-            <summary style={{ cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 }}>Advanced voice tuning</summary>
+            <summary style={{ cursor: 'pointer', fontSize: 'var(--font-size-md)', fontWeight: 600 }}>Advanced voice tuning</summary>
             <div style={{ marginTop: '0.75rem' }}>
               {isWorkflow && (
                 <InertNotice>
@@ -814,7 +822,7 @@ export function BotConfigTabs({
               </div>
               {(value.stt_provider === 'sarvam' || !value.stt_provider) && (
                 <div style={isWorkflow ? inertFieldStyle : undefined}>
-                  <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
+                  <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
                     Sarvam STT parameters (engineering)
                   </div>
                   <ProviderOptionsEditor fields={SARVAM_STT_FIELDS} value={optsFor('stt_options')} onChange={(next) => onUpdateConfig('stt_options', next)} />
@@ -822,7 +830,7 @@ export function BotConfigTabs({
               )}
               {(value.tts_provider === 'sarvam' || !value.tts_provider) && (
                 <div>
-                  <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
+                  <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
                     Sarvam TTS parameters (engineering)
                   </div>
                   <ProviderOptionsEditor fields={SARVAM_TTS_FIELDS} value={optsFor('tts_options')} onChange={(next) => onUpdateConfig('tts_options', next)} />
@@ -904,13 +912,13 @@ export function BotConfigTabs({
             <button
               type="button"
               onClick={() => setWorkflowJsonOpen((v) => !v)}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 'var(--font-size-md)' }}
             >
               <Database size={14} /> {workflowJsonOpen ? 'Hide' : 'Show'} raw graph JSON (advanced)
             </button>
             {workflowJsonOpen && (
               <div style={{ marginTop: '0.6rem' }}>
-                <p style={{ fontSize: '0.78rem', color: 'var(--muted)', margin: '0 0 0.4rem' }}>
+                <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)', margin: '0 0 0.4rem' }}>
                   Same graph as the canvas above, as raw nodes/edges JSON consumed by
                   workflow_engine.py — see backend/models.py's WorkflowGraphDef for the exact
                   shape. Editing here updates the canvas immediately; the two stay in sync.
@@ -938,9 +946,9 @@ export function BotConfigTabs({
           <div style={{ marginTop: '1rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
               <Database size={16} />
-              <strong style={{ fontSize: '0.9rem' }}>Developer JSON</strong>
+              <strong style={{ fontSize: 'var(--font-size-lg)' }}>Developer JSON</strong>
             </div>
-            <p style={{ fontSize: '0.78rem', color: 'var(--muted)', margin: '0 0 0.4rem' }}>Full runtime config. Edits here override the fields above.</p>
+            <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)', margin: '0 0 0.4rem' }}>Full runtime config. Edits here override the fields above.</p>
             <textarea className="json-editor" value={configText} onChange={(e) => onConfigTextChange(e.target.value)} spellCheck={false} aria-invalid={!configOk} />
             {!configOk && (
               <div className="notice error" role="alert" style={{ marginTop: '0.5rem' }}>

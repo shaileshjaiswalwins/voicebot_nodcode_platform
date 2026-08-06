@@ -40,14 +40,14 @@ export function RecentlyDeletedModal({
           <h2>Recently Deleted</h2>
           <button className="modal-close" onClick={onClose} aria-label="Close"><X size={16} /></button>
         </div>
-        <p className="muted" style={{ fontSize: '0.85rem', marginTop: '-0.4rem' }}>
+        <p className="muted" style={{ fontSize: 'var(--font-size-lg)', marginTop: '-0.4rem' }}>
           Deleted agents are kept — nothing is permanently removed. Restore brings an agent back to the active list.
         </p>
         {error && <div className="notice error" role="alert" style={{ margin: '0.5rem 0' }}>{error}</div>}
         {bots === null ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '1.5rem' }}><Spinner /></div>
         ) : bots.length === 0 ? (
-          <p className="muted" style={{ fontSize: '0.85rem' }}>Nothing here — no deleted agents.</p>
+          <p className="muted" style={{ fontSize: 'var(--font-size-lg)' }}>Nothing here — no deleted agents.</p>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
             {bots.map((bot) => (
@@ -59,8 +59,8 @@ export function RecentlyDeletedModal({
                 }}
               >
                 <div>
-                  <strong style={{ fontSize: '0.88rem' }}>{bot.name}</strong>
-                  <div className="muted" style={{ fontSize: '0.75rem' }}>
+                  <strong style={{ fontSize: 'var(--font-size-lg)' }}>{bot.name}</strong>
+                  <div className="muted" style={{ fontSize: 'var(--font-size-sm)' }}>
                     Deleted <TimeAgo value={bot.deleted_at || bot.updated_at} />
                   </div>
                 </div>

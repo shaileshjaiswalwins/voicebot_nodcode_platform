@@ -74,15 +74,15 @@ export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType
         )}
 
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '14px' }}>
-          <select value={botId} onChange={e => setBotId(e.target.value)} style={{ fontSize: '0.82rem' }}>
+          <select value={botId} onChange={e => setBotId(e.target.value)} style={{ fontSize: 'var(--font-size-md)' }}>
             <option value="">All bots</option>
             {bots.map(b => <option key={b._id} value={b._id}>{b.name}</option>)}
           </select>
-          <select value={campaignId} onChange={e => setCampaignId(e.target.value)} style={{ fontSize: '0.82rem' }}>
+          <select value={campaignId} onChange={e => setCampaignId(e.target.value)} style={{ fontSize: 'var(--font-size-md)' }}>
             <option value="">All campaigns</option>
             {campaigns.map(c => <option key={c._id} value={c.campaign_key}>{c.name}</option>)}
           </select>
-          <select value={hours} onChange={e => setHours(e.target.value === '' ? '' : Number(e.target.value))} style={{ fontSize: '0.82rem' }}>
+          <select value={hours} onChange={e => setHours(e.target.value === '' ? '' : Number(e.target.value))} style={{ fontSize: 'var(--font-size-md)' }}>
             <option value="">Custom date range</option>
             <option value={1}>Last 1 hour</option>
             <option value={6}>Last 6 hours</option>
@@ -92,8 +92,8 @@ export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType
           </select>
           {!hours && (
             <>
-              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ fontSize: '0.82rem' }} />
-              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ fontSize: '0.82rem' }} />
+              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ fontSize: 'var(--font-size-md)' }} />
+              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ fontSize: 'var(--font-size-md)' }} />
             </>
           )}
           <button onClick={() => load()} disabled={loading}>Apply</button>
@@ -117,7 +117,7 @@ export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType
                     <HelpCircle size={12} style={{ color: 'var(--muted)', cursor: 'help' }} />
                   </Tooltip>
                 </span>
-                <strong>{animatedNatural} <small style={{ fontWeight: 400, fontSize: '0.75rem' }}>({total ? Math.round(analytics.ended_naturally / total * 100) : 0}%)</small></strong>
+                <strong>{animatedNatural} <small style={{ fontWeight: 400, fontSize: 'var(--font-size-sm)' }}>({total ? Math.round(analytics.ended_naturally / total * 100) : 0}%)</small></strong>
               </div>
               <div className="metric">
                 <span>Avg duration</span>
@@ -134,7 +134,7 @@ export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType
               />
             ) : (
               <>
-                <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>By status</h3>
+                <h3 style={{ fontSize: 'var(--font-size-lg)', color: 'var(--text-secondary)', marginBottom: '8px' }}>By status</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '16px' }}>
                   {statusEntries.map(([status, count]) => (
                     <div key={status} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -142,22 +142,22 @@ export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType
                       <div style={{ flex: 1, background: 'var(--bg-tertiary)', borderRadius: '3px', height: '8px', overflow: 'hidden' }}>
                         <div style={{ width: `${total ? count / total * 100 : 0}%`, background: 'var(--accent)', height: '100%', transition: 'width 0.3s' }} />
                       </div>
-                      <span style={{ fontSize: '0.82rem', minWidth: '50px', textAlign: 'right' }}>{count} ({total ? Math.round(count / total * 100) : 0}%)</span>
+                      <span style={{ fontSize: 'var(--font-size-md)', minWidth: '50px', textAlign: 'right' }}>{count} ({total ? Math.round(count / total * 100) : 0}%)</span>
                     </div>
                   ))}
                 </div>
 
                 {outcomeEntries.length > 0 && (
                   <>
-                    <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>By outcome tag</h3>
+                    <h3 style={{ fontSize: 'var(--font-size-lg)', color: 'var(--text-secondary)', marginBottom: '8px' }}>By outcome tag</h3>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                       {outcomeEntries.map(([outcome, count]) => (
                         <div key={outcome} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          <span style={{ minWidth: '140px', fontSize: '0.82rem' }}>{outcome}</span>
+                          <span style={{ minWidth: '140px', fontSize: 'var(--font-size-md)' }}>{outcome}</span>
                           <div style={{ flex: 1, background: 'var(--bg-tertiary)', borderRadius: '3px', height: '8px', overflow: 'hidden' }}>
                             <div style={{ width: `${total ? count / total * 100 : 0}%`, background: 'var(--success)', height: '100%', transition: 'width 0.3s' }} />
                           </div>
-                          <span style={{ fontSize: '0.82rem', minWidth: '40px', textAlign: 'right' }}>{count}</span>
+                          <span style={{ fontSize: 'var(--font-size-md)', minWidth: '40px', textAlign: 'right' }}>{count}</span>
                         </div>
                       ))}
                     </div>
@@ -167,25 +167,25 @@ export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType
             )}
           </>
         )}
-        {loading && !analytics && <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading…</p>}
+        {loading && !analytics && <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-size-lg)' }}>Loading…</p>}
       </div>
 
       <div className="panel">
         <h2>Quality monitoring</h2>
-        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+        <p style={{ fontSize: 'var(--font-size-lg)', color: 'var(--text-secondary)', marginBottom: '16px' }}>
           Alert fires when disconnected/error calls exceed 30% of calls in the selected window (min 5 calls).
         </p>
         <select
           value={qualityWindowHours}
           onChange={(e) => onQualityWindowChange(Number(e.target.value))}
-          style={{ fontSize: '0.8rem', marginBottom: '16px' }}
+          style={{ fontSize: 'var(--font-size-md)', marginBottom: '16px' }}
         >
           <option value={1}>Last 1 hour</option>
           <option value={24}>Last 24 hours</option>
           <option value={168}>Last 7 days</option>
         </select>
         {error && !loading && (
-          <p style={{ fontSize: '0.85rem', color: 'var(--danger)' }}>Unavailable — quality alerts load together with analytics above.</p>
+          <p style={{ fontSize: 'var(--font-size-lg)', color: 'var(--danger)' }}>Unavailable — quality alerts load together with analytics above.</p>
         )}
         {alert && !error && (
           <div className="detail-list">
@@ -198,7 +198,7 @@ export function AnalyticsView({ bots, campaigns, onGoToAgents }: { bots: BotType
               <StatusPill value={alert.alert ? 'alert' : (alert.total_calls === 0 ? 'no-data' : 'ok')} />
             </div>
             {alert.total_calls === 0 && (
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '8px' }}>
+              <p style={{ fontSize: 'var(--font-size-md)', color: 'var(--text-secondary)', marginTop: '8px' }}>
                 No calls in this window — try a wider window above.
               </p>
             )}

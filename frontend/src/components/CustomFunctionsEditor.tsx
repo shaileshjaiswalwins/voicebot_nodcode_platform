@@ -11,6 +11,7 @@ import {
 } from '../utils/customFunctions';
 import { functionNeedsAttention } from '../utils/workflowPlaceholders';
 import { KeyValueEditor } from './KeyValueEditor';
+import { IconButton } from './ui/icon-button';
 
 const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 const TRIGGERS: { id: CustomFunction['trigger']; label: string; hint: string }[] = [
@@ -55,7 +56,7 @@ export function CustomFunctionsEditor({
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <div style={{ fontWeight: 600 }}>Custom Functions</div>
-          <div style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>
+          <div style={{ fontSize: 'var(--font-size-md)', color: 'var(--muted)' }}>
             Call any API before, during, or after the conversation.
           </div>
         </div>
@@ -80,7 +81,7 @@ export function CustomFunctionsEditor({
       </div>
 
       {safeFunctions.length === 0 && (
-        <div style={{ fontSize: '0.85rem', color: 'var(--muted)', fontStyle: 'italic', margin: '1rem 0' }}>
+        <div style={{ fontSize: 'var(--font-size-lg)', color: 'var(--muted)', fontStyle: 'italic', margin: '1rem 0' }}>
           No custom functions yet.
         </div>
       )}
@@ -106,16 +107,16 @@ export function CustomFunctionsEditor({
                     <AlertCircle size={15} />
                   </span>
                 )}
-                <span className="cf-trigger-badge" style={{ fontSize: '0.72rem', background: 'var(--surface-2)', borderRadius: '4px', padding: '2px 8px' }}>
+                <span className="cf-trigger-badge" style={{ fontSize: 'var(--font-size-xs)', background: 'var(--surface-2)', borderRadius: '4px', padding: '2px 8px' }}>
                   {TRIGGERS.find((t) => t.id === fn.trigger)?.label}
                 </span>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.78rem', margin: 0 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: 'var(--font-size-sm)', margin: 0 }}>
                   <input type="checkbox" checked={fn.enabled} onChange={(e) => update(fn.id, { enabled: e.target.checked })} style={{ width: 'auto' }} />
                   Enabled
                 </label>
-                <button type="button" title="Remove function" onClick={() => remove(fn.id)} style={{ padding: '0 0.4rem' }}>
+                <IconButton type="button" title="Remove function" aria-label="Remove function" onClick={() => remove(fn.id)} style={{ padding: '0 0.4rem' }}>
                   <Trash2 size={14} />
-                </button>
+                </IconButton>
               </div>
               {isOpen && (
                 <div style={{ padding: '0 0.75rem 0.9rem', borderTop: '1px solid var(--border)' }}>
@@ -267,7 +268,7 @@ function CurlImportButton({ onImported }: { onImported: (fn: CustomFunction) => 
             placeholder={'Paste a curl command, e.g.\ncurl -X POST https://api.example.com/orders \\\n  -H "Authorization: Bearer <token>" \\\n  -d \'{"order_id": "123"}\''}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            style={{ fontFamily: 'monospace', fontSize: '0.78rem' }}
+            style={{ fontFamily: 'monospace', fontSize: 'var(--font-size-sm)' }}
           />
           <button type="button" className="primary" disabled={!text.trim()} onClick={handleImport}>
             <Terminal size={13} /> Import
@@ -345,7 +346,7 @@ function FunctionForm({
         <small>The endpoint URL where the function will be called.</small>
       </label>
       {functionNeedsAttention(fn) && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#dc2626', fontSize: '0.78rem', marginTop: '0.3rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#dc2626', fontSize: 'var(--font-size-sm)', marginTop: '0.3rem' }}>
           <AlertCircle size={13} /> AI-generated placeholder — set the real endpoint before this function can run.
         </div>
       )}
@@ -361,7 +362,7 @@ function FunctionForm({
           Body Format
           <div style={{ display: 'flex', gap: '0.4rem' }}>
             {(['form', 'json'] as const).map((mode) => (
-              <button key={mode} type="button" className={fn.body_mode === mode ? 'active' : ''} onClick={() => onUpdate({ body_mode: mode })} style={{ fontSize: '0.85rem', fontWeight: fn.body_mode === mode ? 700 : 400 }}>
+              <button key={mode} type="button" className={fn.body_mode === mode ? 'active' : ''} onClick={() => onUpdate({ body_mode: mode })} style={{ fontSize: 'var(--font-size-lg)', fontWeight: fn.body_mode === mode ? 700 : 400 }}>
                 {mode === 'form' ? 'Form' : 'JSON'}
               </button>
             ))}
@@ -417,19 +418,19 @@ function FunctionForm({
         <div style={{ marginBottom: '0.9rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.4rem' }}>
             <div>
-              <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>Request Body — Parameters</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
+              <div style={{ fontSize: 'var(--font-size-lg)', fontWeight: 600 }}>Request Body — Parameters</div>
+              <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)' }}>
                 For during-call tools, these define what the LLM returns. Sent as {fn.body_mode === 'form' ? 'form data' : 'JSON'}.
               </div>
             </div>
-            <button type="button" onClick={() => onUpdate({ parameters: [...fn.parameters, newParam()] })} style={{ fontSize: '0.78rem', flexShrink: 0 }}>
+            <button type="button" onClick={() => onUpdate({ parameters: [...fn.parameters, newParam()] })} style={{ fontSize: 'var(--font-size-sm)', flexShrink: 0 }}>
               <Plus size={13} /> Add Parameter
             </button>
           </div>
           {fn.parameters.length === 0 ? (
             <div style={{ border: '1px dashed var(--border)', borderRadius: '6px', padding: '1.1rem', textAlign: 'center' }}>
-              <div style={{ fontSize: '0.82rem', color: 'var(--muted)' }}>No parameters configured</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--muted)', opacity: 0.8 }}>Click "Add Parameter" above to add one.</div>
+              <div style={{ fontSize: 'var(--font-size-md)', color: 'var(--muted)' }}>No parameters configured</div>
+              <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)', opacity: 0.8 }}>Click "Add Parameter" above to add one.</div>
             </div>
           ) : (
             <div style={{ border: '1px solid var(--border)', borderRadius: '6px', padding: '0.6rem' }}>
@@ -440,12 +441,12 @@ function FunctionForm({
                   <select aria-label={`Parameter type ${i + 1}`} value={p.type} onChange={(e) => setParam(i, { type: e.target.value as FunctionParam['type'] })}>
                     {(['string', 'number', 'boolean', 'object', 'array'] as const).map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.75rem', margin: 0 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: 'var(--font-size-sm)', margin: 0 }}>
                     <input type="checkbox" checked={p.required} onChange={(e) => setParam(i, { required: e.target.checked })} style={{ width: 'auto' }} /> Req
                   </label>
-                  <button type="button" title="Remove parameter" onClick={() => onUpdate({ parameters: fn.parameters.filter((_, idx) => idx !== i) })} style={{ padding: '0 0.4rem', flexShrink: 0 }}>
+                  <IconButton type="button" title="Remove parameter" aria-label="Remove parameter" onClick={() => onUpdate({ parameters: fn.parameters.filter((_, idx) => idx !== i) })} style={{ padding: '0 0.4rem', flexShrink: 0 }}>
                     <Trash2 size={14} />
-                  </button>
+                  </IconButton>
                 </div>
               ))}
             </div>
@@ -467,7 +468,7 @@ function FunctionForm({
 
       {errors.length > 0 && (
         <div className="notice error" role="alert" style={{ marginTop: '0.75rem' }}>
-          {errors.map((e) => <div key={e} style={{ fontSize: '0.78rem' }}>• {e}</div>)}
+          {errors.map((e) => <div key={e} style={{ fontSize: 'var(--font-size-sm)' }}>• {e}</div>)}
         </div>
       )}
 
@@ -476,12 +477,12 @@ function FunctionForm({
           <button type="button" onClick={runTest} disabled={testState === 'running' || errors.length > 0}>
             <Play size={14} /> {testState === 'running' ? 'Testing…' : 'Test'}
           </button>
-          {errors.length > 0 && <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>Fix the errors above to test.</span>}
+          {errors.length > 0 && <span style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)' }}>Fix the errors above to test.</span>}
         </div>
       )}
 
       {testResult && (
-        <div style={{ marginTop: '0.6rem', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.6rem 0.75rem', fontSize: '0.8rem' }}>
+        <div style={{ marginTop: '0.6rem', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.6rem 0.75rem', fontSize: 'var(--font-size-md)' }}>
           <div style={{ fontWeight: 600, color: testResult.ok ? 'var(--success, green)' : 'var(--warning, orange)' }}>
             {testResult.error
               ? `Request failed: ${testResult.error}`

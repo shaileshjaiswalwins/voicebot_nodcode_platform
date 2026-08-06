@@ -93,7 +93,7 @@ function FlowPalette({ flow, onAddNode }: { flow: Flow; onAddNode: (type: FlowNo
   const hasStart = flow.nodes.some((n) => n.type === 'start');
   return (
     <>
-      <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: '0.6rem' }}>
+      <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: '0.6rem' }}>
         Drag to canvas
       </div>
       {PALETTE_TYPES.map((type) => {
@@ -115,14 +115,14 @@ function FlowPalette({ flow, onAddNode }: { flow: Flow; onAddNode: (type: FlowNo
           >
             <span className="flow-graph-node-icon">{meta.icon}</span>
             <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: '0.8rem', color: 'var(--text)' }}>{meta.label}</div>
-              <div style={{ fontSize: '0.68rem', opacity: 0.75, color: 'var(--muted)' }}>{PALETTE_DESCRIPTIONS[type]}</div>
+              <div style={{ fontWeight: 700, fontSize: 'var(--font-size-md)', color: 'var(--text)' }}>{meta.label}</div>
+              <div style={{ fontSize: 'var(--font-size-xs)', opacity: 0.75, color: 'var(--muted)' }}>{PALETTE_DESCRIPTIONS[type]}</div>
             </div>
             <Plus size={13} style={{ marginLeft: 'auto', flexShrink: 0 }} />
           </div>
         );
       })}
-      <p style={{ fontSize: '0.76rem', color: 'var(--muted)', marginTop: '0.75rem', paddingTop: '0.6rem', borderTop: '1px solid var(--border)' }}>
+      <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)', marginTop: '0.75rem', paddingTop: '0.6rem', borderTop: '1px solid var(--border)' }}>
         Click to add at centre, drag to position. Then drag from a node's colored dot to the next node to connect them.
       </p>
     </>
@@ -346,7 +346,7 @@ export function FlowBuilderView({
       <div className="flow-builder-grid">
         <div className="panel" style={{ padding: '0.75rem' }}>
           <FlowPalette flow={flow} onAddNode={addNode} />
-          <div style={{ marginTop: '1rem', fontSize: '0.78rem', color: 'var(--muted)' }}>
+          <div style={{ marginTop: '1rem', fontSize: 'var(--font-size-sm)', color: 'var(--muted)' }}>
             {editingVersion ? `Editing v${editingVersion.version} (${editingVersion.state})` : 'No draft selected'}
           </div>
           <button
@@ -389,11 +389,11 @@ export function FlowBuilderView({
         <div className="panel" style={{ padding: '0.75rem' }}>
           {!selectedNode ? (
             <>
-              <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: '0.6rem' }}>
+              <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: '0.6rem' }}>
                 Flow overview
               </div>
-              <p style={{ fontSize: '0.82rem', color: 'var(--muted)' }}>Click any node to configure it.</p>
-              <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.35rem', fontSize: '0.78rem' }}>
+              <p style={{ fontSize: 'var(--font-size-md)', color: 'var(--muted)' }}>Click any node to configure it.</p>
+              <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.35rem', fontSize: 'var(--font-size-sm)' }}>
                 {(Object.keys(NODE_TYPE_META) as FlowNodeType[]).map((type) => {
                   const count = flow.nodes.filter((n) => n.type === type).length;
                   if (!count) return null;
@@ -407,13 +407,13 @@ export function FlowBuilderView({
               </div>
               <div style={{ marginTop: '0.9rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)' }}>
                 {issues.length === 0 ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--success, #059669)', fontSize: '0.82rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--success, #059669)', fontSize: 'var(--font-size-md)' }}>
                     <CheckCircle2 size={14} /> No issues
                   </div>
                 ) : (
                   <ul style={{ margin: 0, paddingLeft: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                     {issues.map((issue) => (
-                      <li key={issue} style={{ fontSize: '0.78rem', color: 'var(--error)' }}>{issue}</li>
+                      <li key={issue} style={{ fontSize: 'var(--font-size-sm)', color: 'var(--error)' }}>{issue}</li>
                     ))}
                   </ul>
                 )}
@@ -421,7 +421,7 @@ export function FlowBuilderView({
             </>
           ) : (
             <>
-              <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: '0.6rem' }}>
+              <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: '0.6rem' }}>
                 Node inspector
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -464,7 +464,7 @@ export function FlowBuilderView({
                       />
                     </label>
                     <div>
-                      <div style={{ fontSize: '0.78rem', fontWeight: 600, marginBottom: '0.35rem' }}>Transitions</div>
+                      <div style={{ fontSize: 'var(--font-size-sm)', fontWeight: 600, marginBottom: '0.35rem' }}>Transitions</div>
                       {((selectedNode.data.transitions as { id: string; label: string }[] | undefined) || []).map((t) => (
                         <div key={t.id} style={{ display: 'flex', gap: '0.35rem', marginBottom: '0.35rem' }}>
                           <input
@@ -496,7 +496,7 @@ export function FlowBuilderView({
 
                 {selectedNode.type === 'condition' && (
                   <div>
-                    <div style={{ fontSize: '0.78rem', fontWeight: 600, marginBottom: '0.35rem' }}>Rules</div>
+                    <div style={{ fontSize: 'var(--font-size-sm)', fontWeight: 600, marginBottom: '0.35rem' }}>Rules</div>
                     {((selectedNode.data.rules as { id: string; variable: string; operator: string; value: string }[] | undefined) || []).map((r) => (
                       <div key={r.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '0.5rem', padding: '0.4rem', border: '1px solid var(--border)', borderRadius: 6 }}>
                         <input
@@ -543,7 +543,7 @@ export function FlowBuilderView({
                     >
                       <Plus size={12} /> Add rule
                     </button>
-                    <p style={{ fontSize: '0.72rem', color: 'var(--muted)', marginTop: '0.4rem' }}>
+                    <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--muted)', marginTop: '0.4rem' }}>
                       Always falls through to a fixed <strong>Else</strong> outcome if no rule matches.
                     </p>
                   </div>
@@ -673,20 +673,20 @@ export function FlowBuilderView({
           onClose={() => setPreviewText(null)}
           footer={<button className="primary" onClick={() => setPreviewText(null)}>Close</button>}
         >
-          <p style={{ fontSize: '0.8rem', color: 'var(--muted)', marginBottom: '0.75rem' }}>
+          <p style={{ fontSize: 'var(--font-size-md)', color: 'var(--muted)', marginBottom: '0.75rem' }}>
             This is the exact step-script text appended to the agent's system prompt from this flow. The
             model is instructed to follow it, but — unlike a strict state machine — it can still
             skip or reorder steps in edge cases.
           </p>
           {previewLoading ? (
-            <p style={{ fontSize: '0.82rem', color: 'var(--muted)' }}>Compiling…</p>
+            <p style={{ fontSize: 'var(--font-size-md)', color: 'var(--muted)' }}>Compiling…</p>
           ) : previewError ? (
             <p style={{ color: 'var(--error)' }}>{previewError}</p>
           ) : (
             <pre style={{
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
-              fontSize: '0.78rem',
+              fontSize: 'var(--font-size-sm)',
               lineHeight: 1.5,
               background: 'var(--surface-2)',
               border: '1px solid var(--border)',
@@ -726,13 +726,13 @@ export function FlowBuilderView({
                     {meta.icon}
                   </span>
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: '0.85rem' }}>{meta.label}</div>
-                    <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>{description}</div>
+                    <div style={{ fontWeight: 700, fontSize: 'var(--font-size-lg)' }}>{meta.label}</div>
+                    <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)' }}>{description}</div>
                   </div>
                 </div>
               );
             })}
-            <p style={{ fontSize: '0.76rem', color: 'var(--muted)', marginTop: '0.2rem' }}>
+            <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)', marginTop: '0.2rem' }}>
               <strong>Connecting nodes:</strong> drag from a node's colored dot to the next node. Conversation
               and Condition nodes get one dot per transition/rule — connect the one you want to whatever
               should happen next.

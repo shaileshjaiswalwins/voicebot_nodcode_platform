@@ -160,7 +160,7 @@ export function TestInputsModal({
 
         {tab === 'variables' && (
           <div style={{ marginTop: '0.75rem' }}>
-            <p className="muted" style={{ fontSize: '0.82rem' }}>
+            <p className="muted" style={{ fontSize: 'var(--font-size-md)' }}>
               Seed values substituted for <code>{'{{variable}}'}</code> tokens in the system prompt during Manual Chat and AI Simulated Chat.
             </p>
             {rows.map((row, idx) => (
@@ -186,11 +186,11 @@ export function TestInputsModal({
 
         {tab === 'mocks' && (
           <div style={{ marginTop: '0.75rem' }}>
-            <p className="muted" style={{ fontSize: '0.82rem' }}>
+            <p className="muted" style={{ fontSize: 'var(--font-size-md)' }}>
               Set a mocked JSON response for each of this bot's during_call functions — used during Manual Chat and AI Simulated Chat instead of the real URL.
             </p>
             {duringCallFunctions.length === 0 && (
-              <p className="muted" style={{ fontSize: '0.82rem' }}>This bot has no enabled during_call functions to mock yet.</p>
+              <p className="muted" style={{ fontSize: 'var(--font-size-md)' }}>This bot has no enabled during_call functions to mock yet.</p>
             )}
             {duringCallFunctions.map((fn) => (
               <label key={fn.id || fn.name} className="full" style={{ marginBottom: '0.6rem' }}>
@@ -208,7 +208,7 @@ export function TestInputsModal({
 
         {tab === 'precall' && (
           <div style={{ marginTop: '0.75rem' }}>
-            <p className="muted" style={{ fontSize: '0.82rem' }}>
+            <p className="muted" style={{ fontSize: 'var(--font-size-md)' }}>
               Extra query params sent to every pre_call function on a real Test Call (Audio) —
               merged on top of that function's own fixed query_params. Use this to override what
               a pre_call lookup returns (e.g. a mock endpoint that reads owner_name/business_name
@@ -216,7 +216,7 @@ export function TestInputsModal({
               Simulated Chat, which never make real HTTP calls.
             </p>
             {preCallFunctions.length === 0 && (
-              <p className="muted" style={{ fontSize: '0.82rem' }}>This bot has no enabled pre_call functions.</p>
+              <p className="muted" style={{ fontSize: 'var(--font-size-md)' }}>This bot has no enabled pre_call functions.</p>
             )}
             {precallRows.map((row, idx) => (
               <div key={idx} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.4rem' }}>

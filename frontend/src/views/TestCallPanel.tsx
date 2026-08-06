@@ -170,12 +170,12 @@ function TriageButton({
 
   return (
     <div style={{ marginTop: '0.5rem' }}>
-      <button type="button" onClick={run} disabled={state === 'running'} style={{ fontSize: '0.78rem' }}>
+      <button type="button" onClick={run} disabled={state === 'running'} style={{ fontSize: 'var(--font-size-sm)' }}>
         <Sparkles size={13} /> {state === 'running' ? 'Analyzing…' : 'What went wrong?'}
       </button>
-      {state === 'failed' && <div className="notice error" role="alert" style={{ marginTop: '0.4rem', fontSize: '0.78rem' }}>{errMsg}</div>}
+      {state === 'failed' && <div className="notice error" role="alert" style={{ marginTop: '0.4rem', fontSize: 'var(--font-size-sm)' }}>{errMsg}</div>}
       {result && (
-        <div style={{ marginTop: '0.5rem', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.6rem 0.75rem', fontSize: '0.8rem', background: 'var(--surface-2)', whiteSpace: 'pre-wrap' }}>
+        <div style={{ marginTop: '0.5rem', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.6rem 0.75rem', fontSize: 'var(--font-size-md)', background: 'var(--surface-2)', whiteSpace: 'pre-wrap' }}>
           {!result.transcript_found && (
             <div style={{ color: 'var(--muted)', fontStyle: 'italic', marginBottom: '0.4rem' }}>
               No transcript found for this call yet — diagnosis is based only on the session status/error.
@@ -387,6 +387,7 @@ export function TestCallPanel({
               onDisconnectRequested={onStop}
               onMicChange={onMicChange}
               onAudioReady={onAudioReady}
+              roomName={roomName}
             />
             <div className="session-meta-grid">
               <Metric label="Room" value={roomName ? shortId(roomName) : 'not created'} />
@@ -487,6 +488,7 @@ export function TestCallPanel({
             onDisconnectRequested={onStop}
             onMicChange={onMicChange}
             onAudioReady={onAudioReady}
+            roomName={roomName}
           />
           <div className="session-meta-grid">
             <Metric label="Room" value={roomName ? shortId(roomName) : 'not created'} />
