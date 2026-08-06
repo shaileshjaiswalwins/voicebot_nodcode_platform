@@ -10,10 +10,8 @@ import { SARVAM_TTS_VOICES, SARVAM_TTS_LANGUAGES, TTS_PROVIDER_MODEL_KEY } from 
 import { CustomFunctionsEditor } from './CustomFunctionsEditor';
 import { ChipListEditor } from './ChipListEditor';
 import { DynamicVariablesEditor } from './DynamicVariablesEditor';
-import { ProviderOptionsEditor } from './ProviderOptionsEditor';
 import { CostEstimateStrip } from './CostEstimateStrip';
 import { WorkflowBuilderView } from '../views/WorkflowBuilderView';
-import { SARVAM_STT_FIELDS, SARVAM_TTS_FIELDS } from '../constants/providerParams';
 import type { AgentCostEstimate } from '../utils/agentCost';
 
 export type BuilderTab = 'metrics' | 'basic' | 'prompt' | 'voice' | 'functions' | 'workflow' | 'advanced';
@@ -442,9 +440,10 @@ export function BotConfigTabs({
   // (Google TTS/STT, Cartesia, Anthropic, ...) that would silently no-op on a real call.
   const byCompany = (entries: PricingModelEntry[] | undefined, company: string): PricingModelEntry[] =>
     (entries || []).filter((e) => e.company === company);
-  const deepgramSttModels = byCompany(pricing?.stt, 'Deepgram');
-  const optsFor = (key: 'stt_options' | 'tts_options'): Record<string, unknown> =>
-    (typeof value[key] === 'object' && value[key] ? value[key] : {}) as Record<string, unknown>;
+  const geminiLlmModels = byCompany(pricing?.llm, 'Google');
+  const openaiLlmModels = byCompany(pricing?.llm, 'OpenAI');
+  const llmModelLabel = (e: PricingModelEntry): string =>
+    `${e.label} · ₹${e.cost_inr_per_min.toFixed(2)}/min${e.latency_ms_min ? ` · ${e.latency_ms_min}-${e.latency_ms_max}ms` : ''}`;
 
   // Soft numeric range check: returns a warning string when `n` violates min/max, else null.
   // We warn rather than block so an operator can still push an edge value if they mean to.
@@ -710,12 +709,39 @@ export function BotConfigTabs({
       {tab === 'voice' && (
         <div role="tabpanel">
           <div className="form-grid">
-            <label title="Silence (ms) the bot waits after the caller stops before replying. Lower feels snappier but risks cutting the caller off.">
-              Post-speech hold (ms)
-              <input type="number" min={0} max={5000} step={50} value={Number(value.post_speech_hold_ms ?? 400)} onChange={(e) => onUpdateConfig('post_speech_hold_ms', Number(e.target.value))} />
-              <small>Pause after the caller stops speaking before the bot responds. Typical 200–800 ms.</small>
-              <Warn msg={numWarn(Number(value.post_speech_hold_ms ?? 400), { min: 0, max: 5000, integer: true })} />
+            <label>
+              LLM
+              <select
+                value={String(value.llm_provider || '')}
+                onChange={(e) => {
+                  const provider = e.target.value;
+                  onUpdateConfig('llm_provider', provider);
+                  // Clear the model when switching provider — a leftover Gemini model string
+                  // would otherwise silently fail to match any OpenAI catalog entry (or vice
+                  // versa), so the cost estimate would show stale/wrong numbers until re-picked.
+                  onUpdateConfig('llm_model', '');
+                }}
+              >
+                <option value="">Gemini (default)</option>
+                <option value="gemini">Gemini</option>
+                <option value="openai">OpenAI</option>
+              </select>
+              <small>The language model driving this bot's conversation.</small>
             </label>
+            {(value.llm_provider === 'openai' ? openaiLlmModels : geminiLlmModels).length > 0 && (
+              <label>
+                LLM model
+                <select value={String(value.llm_model || '')} onChange={(e) => onUpdateConfig('llm_model', e.target.value)}>
+                  <option value="">
+                    {value.llm_provider === 'openai' ? 'gpt-4.1 (default)' : 'gemini-3.1-flash-lite (default)'}
+                  </option>
+                  {(value.llm_provider === 'openai' ? openaiLlmModels : geminiLlmModels).map((e) => (
+                    <option key={e.key} value={e.label}>{llmModelLabel(e)}</option>
+                  ))}
+                </select>
+                <small>Price and expected latency per model, from the Admin pricing catalog.</small>
+              </label>
+            )}
             <label>
               Text-to-speech (TTS)
               <select
@@ -773,71 +799,6 @@ export function BotConfigTabs({
               </label>
             )}
           </div>
-
-          <details style={{ marginTop: '1rem' }}>
-            <summary style={{ cursor: 'pointer', fontSize: 'var(--font-size-md)', fontWeight: 600 }}>Advanced voice tuning</summary>
-            <div style={{ marginTop: '0.75rem' }}>
-              {isWorkflow && (
-                <InertNotice>
-                  Everything in this section is ignored for workflow bots — workflow_engine.py hardcodes Sarvam
-                  STT (<code>saaras:v3</code>, Hindi hi-IN) and its own VAD tuning, regardless of anything set here.
-                </InertNotice>
-              )}
-              <div className="form-grid" style={isWorkflow ? inertFieldStyle : undefined}>
-                <label title="Speech-detection sensitivity (0–1). Higher = stricter, ignores more background noise but may miss soft speech.">
-                  Voice-activity threshold
-                  <input type="number" min="0" max="1" step="0.05" value={Number(value.silero_threshold ?? 0.6)} onChange={(e) => onUpdateConfig('silero_threshold', Number(e.target.value))} />
-                  <small>Sensitivity for real speech vs. background noise (0–1). Default 0.6.</small>
-                  <Warn msg={numWarn(Number(value.silero_threshold ?? 0.6), { min: 0, max: 1 })} />
-                </label>
-                <label title="Minimum length (ms) of sound before it counts as speech. Filters out coughs and clicks.">
-                  Min speech duration (ms)
-                  <input type="number" min={0} max={10000} step={50} value={Number(value.silero_min_speech_ms ?? 1000)} onChange={(e) => onUpdateConfig('silero_min_speech_ms', Number(e.target.value))} />
-                  <small>Shortest utterance treated as real speech. Raise to ignore brief noises.</small>
-                  <Warn msg={numWarn(Number(value.silero_min_speech_ms ?? 1000), { min: 0, max: 10000, integer: true })} />
-                </label>
-                <label>
-                  Speech-to-text (STT)
-                  <select value={String(value.stt_provider || '')} onChange={(e) => onUpdateConfig('stt_provider', e.target.value)}>
-                    <option value="">Sarvam (default)</option>
-                    <option value="sarvam">Sarvam</option>
-                    <option value="deepgram">Deepgram</option>
-                  </select>
-                </label>
-                {value.stt_provider === 'deepgram' && (
-                  <>
-                    <label>
-                      STT model
-                      <select value={String(value.stt_model || '')} onChange={(e) => onUpdateConfig('stt_model', e.target.value)}>
-                        <option value="">nova-3 (default)</option>
-                        {deepgramSttModels.map((e) => <option key={e.key} value={e.label}>{e.label}</option>)}
-                      </select>
-                    </label>
-                    <label>
-                      STT language
-                      <input value={String(value.stt_language || '')} placeholder="en-US (default)" onChange={(e) => onUpdateConfig('stt_language', e.target.value)} />
-                    </label>
-                  </>
-                )}
-              </div>
-              {(value.stt_provider === 'sarvam' || !value.stt_provider) && (
-                <div style={isWorkflow ? inertFieldStyle : undefined}>
-                  <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
-                    Sarvam STT parameters (engineering)
-                  </div>
-                  <ProviderOptionsEditor fields={SARVAM_STT_FIELDS} value={optsFor('stt_options')} onChange={(next) => onUpdateConfig('stt_options', next)} />
-                </div>
-              )}
-              {(value.tts_provider === 'sarvam' || !value.tts_provider) && (
-                <div>
-                  <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
-                    Sarvam TTS parameters (engineering)
-                  </div>
-                  <ProviderOptionsEditor fields={SARVAM_TTS_FIELDS} value={optsFor('tts_options')} onChange={(next) => onUpdateConfig('tts_options', next)} />
-                </div>
-              )}
-            </div>
-          </details>
         </div>
       )}
 
