@@ -95,7 +95,11 @@ load_dotenv(override=True)
 
 # Infrastructure
 _PORT               = int(os.getenv("BOT_PORT", "8085"))
-_AGENT_NAME         = os.getenv("AGENT_NAME", os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial-live-2"))
+# Must equal backend/routers/testcall.py's TESTCALL_AGENT_NAME — that is the name the
+# dashboard's Test Call dispatches to, and LiveKit pairs job to worker on this string alone.
+# Previously both sides read env vars independently, so a machine whose .env named a
+# different worker silently got no bot: dispatch accepted, nothing registered, call hangs.
+_AGENT_NAME         = "voice-bot-justdial-dashboard-test"
 _NUM_IDLE_PROCESSES = int(os.getenv("NUM_IDLE_PROCESSES", "2"))
 
 # Language
