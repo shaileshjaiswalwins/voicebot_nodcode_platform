@@ -444,6 +444,10 @@ export function BotConfigTabs({
   const openaiLlmModels = byCompany(pricing?.llm, 'OpenAI');
   const llmModelLabel = (e: PricingModelEntry): string =>
     `${e.label} · ₹${e.cost_inr_per_min.toFixed(2)}/min${e.latency_ms_min ? ` · ${e.latency_ms_min}-${e.latency_ms_max}ms` : ''}`;
+  const sarvamSttModels = byCompany(pricing?.stt, 'Sarvam');
+  const deepgramSttModels = byCompany(pricing?.stt, 'Deepgram');
+  const sttModelLabel = (e: PricingModelEntry): string =>
+    `${e.label} · ₹${e.cost_inr_per_min.toFixed(2)}/min${e.latency_ms_min ? ` · ${e.latency_ms_min}-${e.latency_ms_max}ms` : ''}`;
 
   // Soft numeric range check: returns a warning string when `n` violates min/max, else null.
   // We warn rather than block so an operator can still push an edge value if they mean to.
@@ -740,6 +744,40 @@ export function BotConfigTabs({
                   ))}
                 </select>
                 <small>Price and expected latency per model, from the Admin pricing catalog.</small>
+              </label>
+            )}
+            <label>
+              Speech-to-text (STT)
+              <select
+                value={String(value.stt_provider || '')}
+                onChange={(e) => {
+                  const provider = e.target.value;
+                  onUpdateConfig('stt_provider', provider);
+                  // Clear the model on provider switch — same reasoning as the LLM/TTS
+                  // pickers: a leftover Sarvam model string wouldn't match anything in
+                  // Deepgram's catalog (or vice versa), so cost would silently stay wrong
+                  // until re-picked.
+                  onUpdateConfig('stt_model', '');
+                }}
+              >
+                <option value="">Sarvam (default)</option>
+                <option value="sarvam">Sarvam</option>
+                <option value="deepgram">Deepgram</option>
+              </select>
+              <small>The speech-to-text provider transcribing the caller.</small>
+            </label>
+            {(value.stt_provider === 'deepgram' ? deepgramSttModels : sarvamSttModels).length > 0 && (
+              <label>
+                STT model
+                <select value={String(value.stt_model || '')} onChange={(e) => onUpdateConfig('stt_model', e.target.value)}>
+                  <option value="">
+                    {value.stt_provider === 'deepgram' ? 'nova-3 (default)' : 'saaras:v3 (default)'}
+                  </option>
+                  {(value.stt_provider === 'deepgram' ? deepgramSttModels : sarvamSttModels).map((e) => (
+                    <option key={e.key} value={e.label}>{sttModelLabel(e)}</option>
+                  ))}
+                </select>
+                <small>Price per model, from the Admin pricing catalog.</small>
               </label>
             )}
             <label>

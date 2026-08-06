@@ -67,9 +67,14 @@ export const SARVAM_TTS_VOICES: string[] = [
 // Maps a bot's tts_provider to the pricing-catalog key (backend/pricing.py's TTS_RATES) so
 // the Agent Builder's cost estimate (agentCost.ts, keyed off tts_model) matches whichever TTS
 // actually runs the call instead of silently defaulting to Sarvam's rate for every provider.
+// Values here are two different things depending on use: '' and 'sarvam' set the real
+// tts_model sent to pipeline_providers.py (must match provider_params.py's SARVAM_TTS_SPEC
+// default exactly — "bulbul:v3", not the pricing catalog's underscore key), while
+// 'elevenlabs'/'justdial' are catalog keys only used for the cost-estimate lookup (agentCost.ts
+// normalizes them back via normalizeModelKey) since those providers don't read tts_model at all.
 export const TTS_PROVIDER_MODEL_KEY: Record<string, string> = {
-  '': 'sarvam_bulbul_v3',
-  sarvam: 'sarvam_bulbul_v3',
+  '': 'bulbul:v3',
+  sarvam: 'bulbul:v3',
   elevenlabs: 'elevenlabs_turbo',
   justdial: 'indic_f5',
 };

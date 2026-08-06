@@ -36,6 +36,8 @@ _LABEL_OVERRIDES = {
     "gemini_3_1_pro": "gemini-3.1-pro",
     "deepgram_nova2": "nova-2",
     "deepgram_flux": "flux",
+    "sarvam_saras_v3": "saaras:v3",
+    "sarvam_bulbul_v3": "bulbul:v3",
 }
 
 
