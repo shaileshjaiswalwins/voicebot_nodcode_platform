@@ -1408,7 +1408,10 @@ kbd.kbd { display: inline-flex; align-items: center; justify-content: center; mi
 .panel.compact { padding: 0.85rem; }
 .panel.compact h2 { font-size: 0.92rem; }
 .rename-action { margin-top: 0.4rem; }
-.prompt-editor { min-height: 220px; font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 0.82rem; line-height: 1.5; }
+/* font-weight: 400 overrides the inherited 600 from the parent <label> (labels are bold
+   by design) — without it, the prompt text a PM actually types renders bold too, not just
+   the "System prompt" caption above it. */
+.prompt-editor { min-height: 220px; font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 0.82rem; line-height: 1.5; font-weight: 400; }
 /* The system prompt is the field that changes most often — give it real visual weight
    instead of the same modest textarea size as the analysis-prompt-override/workflow-JSON
    textareas that happen to share the base .prompt-editor class. */
