@@ -369,6 +369,27 @@ export type Transcript = {
   /** Call origin: "web_test" (dashboard Test Call) vs "batch" (campaign/SIP-dialed).
    * Absent on transcripts saved before this field existed — treat as "batch". */
   source?: 'web_test' | 'batch';
+  /** Post-call analysis computed inline (bot.py `_save_transcript_to_dashboard_db`) or
+   * by callback_worker/worker.py for legacy production calls. Absent when analysis
+   * failed silently and no fallback was persisted, or for older transcripts saved
+   * before this field existed. */
+  analysis?: {
+    call_outcome?: string;
+    call_outcome_description?: string;
+    call_summary?: string;
+    is_business?: string;
+    business_intent?: string;
+    b2b_user?: string;
+    business_name?: string;
+    business_city?: string;
+    qna?: Array<{ id?: string; question?: string; answer?: string; [key: string]: unknown }>;
+    product_change?: Record<string, unknown>;
+    rescheduled_to?: string;
+    deal_value?: string;
+    lead_intent_score?: string;
+    urgency_flag?: string;
+    [key: string]: unknown;
+  };
 };
 
 export type PhraseCategory = 'voicemail' | 'hold_music' | 'dnc_trigger';
@@ -800,7 +821,17 @@ export const api = {
     );
   },
   // Create Agent > Create with AI — no bot exists yet, so this is bot-less.
-  generateAgent(description: string): Promise<{ agent_name: string; initial_message: string; system_prompt: string }> {
+  generateAgent(description: string): Promise<{
+    agent_name: string;
+    description: string;
+    persona_gender: string;
+    stt_language: string;
+    tts_language: string;
+    initial_message: string;
+    call_end_text: string;
+    system_prompt: string;
+    interruption_sensitivity: string;
+  }> {
     return request('/api/bots/generate-agent', { method: 'POST', body: JSON.stringify({ description }) }, 30000);
   },
   // Functions tab AI-assist — paste a curl example/API description, get a draft CustomFunction
@@ -833,6 +864,11 @@ export const api = {
   // description implies comes back as WORKFLOW_URL_PLACEHOLDER — see workflowPlaceholders.ts.
   generateWorkflow(description: string): Promise<{
     agent_name: string;
+    description: string;
+    persona_gender: string;
+    stt_language: string;
+    tts_language: string;
+    interruption_sensitivity: string;
     global_prompt: string;
     workflow: WorkflowGraphDef;
     functions: CustomFunction[];
@@ -1102,9 +1138,14 @@ export const api = {
   },
 
   // transcripts
-  transcripts(params: { bot_id?: string; campaign_id?: string; status?: string; text?: string; source?: string; limit?: number } = {}): Promise<Transcript[]> {
+  transcripts(params: { bot_id?: string; campaign_id?: string; status?: string; text?: string; source?: string; before?: string; limit?: number } = {}): Promise<Transcript[]> {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '') as [string, string][]);
     return request(`/api/transcripts?${qs.toString()}`);
+  },
+  transcriptDetail(transcriptId: string): Promise<Transcript> {
+    // Full document (transcript turns, muted_transcript, analysis) — the list endpoint
+    // above omits those to keep list payload light; fetched here once a row is selected.
+    return request(`/api/transcripts/${transcriptId}`);
   },
   callEvents(transcriptId: string): Promise<CallEvent[]> {
     return request(`/api/transcripts/${transcriptId}/events`);
@@ -1112,9 +1153,29 @@ export const api = {
   testRecordingLookup(callId: string): Promise<TestRecordingLookup> {
     return request(`/api/transcripts/recording-lookup/${callId}`);
   },
-  exportCsvUrl(params: { bot_id?: string; campaign_id?: string; status?: string; outcome?: string; start_date?: string; end_date?: string; text?: string; source?: string }): string {
+  testRecordingByRoom(roomName: string): Promise<TestRecordingLookup> {
+    return request(`/api/transcripts/recordings/by-room/${roomName}`);
+  },
+  uploadTestRecording(roomName: string, blob: Blob): Promise<{ room_name: string; recording_url: string; transcripts_updated: boolean }> {
+    // Longer timeout than the default 8s: the backend retries attaching the
+    // recording to the transcript doc for up to ~8s to cover the race with the
+    // bot worker's own save, on top of the upload itself.
+    return request(`/api/transcripts/recordings/${roomName}`, {
+      method: 'POST',
+      headers: { 'Content-Type': blob.type || 'audio/webm' },
+      body: blob,
+    }, 15000);
+  },
+  async exportTranscriptsCsv(params: { bot_id?: string; campaign_id?: string; status?: string; outcome?: string; start_date?: string; end_date?: string; text?: string; source?: string }): Promise<Blob> {
+    // A plain <a href> to this endpoint sends no Authorization header — the backend
+    // requires one (Depends(require_user)), so that always 401ed. Fetch it ourselves
+    // with the header and hand the caller a Blob to trigger the download from.
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '') as [string, string][]);
-    return apiUrl(`/api/transcripts/export.csv?${qs.toString()}`);
+    const res = await fetch(apiUrl(`/api/transcripts/export.csv?${qs.toString()}`), {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    return res.blob();
   },
 
   // analytics

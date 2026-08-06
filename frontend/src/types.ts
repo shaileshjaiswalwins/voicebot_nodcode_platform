@@ -71,9 +71,14 @@ export type RuntimeConfig = {
   persona_gender?: 'female' | 'male';
   ai_partner?: string;
   /** This field is used by other language-scoped features (phrase library, campaign
-   * attempt-sequence overrides) but has no effect on this bot's own STT/TTS — use
-   * stt_language/tts_language below to actually configure the pipeline's language. */
+   * attempt-sequence overrides). Changing it also auto-fills sensible stt_language/
+   * tts_language defaults (see UI's language dropdown handler) if those are still unset —
+   * but stt_language/tts_language below remain the source of truth for the pipeline and
+   * can still be overridden independently of this field. */
   language?: string;
+  /** Conversational tone the bot's prompt/opening line should adopt. Consumed by
+   * bot.py's TONE_CONFIGS registry (keyed "casual"/"formal"). */
+  tone?: 'casual' | 'formal';
   temperature?: number;
   /** Per-agent STT/TTS/LLM provider selection — empty string means "use the pipeline's
    * hardcoded default" (Sarvam STT/TTS + Gemini), preserving prior behavior exactly for

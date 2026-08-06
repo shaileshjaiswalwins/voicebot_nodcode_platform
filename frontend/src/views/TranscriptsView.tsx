@@ -3,15 +3,16 @@ import {
   Bot, ChevronLeft, ChevronRight, Download, FileText, Filter, Mic, Search
 } from 'lucide-react';
 import type { Bot as BotType, Campaign, CallEvent, Transcript, TestRecordingLookup } from '../api';
-import { api, apiUrl } from '../api';
+import { api, apiUrl, getToken } from '../api';
 import { StatusPill } from '../components/StatusPill';
 import { CopyableId } from '../components/CopyableId';
 import { TimeAgo } from '../components/TimeAgo';
-import { Detail } from '../components/Detail';
+import { Detail, DetailText } from '../components/Detail';
+import { AudioPlayer } from '../components/AudioPlayer';
 import { SkeletonTableBody } from '../components/SkeletonTableBody';
 import { EmptyState } from '../components/EmptyState';
 import { shortId, formatTime, titleCase } from '../utils/formatting';
-import { buildConversationItems, transcriptSourceLabel, maxResponseDelayLabel } from '../utils/transcript';
+import { buildConversationItems, maxResponseDelayLabel, outcomeTone } from '../utils/transcript';
 import { summarizeDetails } from '../utils/errors';
 
 export function TranscriptsView({
@@ -29,7 +30,10 @@ export function TranscriptsView({
   source,
   onSourceChange,
   onSelect,
-  onNavigateTest
+  onNavigateTest,
+  hasMore,
+  loadingMore,
+  onLoadMore
 }: {
   transcripts: Transcript[];
   selectedTranscript?: Transcript;
@@ -46,6 +50,11 @@ export function TranscriptsView({
   onSourceChange: (s: '' | 'web_test' | 'batch') => void;
   onSelect: (id: string) => void;
   onNavigateTest?: () => void;
+  /** Whether the server has more transcripts beyond what's currently loaded — distinct
+   * from filteredTranscripts.length, which only reflects what's already in memory. */
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
 }) {
   const [showFilters, setShowFilters] = useState(false);
   const [brokenRecordingId, setBrokenRecordingId] = useState('');
@@ -58,6 +67,36 @@ export function TranscriptsView({
     : undefined;
   const recordingUrl = selectedTranscript?.recording_url || localRecording?.recording_url || '';
   const recordingSource = selectedTranscript?.recording_source || localRecording?.recording_source || '';
+  const [recordingBlobUrl, setRecordingBlobUrl] = useState('');
+
+  // <audio src> issues a plain browser GET with no Authorization header, but the
+  // recording endpoint requires one (Depends(require_user)) — that 401 was showing up
+  // as "Recording is unavailable" even when the file exists. Fetch it ourselves (with
+  // the auth header) and hand the audio element a local blob URL instead.
+  useEffect(() => {
+    setRecordingBlobUrl('');
+    setBrokenRecordingId('');
+    if (!recordingUrl) return;
+    let cancelled = false;
+    let objectUrl = '';
+    fetch(apiUrl(recordingUrl), { headers: { Authorization: `Bearer ${getToken()}` } })
+      .then((res) => {
+        if (!res.ok) throw new Error(`${res.status}`);
+        return res.blob();
+      })
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setRecordingBlobUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setBrokenRecordingId(selectedTranscript?._id || '');
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [recordingUrl, selectedTranscript?._id]);
   const assistantBotName = bots.find((b) => b._id === selectedTranscript?.bot_id)?.name || 'Assistant';
 
   const activeFilterCount = Object.values(filters).filter(Boolean).length;
@@ -77,27 +116,55 @@ export function TranscriptsView({
   const [page, setPage] = useState(0);
   const pageCount = Math.max(1, Math.ceil(filteredTranscripts.length / PAGE_SIZE));
 
-  // Reset to page 1 whenever the underlying result set changes (new search/filter/data),
-  // otherwise a filter change can strand the user on a now-out-of-range page.
+  // Reset to page 1 when the user changes what they're searching/filtering for —
+  // deliberately NOT keyed on filteredTranscripts.length, which also changes on
+  // load-more appending rows and would otherwise bounce the user back to page 1
+  // mid-navigation (that was the actual bug here, not an intended flow).
   useEffect(() => {
     setPage(0);
-  }, [filteredTranscripts.length, searchText, filters]);
+  }, [searchText, filters]);
+
+  // Safety net for the case the reset above exists for: a filter/search shrinking the
+  // result set out from under whatever page the user was on. Clamps down, never up —
+  // so it's a no-op while load-more is growing the list (page is already in range).
+  useEffect(() => {
+    setPage((p) => Math.min(p, pageCount - 1));
+  }, [pageCount]);
 
   const displayedTranscripts = useMemo(
     () => filteredTranscripts.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE),
     [filteredTranscripts, page]
   );
 
-  const csvUrl = api.exportCsvUrl({
-    bot_id: filters.bot_id || undefined,
-    campaign_id: filters.campaign_id || undefined,
-    status: filters.status || undefined,
-    outcome: filters.outcome || undefined,
-    start_date: filters.start_date || undefined,
-    end_date: filters.end_date || undefined,
-    text: searchText.trim() || undefined,
-    source: source || undefined,
-  });
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExportCsv() {
+    setExporting(true);
+    try {
+      const blob = await api.exportTranscriptsCsv({
+        bot_id: filters.bot_id || undefined,
+        campaign_id: filters.campaign_id || undefined,
+        status: filters.status || undefined,
+        outcome: filters.outcome || undefined,
+        start_date: filters.start_date || undefined,
+        end_date: filters.end_date || undefined,
+        text: searchText.trim() || undefined,
+        source: source || undefined,
+      });
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = `transcripts-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      // Best-effort — a failed export isn't worth its own error banner here.
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <section className="content-grid transcripts-grid">
@@ -122,18 +189,15 @@ export function TranscriptsView({
               onClick={() => setShowFilters(v => !v)}
               style={{ position: 'relative' }}
             >
-              <Filter size={14} /> Filters {activeFilterCount > 0 && <span className="pill active" style={{ marginLeft: '4px', fontSize: '0.72rem', padding: '0 6px' }}>{activeFilterCount}</span>}
+              <Filter size={14} /> Filters {activeFilterCount > 0 && <span className="pill active" style={{ marginLeft: '4px', fontSize: 'var(--font-size-xs)', padding: '0 6px' }}>{activeFilterCount}</span>}
             </button>
-            <a
-              href={dateRangeInvalid ? undefined : csvUrl}
-              download
-              style={{ textDecoration: 'none', pointerEvents: dateRangeInvalid ? 'none' : undefined }}
-              aria-disabled={dateRangeInvalid}
+            <button
+              title={dateRangeInvalid ? 'Fix the date range before exporting' : 'Export CSV'}
+              disabled={dateRangeInvalid || exporting}
+              onClick={handleExportCsv}
             >
-              <button title={dateRangeInvalid ? 'Fix the date range before exporting' : 'Export CSV'} disabled={dateRangeInvalid}>
-                <Download size={14} /> Export
-              </button>
-            </a>
+              <Download size={14} /> {exporting ? 'Exporting…' : 'Export'}
+            </button>
           </div>
         </div>
         <div className="tab-toggle" role="tablist" aria-label="Call source" style={{ display: 'flex', gap: '4px', padding: '8px 16px 0' }}>
@@ -149,7 +213,7 @@ export function TranscriptsView({
               onClick={() => onSourceChange(value)}
               className={source === value ? 'tab active' : 'tab'}
               style={{
-                fontSize: '0.8rem',
+                fontSize: 'var(--font-size-md)',
                 padding: '4px 12px',
                 border: '1px solid var(--border)',
                 borderRadius: '999px',
@@ -163,50 +227,50 @@ export function TranscriptsView({
         </div>
         {showFilters && (
           <div style={{ padding: '10px 16px', background: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.8rem' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: 'var(--font-size-md)' }}>
               Status
-              <select value={filters.status} onChange={e => onFiltersChange({ ...filters, status: e.target.value })} style={{ fontSize: '0.8rem' }}>
+              <select value={filters.status} onChange={e => onFiltersChange({ ...filters, status: e.target.value })} style={{ fontSize: 'var(--font-size-md)' }}>
                 <option value="">All</option>
                 {['completed', 'not_interested', 'disconnected', 'voicemail', 'dnc', 'error', 'busy', 'no_answer'].map(s => (
                   <option key={s} value={s}>{s}</option>
                 ))}
               </select>
             </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.8rem' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: 'var(--font-size-md)' }}>
               Campaign
-              <select value={filters.campaign_id} onChange={e => onFiltersChange({ ...filters, campaign_id: e.target.value })} style={{ fontSize: '0.8rem' }}>
+              <select value={filters.campaign_id} onChange={e => onFiltersChange({ ...filters, campaign_id: e.target.value })} style={{ fontSize: 'var(--font-size-md)' }}>
                 <option value="">All</option>
                 {campaigns.map(c => <option key={c._id} value={c.campaign_key}>{c.name}</option>)}
               </select>
             </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.8rem' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: 'var(--font-size-md)' }}>
               Bot
-              <select value={filters.bot_id} onChange={e => onFiltersChange({ ...filters, bot_id: e.target.value })} style={{ fontSize: '0.8rem' }}>
+              <select value={filters.bot_id} onChange={e => onFiltersChange({ ...filters, bot_id: e.target.value })} style={{ fontSize: 'var(--font-size-md)' }}>
                 <option value="">All</option>
                 {bots.map(b => <option key={b._id} value={b._id}>{b.name}</option>)}
               </select>
             </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.8rem' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: 'var(--font-size-md)' }}>
               From date
-              <input type="date" value={filters.start_date} onChange={e => onFiltersChange({ ...filters, start_date: e.target.value })} style={{ fontSize: '0.8rem' }} />
+              <input type="date" value={filters.start_date} onChange={e => onFiltersChange({ ...filters, start_date: e.target.value })} style={{ fontSize: 'var(--font-size-md)' }} />
             </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.8rem' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: 'var(--font-size-md)' }}>
               To date
               <input
                 type="date"
                 value={filters.end_date}
                 min={filters.start_date || undefined}
                 onChange={e => onFiltersChange({ ...filters, end_date: e.target.value })}
-                style={{ fontSize: '0.8rem' }}
+                style={{ fontSize: 'var(--font-size-md)' }}
                 aria-invalid={dateRangeInvalid}
               />
             </label>
             {dateRangeInvalid && (
-              <span role="alert" style={{ fontSize: '0.78rem', color: 'var(--danger)', alignSelf: 'center' }}>
+              <span role="alert" style={{ fontSize: 'var(--font-size-sm)', color: 'var(--danger)', alignSelf: 'center' }}>
                 "To date" can't be before "From date".
               </span>
             )}
-            <button onClick={() => onFiltersChange({ status: '', outcome: '', campaign_id: '', bot_id: '', start_date: '', end_date: '' })} style={{ fontSize: '0.8rem' }}>
+            <button onClick={() => onFiltersChange({ status: '', outcome: '', campaign_id: '', bot_id: '', start_date: '', end_date: '' })} style={{ fontSize: 'var(--font-size-md)' }}>
               Clear
             </button>
           </div>
@@ -266,11 +330,19 @@ export function TranscriptsView({
               </button>
               <span className="muted">Page {page + 1} of {pageCount}</span>
               <button
-                onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-                disabled={page >= pageCount - 1}
+                onClick={() => {
+                  const atLastLoadedPage = page >= pageCount - 1;
+                  if (atLastLoadedPage && hasMore && onLoadMore) {
+                    onLoadMore();
+                    setPage((p) => p + 1);
+                  } else {
+                    setPage((p) => Math.min(pageCount - 1, p + 1));
+                  }
+                }}
+                disabled={page >= pageCount - 1 && !hasMore}
                 aria-label="Next page"
               >
-                Next <ChevronRight size={14} />
+                {loadingMore && page >= pageCount - 1 ? 'Loading…' : <>Next <ChevronRight size={14} /></>}
               </button>
             </div>
           </div>
@@ -288,24 +360,83 @@ export function TranscriptsView({
           <>
             <div className="detail-list">
               <Detail label="Call ID" value={selectedTranscript.call_id || '-'} copyable />
-              <Detail label="Bot version" value={selectedTranscript.bot_version_id ? shortId(selectedTranscript.bot_version_id) : '-'} />
-              <Detail label="Callback" value={selectedTranscript.callback_status || '-'} />
-              <Detail label="Transcript source" value={transcriptSourceLabel(selectedTranscript)} />
-              <Detail label="Verification" value={selectedTranscript.verified_transcript_status || 'legacy'} />
-              <Detail label="Max response delay" value={maxResponseDelayLabel(selectedTranscript)} />
-              <Detail label="Recording" value={recordingUrl || 'No recording saved'} />
-            </div>
-            <div className="source-strip">
-              <span className={`source-badge ${selectedTranscript.verified_transcript_status || 'legacy'}`}>
-                {transcriptSourceLabel(selectedTranscript)}
-              </span>
-              {(selectedTranscript.transcript_quality_flags || []).map((flag) => (
-                <span className="quality-flag" key={flag}>{titleCase(flag)}</span>
-              ))}
-              {selectedTranscript.verified_transcript_error && (
-                <span className="quality-flag error">{selectedTranscript.verified_transcript_error}</span>
+              {selectedTranscript.bot_version_id && (
+                <Detail label="Bot version" value={shortId(selectedTranscript.bot_version_id)} />
               )}
+              {selectedTranscript.callback_status && (
+                <Detail label="Callback" value={selectedTranscript.callback_status} />
+              )}
+              {maxResponseDelayLabel(selectedTranscript) !== '-' && (
+                <Detail label="Max response delay" value={maxResponseDelayLabel(selectedTranscript)} />
+              )}
+              {!recordingUrl && <Detail label="Recording" value="No recording saved" />}
             </div>
+            {((selectedTranscript.transcript_quality_flags || []).length > 0 || selectedTranscript.verified_transcript_error) && (
+              <div className="source-strip">
+                {(selectedTranscript.transcript_quality_flags || []).map((flag) => (
+                  <span className="quality-flag" key={flag}>{titleCase(flag)}</span>
+                ))}
+                {selectedTranscript.verified_transcript_error && (
+                  <span className="quality-flag error">{selectedTranscript.verified_transcript_error}</span>
+                )}
+              </div>
+            )}
+            {selectedTranscript.analysis ? (
+              <div className="analysis-section">
+                <div className="section-heading">
+                  <h3>Call analysis</h3>
+                </div>
+                <div className={`outcome-callout outcome-${outcomeTone(selectedTranscript.analysis.call_outcome || '')}`}>
+                  <span className="outcome-pill">{selectedTranscript.analysis.call_outcome || 'Unknown'}</span>
+                  {selectedTranscript.analysis.call_outcome_description && (
+                    <p>{selectedTranscript.analysis.call_outcome_description}</p>
+                  )}
+                </div>
+                {selectedTranscript.analysis.call_summary && (
+                  <DetailText label="Summary" value={selectedTranscript.analysis.call_summary} />
+                )}
+                <div className="detail-list">
+                  {selectedTranscript.analysis.is_business && (
+                    <Detail label="Business" value={selectedTranscript.analysis.is_business} />
+                  )}
+                  {selectedTranscript.analysis.business_name && (
+                    <Detail label="Business name" value={selectedTranscript.analysis.business_name} />
+                  )}
+                  {selectedTranscript.analysis.business_city && (
+                    <Detail label="Business city" value={selectedTranscript.analysis.business_city} />
+                  )}
+                  {selectedTranscript.analysis.lead_intent_score && (
+                    <Detail label="Lead intent score" value={selectedTranscript.analysis.lead_intent_score} />
+                  )}
+                  {selectedTranscript.analysis.deal_value && (
+                    <Detail label="Deal value" value={selectedTranscript.analysis.deal_value} />
+                  )}
+                  {selectedTranscript.analysis.urgency_flag && selectedTranscript.analysis.urgency_flag !== 'no' && (
+                    <Detail label="Urgency" value={selectedTranscript.analysis.urgency_flag} />
+                  )}
+                  {selectedTranscript.analysis.rescheduled_to && (
+                    <Detail label="Rescheduled to" value={selectedTranscript.analysis.rescheduled_to} />
+                  )}
+                </div>
+                {(selectedTranscript.analysis.qna || []).length > 0 && (
+                  <div className="analysis-qna">
+                    {(selectedTranscript.analysis.qna || []).map((qa, index) => (
+                      <div className="qna-item" key={qa.id || index}>
+                        <strong>{qa.question || qa.id || `Q${index + 1}`}</strong>
+                        <p>{String(qa.answer ?? '-')}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="analysis-section">
+                <div className="section-heading">
+                  <h3>Call analysis</h3>
+                </div>
+                <p className="muted">No analysis available for this call yet.</p>
+              </div>
+            )}
             {recordingUrl && (
               <div className="recording-player">
                 <div>
@@ -316,13 +447,10 @@ export function TranscriptsView({
                   <p className="notice error" role="alert" style={{ margin: 0 }}>
                     Recording is unavailable — the file may have been moved or deleted from storage.
                   </p>
+                ) : recordingBlobUrl ? (
+                  <AudioPlayer src={recordingBlobUrl} />
                 ) : (
-                  <audio
-                    controls
-                    preload="metadata"
-                    src={apiUrl(recordingUrl)}
-                    onError={() => setBrokenRecordingId(selectedTranscript._id)}
-                  />
+                  <div className="audio-player-skeleton" aria-label="Loading recording" />
                 )}
               </div>
             )}
@@ -350,27 +478,28 @@ export function TranscriptsView({
               ))}
               {!conversationItems.length && <p className="muted">No transcript turns saved for this call yet.</p>}
             </div>
-            <div className="timeline-section">
-              <div className="section-heading">
-                <h3>Call timeline</h3>
-                <span>{callEvents.length} events</span>
-              </div>
-              <div className="event-timeline">
-                {callEvents.map((event) => (
-                  <div className={`call-event ${event.severity || 'info'}`} key={event._id}>
-                    <div className="event-time">{formatTime(event.created_at)}</div>
-                    <div>
-                      <strong>{event.event_type}</strong>
-                      <p>{event.message}</p>
-                      {event.details && Object.keys(event.details).length > 0 && (
-                        <small>{summarizeDetails(event.details)}</small>
-                      )}
+            {callEvents.length > 0 && (
+              <div className="timeline-section">
+                <div className="section-heading">
+                  <h3>Call timeline</h3>
+                  <span>{callEvents.length} events</span>
+                </div>
+                <div className="event-timeline">
+                  {callEvents.map((event) => (
+                    <div className={`call-event ${event.severity || 'info'}`} key={event._id}>
+                      <div className="event-time">{formatTime(event.created_at)}</div>
+                      <div>
+                        <strong>{event.event_type}</strong>
+                        <p>{event.message}</p>
+                        {event.details && Object.keys(event.details).length > 0 && (
+                          <small>{summarizeDetails(event.details)}</small>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
-                {!callEvents.length && <p className="muted">No technical timeline events have been stored for this call yet.</p>}
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </>
         ) : <p className="muted">Select a transcript to inspect details.</p>}
       </div>

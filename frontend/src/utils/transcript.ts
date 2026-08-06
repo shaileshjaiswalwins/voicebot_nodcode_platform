@@ -3,6 +3,22 @@ import type { ConversationItem } from '../types';
 import { formatTime } from './formatting';
 import { titleCase } from './formatting';
 
+const POSITIVE_OUTCOME_HINTS = ['interested', 'qualified', 'enriched', 'callback requested', 'appointment'];
+const NEGATIVE_OUTCOME_HINTS = ['not interested', 'abusive', 'wrong number', 'do not call', 'rejected'];
+const NEUTRAL_OUTCOME_HINTS = ['short hangup', 'no response', 'hangup', 'disconnected', 'incomplete'];
+
+/** Rough sentiment bucket for a call_outcome string, used to color the outcome badge
+ * in the transcript detail panel. Order matters: negative/neutral hints are checked
+ * before the broader positive match so e.g. "not interested" doesn't hit "interested". */
+export function outcomeTone(outcome: string): 'positive' | 'negative' | 'neutral' | 'unknown' {
+  const lower = (outcome || '').toLowerCase();
+  if (!lower || lower === '-') return 'unknown';
+  if (NEGATIVE_OUTCOME_HINTS.some((hint) => lower.includes(hint))) return 'negative';
+  if (NEUTRAL_OUTCOME_HINTS.some((hint) => lower.includes(hint))) return 'neutral';
+  if (POSITIVE_OUTCOME_HINTS.some((hint) => lower.includes(hint))) return 'positive';
+  return 'neutral';
+}
+
 export const INLINE_EVENT_TYPES = new Set([
   'call_started',
   'first_user_audio_received',
