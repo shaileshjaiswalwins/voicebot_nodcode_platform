@@ -64,9 +64,6 @@ docs/
 .gstack/
 DESIGN-IS-*/
 
-# Stray __pycache__-only scratch dir (no source files), not part of the project
-voicebot_platform/
-
 # Shell scripts
 start_param.sh
 
