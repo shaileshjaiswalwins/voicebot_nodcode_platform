@@ -149,7 +149,7 @@ async def _process_doc(doc: dict, collection, http_session: aiohttp.ClientSessio
         )
         try:
             analysis, b2b_score = await asyncio.gather(
-                generate_call_analysis(transcript, status, schema, http_session, muted_transcript=muted_transcript, gemini_connect_failed=gemini_connect_failed, duration_secs=duration_secs, greeting_done=greeting_done, user_speech_ms=user_speech_ms, wrong_opener_detected=wrong_opener_detected, is_business_flag=is_business_flag, analysis_prompt_override=analysis_prompt_override),
+                generate_call_analysis(transcript, status, schema, http_session, muted_transcript=muted_transcript, gemini_connect_failed=gemini_connect_failed, duration_secs=duration_secs, greeting_done=greeting_done, user_speech_ms=user_speech_ms, wrong_opener_detected=wrong_opener_detected, is_business_flag=is_business_flag, analysis_prompt_override=analysis_prompt_override, language=doc.get("language", "")),
                 generate_b2b_score(transcript, http_session),
             )
         except Exception as e:

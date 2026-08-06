@@ -98,8 +98,13 @@ _PORT               = int(os.getenv("BOT_PORT", "8085"))
 _AGENT_NAME         = os.getenv("AGENT_NAME", os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial-live-2"))
 _NUM_IDLE_PROCESSES = int(os.getenv("NUM_IDLE_PROCESSES", "2"))
 
-# Language
-_LANGUAGE_KEY      = os.getenv("LANGUAGE_KEY", "hindi")
+# Language — env vars are deployment-level fallbacks only; per-bot DB config
+# (bot_config["language"]) always wins when present. Normalize legacy full-word
+# spellings ("hindi"/"english") to the canonical "hi"/"en" keys used everywhere
+# else (bot.py's LANG_CONFIGS, models.py's BotConfig.language) so `_language`
+# is never left as an un-normalized string that downstream `== "hi"` checks miss.
+_env_lang_key = os.getenv("LANGUAGE_KEY", "hi").strip().lower()
+_LANGUAGE_KEY = {"hindi": "hi", "english": "en"}.get(_env_lang_key, _env_lang_key)
 _STT_LANGUAGE_CODE = os.getenv("STT_LANGUAGE_CODE", "hi-IN")
 _TTS_LANGUAGE_CODE = os.getenv("TTS_LANGUAGE_CODE", "hi-IN")
 
@@ -130,6 +135,15 @@ _GENDER_OVERRIDE_MALE = (
     "  ✓ करूंगा        ✗ करूंगी\n"
     "  ✓ देख रहा हूँ    ✗ देख रही हूँ\n"
     "Never use a feminine self-reference, even in informal speech or identity answers."
+)
+
+# Non-Hindi equivalent: English (and other languages) don't inflect verbs/adjectives
+# for gender the way Hindi does, so there are no masculine forms to enforce — just
+# assert the identity.
+_GENDER_OVERRIDE_MALE_GENERIC = (
+    "\n\n━━━ GENDER OVERRIDE (MANDATORY — REPLACES ANY EARLIER GENDER RULE) ━━━\n\n"
+    "You are MALE. This OVERRIDES every earlier statement that the agent is female. "
+    "Never refer to yourself using feminine pronouns or feminine self-descriptions."
 )
 
 # System prompt extra
@@ -173,6 +187,13 @@ from bot import (
     CATEGORY_CHANGE_API as _BOT_CATEGORY_CHANGE_API,
     IST,
     HINDI_LANG_CONFIG,
+    ENGLISH_LANG_CONFIG,
+    LANG_CONFIGS,
+    DEFAULT_LANG_KEY,
+    resolve_lang_config,
+    TONE_CONFIGS,
+    DEFAULT_TONE_KEY,
+    resolve_tone_config,
     INACTIVITY_PHRASE,
     INACTIVITY_END_PHRASE,
     _get_mongo_collection as _bot_get_mongo_collection,
@@ -401,7 +422,9 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _api_urls = _bot_config.get("api_urls") or {}
     _mis_api_base = _api_urls.get("mis_api_base") or MIS_API_BASE
     _category_change_api = _api_urls.get("category_change_api") or CATEGORY_CHANGE_API
-    _language = _LANGUAGE_KEY
+    # Per-bot DB config wins when present; env var LANGUAGE_KEY is the deployment-level
+    # fallback default (kept for back-compat with existing env-only deployments).
+    _language = ((_bot_config.get("language") or _LANGUAGE_KEY or DEFAULT_LANG_KEY).strip().lower())
     _temperature = float(
         _LLM_TEMPERATURE_ENV if _LLM_TEMPERATURE_ENV is not None
         else (_bot_config.get("temperature") or 0.4)
@@ -414,7 +437,20 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _inactivity_first_nudge_gap_secs = float(_bot_config.get("inactivity_first_nudge_gap_secs") or 4.0)
     _inactivity_nudge_secs = float(_bot_config.get("inactivity_nudge_secs") or 10.0)
     _inactivity_close_secs = float(_bot_config.get("inactivity_close_secs") or 5.0)
-    _lang_cfg = HINDI_LANG_CONFIG
+    # _language already folds in the bot_config -> env-var -> default fallback chain
+    # above, so re-resolve the config off that resolved key (not off _bot_config alone)
+    # to keep the LANGUAGE_KEY env var meaningful as a deployment-level default.
+    _lang_cfg = resolve_lang_config({"language": _language})
+    # Per-bot STT/TTS language code: bot_config's explicit stt_language/tts_language wins,
+    # else derive from the resolved language (so an "en" bot actually gets English audio
+    # instead of silently staying on the STT_LANGUAGE_CODE/TTS_LANGUAGE_CODE env default),
+    # else fall back to the env var / hardcoded default as a last resort.
+    _STT_LANGUAGE_CODE = (
+        _bot_config.get("stt_language") or _lang_cfg.get("stt_lang_code") or _STT_LANGUAGE_CODE
+    )
+    _TTS_LANGUAGE_CODE = (
+        _bot_config.get("tts_language") or _lang_cfg.get("stt_lang_code") or _TTS_LANGUAGE_CODE
+    )
 
     # ── 3. Per-call state ──
     call_state = {
@@ -537,7 +573,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _prefetched_lead, lang_key=_language, bot_config=_bot_config
     )
     if _persona_gender == "male":
-        system_instruction = system_instruction + _GENDER_OVERRIDE_MALE
+        # The Hindi-specific masculine-verb-form override only makes sense for Hindi
+        # grammar; for other languages just assert the gender without Hindi forms.
+        if _lang_cfg is HINDI_LANG_CONFIG or _language == "hi":
+            system_instruction = system_instruction + _GENDER_OVERRIDE_MALE
+        else:
+            system_instruction = system_instruction + _GENDER_OVERRIDE_MALE_GENERIC
     if _SYSTEM_PROMPT_EXTRA:
         system_instruction = system_instruction + "\n\n" + _SYSTEM_PROMPT_EXTRA
 
@@ -1421,12 +1462,20 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         return result
 
     # ── 8. Agent + AgentSession ──
-    _LATENCY_HINT = (
-        "\n\nRESPONSE SPEED RULE (mandatory): Start every reply with a 1–3 word Hindi "
-        "acknowledgment ONLY — e.g. 'जी,', 'हाँ,', 'बिल्कुल,', 'ठीक है,' — on its own "
-        "before the full answer. Never skip this opener. This is required so the caller "
-        "hears audio immediately while the rest of the response is still being generated."
-    )
+    if _lang_cfg is HINDI_LANG_CONFIG or _language == "hi":
+        _LATENCY_HINT = (
+            "\n\nRESPONSE SPEED RULE (mandatory): Start every reply with a 1–3 word Hindi "
+            "acknowledgment ONLY — e.g. 'जी,', 'हाँ,', 'बिल्कुल,', 'ठीक है,' — on its own "
+            "before the full answer. Never skip this opener. This is required so the caller "
+            "hears audio immediately while the rest of the response is still being generated."
+        )
+    else:
+        _LATENCY_HINT = (
+            "\n\nRESPONSE SPEED RULE (mandatory): Start every reply with a 1–3 word "
+            "acknowledgment ONLY — e.g. 'Sure,', 'Okay,', 'Alright,', 'Got it,' — on its own "
+            "before the full answer. Never skip this opener. This is required so the caller "
+            "hears audio immediately while the rest of the response is still being generated."
+        )
     system_instruction = system_instruction + _LATENCY_HINT
 
     tools = [FetchCategorySchema, FetchLead] if _function_calling else []

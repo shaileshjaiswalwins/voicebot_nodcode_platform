@@ -247,6 +247,9 @@ class BotConfig(BaseModel):
     persona_gender: Literal["female", "male"] = "female"
     ai_partner: str = ""
     language: str = "hi"
+    # Conversational tone preset — key into bot.py's TONE_CONFIGS (e.g. "casual", "formal").
+    # Lets otherwise-identical bots sound more/less formal without a separate prompt rewrite.
+    tone: Literal["casual", "formal"] = "casual"
     voice: str = ""
     system_prompt: str = ""
     initial_message: str = ""

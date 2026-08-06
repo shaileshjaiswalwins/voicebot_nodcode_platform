@@ -102,6 +102,9 @@ from bot import (
     HINDI_LANG_CONFIG,
     INACTIVITY_PHRASE,
     INACTIVITY_END_PHRASE,
+    DEFAULT_LANG_KEY,
+    resolve_lang_config,
+    resolve_tone_config,
     _save_transcript_to_dashboard_db,
 )
 from custom_function_tools import build_during_call_tools
@@ -302,7 +305,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _api_urls = _bot_config.get("api_urls") or {}
     _mis_api_base = _api_urls.get("mis_api_base") or MIS_API_BASE
     _category_change_api = _api_urls.get("category_change_api") or CATEGORY_CHANGE_API
-    _language = "hindi"
+    _language = ((_bot_config.get("language") or DEFAULT_LANG_KEY).strip().lower())
     _temperature = float(_bot_config.get("temperature") or 0.4)
     _max_call_duration = int(_bot_config.get("max_call_duration") or 300)
     # Pipeline mode: higher threshold than bot.py defaults — filters TTS echo
@@ -316,7 +319,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _inactivity_close_secs = float(_bot_config.get("inactivity_close_secs") or 5.0)
     _functions: list[dict] = _bot_config.get("functions") or []
     _function_calling = bool(_bot_config.get("function_calling", False)) and bool(_functions)
-    _lang_cfg = HINDI_LANG_CONFIG
+    _lang_cfg = resolve_lang_config(_bot_config)
 
     # ── 3. Per-call state ──
     call_state = {
@@ -732,7 +735,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 return
             _log.info("[INACTIVITY] extended silence — ending call directly")
             call_state["ended_naturally"] = True
-            end_phrase = INACTIVITY_END_PHRASE
+            end_phrase = _lang_cfg.get("inactivity_end_phrase") or INACTIVITY_END_PHRASE
             try:
                 # session.say returns a SpeechHandle; await it to wait for full playout
                 await session.say(end_phrase, allow_interruptions=False)
@@ -761,7 +764,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _nudge_count = 0
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
                 return
-            nudge = INACTIVITY_PHRASE
+            nudge = _lang_cfg.get("inactivity_phrase") or INACTIVITY_PHRASE
             _log.info(f"[INACTIVITY] {sleep_secs:.0f}s silence — nudge {_nudge_count}: {nudge!r}")
             _nudge_in_progress = True
             # Fire-and-forget: agent_state "speaking" → "listening" will call _reset_inactivity()

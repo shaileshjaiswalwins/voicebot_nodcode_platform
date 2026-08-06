@@ -201,6 +201,7 @@ async def generate_call_analysis(
     wrong_opener_detected: bool = False,
     is_business_flag: int | None = None,
     analysis_prompt_override: str = "",
+    language: str = "",
 ) -> dict:
     if gemini_connect_failed:
         return {
@@ -1622,8 +1623,25 @@ explicitly stated or clearly implied by the buyer's direct response to the agent
   "business_intent": "<'hot_lead'|'business_not_interested'|'not_into_business'|'no_response'|'not_pitched'|'' — per Step 2C>",
   "b2b_user": "<'yes'|'no'|'' — per Step 2C>","""
 
+    # Bot's spoken language ("hi"/"en"/...) as saved on the transcript doc by bot.py.
+    # Older docs and non-bot.py entrypoints won't have it — default to "hi" (legacy behavior)
+    # rather than silently changing output for calls we have no signal on.
+    _lang_key = (language or "hi").strip().lower()
+    if _lang_key == "hi":
+        _language_note = (
+            "\nTranscript language: Hindi/Hinglish. Write any Hindi/Hinglish speech you quote "
+            "in Devanagari script, not Latin transliteration."
+        )
+    else:
+        _language_note = (
+            f"\nTranscript language: this call was conducted in language code '{_lang_key}'. "
+            "Write the transcript in the language actually spoken, using the standard script "
+            "for that language — do not assume Hindi/Devanagari."
+        )
+
     _analysis_prompt_ctx = {
         "cut_note": cut_note,
+        "_language_note": _language_note,
         "_wrong_opener_note": _wrong_opener_note,
         "_truncated_greeting_note": _truncated_greeting_note,
         "_phantom_connect_note": _phantom_connect_note,

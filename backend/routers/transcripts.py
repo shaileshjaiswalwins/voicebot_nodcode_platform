@@ -1,14 +1,41 @@
+import asyncio
+import os
 import re
 from datetime import datetime, timedelta, timezone
 
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ..auth import require_user
 from ..db import transcripts
 
 router = APIRouter(tags=["transcripts"])
+
+# Browser-recorded (mic + bot audio mixed, webm) dashboard Test Call recordings.
+# This restores the local-recording feature from the pre-refactor voicebot_platform/api.py
+# (commits "Record dashboard test calls" / "Add local test recording storage") that got
+# dropped when that module was replaced by backend/routers/*. Same default path.
+TEST_RECORDINGS_DIR = os.path.expanduser(
+    os.getenv("VOICEBOT_TEST_RECORDING_DIR", "~/Documents/voicebot_test_recordings")
+)
+
+
+def _recording_extension(content_type: str) -> str:
+    if "webm" in content_type:
+        return ".webm"
+    if "ogg" in content_type:
+        return ".ogg"
+    if "mp4" in content_type or "mpeg" in content_type:
+        return ".mp4"
+    return ".webm"
+
+
+def _safe_room_filename(room_name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", room_name).strip(".-")
+    if not cleaned or not cleaned.startswith("test-"):
+        raise HTTPException(400, "Only dashboard test room recordings can be saved.")
+    return cleaned
 
 
 def _oid(id_str: str) -> ObjectId:
@@ -60,17 +87,31 @@ def list_transcripts(
     status: str = Query(""),
     text: str = Query(""),
     source: str = Query(""),
-    limit: int = Query(200, le=1000),
+    before: str = Query(""),  # ISO created_at cursor — return docs strictly older than this
+    limit: int = Query(50, le=200),
     _: dict = Depends(require_user),
 ) -> list[dict]:
     query = _build_filter(bot_id, campaign_id, status, text, source)
-    # config_snapshot (a full copy of the bot config, ~20-40KB) and call_events are
-    # never read by the frontend from this response — config_snapshot has no reader
-    # anywhere in the codebase, and call_events is fetched separately via
-    # GET /api/transcripts/{id}/events on select. Excluding both is what actually
-    # cuts payload size for the list (config_snapshot alone was the majority of
-    # bytes transferred per document).
-    docs = transcripts.find(query, {"call_events": 0, "config_snapshot": 0}).sort("created_at", -1).limit(limit)
+    if before:
+        try:
+            query["created_at"] = {"$lt": datetime.fromisoformat(before)}
+        except ValueError:
+            raise HTTPException(400, "Invalid 'before' cursor") from None
+    # config_snapshot (a full copy of the bot config, ~20-40KB) and call_events are never
+    # read by the frontend from this response — call_events is fetched separately via
+    # GET /api/transcripts/{id}/events, and config_snapshot has no reader anywhere.
+    # transcript/muted_transcript (every turn of the call) are the actual bulk of a
+    # document's size but the list view only ever shows a turn *count* per row — the
+    # detail panel re-fetches the full document via GET /api/transcripts/{id} on select,
+    # so dropping them here doesn't lose anything the list itself uses.
+    pipeline = [
+        {"$match": query},
+        {"$sort": {"created_at": -1}},
+        {"$limit": limit},
+        {"$addFields": {"transcript_count": {"$size": {"$ifNull": ["$transcript", []]}}}},
+        {"$project": {"call_events": 0, "config_snapshot": 0, "transcript": 0, "muted_transcript": 0}},
+    ]
+    docs = transcripts.aggregate(pipeline)
     return [_serialize(d) for d in docs]
 
 
@@ -88,6 +129,71 @@ def recording_lookup(call_id: str, _: dict = Depends(require_user)) -> dict:
     if not doc:
         return {}
     return {"recording_url": doc.get("recording_url", ""), "recording_source": doc.get("recording_source", "")}
+
+
+@router.post("/api/transcripts/recordings/{room_name}")
+async def upload_test_recording(room_name: str, request: Request, _: dict = Depends(require_user)) -> dict:
+    safe_room = _safe_room_filename(room_name)
+    body = await request.body()
+    if not body:
+        raise HTTPException(400, "Recording upload was empty.")
+    content_type = request.headers.get("content-type", "audio/webm")
+    extension = _recording_extension(content_type)
+    os.makedirs(TEST_RECORDINGS_DIR, exist_ok=True)
+    saved_at = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    filename = f"{safe_room}-{saved_at}{extension}"
+    path = os.path.join(TEST_RECORDINGS_DIR, filename)
+    with open(path, "wb") as f:
+        f.write(body)
+    recording_url = f"/api/transcripts/recordings/{filename}"
+    # The transcript doc is written by the bot worker after the call ends, which can
+    # race this upload (browser stops recording on disconnect, roughly when the worker
+    # is also saving) — retry briefly rather than losing the attachment on a near-miss.
+    matched = False
+    for _attempt in range(8):
+        result = transcripts.update_one(
+            {"room_name": room_name},
+            {"$set": {"recording_url": recording_url, "recording_source": "dashboard_test_local"}},
+        )
+        matched = result.matched_count > 0
+        if matched:
+            break
+        await asyncio.sleep(1)
+    return {
+        "room_name": room_name,
+        "recording_url": recording_url,
+        "transcripts_updated": matched,
+    }
+
+
+@router.get("/api/transcripts/recordings/{filename}")
+def get_recording(filename: str, _: dict = Depends(require_user)) -> FileResponse:
+    # os.path.basename strips any directory components — filename can only ever
+    # resolve to a direct child of TEST_RECORDINGS_DIR, no path traversal.
+    safe_name = os.path.basename(filename)
+    path = os.path.join(TEST_RECORDINGS_DIR, safe_name)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "Recording not found")
+    return FileResponse(path, media_type="audio/webm", filename=safe_name)
+
+
+@router.get("/api/transcripts/recordings/by-room/{room_name}")
+def get_recording_by_room(room_name: str, _: dict = Depends(require_user)) -> dict:
+    safe_room = _safe_room_filename(room_name)
+    if not os.path.isdir(TEST_RECORDINGS_DIR):
+        raise HTTPException(404, "recording_not_found")
+    matches = sorted(
+        (f for f in os.listdir(TEST_RECORDINGS_DIR) if f.startswith(f"{safe_room}-")),
+        key=lambda name: os.path.getmtime(os.path.join(TEST_RECORDINGS_DIR, name)),
+        reverse=True,
+    )
+    if not matches:
+        raise HTTPException(404, "recording_not_found")
+    return {
+        "room_name": room_name,
+        "recording_url": f"/api/transcripts/recordings/{matches[0]}",
+        "recording_source": "dashboard_test_local",
+    }
 
 
 @router.get("/api/transcripts/export.csv")
@@ -125,3 +231,17 @@ def export_csv(
             )
 
     return StreamingResponse(rows(), media_type="text/csv")
+
+
+# Must be registered after every other literal /api/transcripts/<segment> route above
+# (export.csv, recording-lookup/*, recordings/*) — FastAPI/Starlette matches routes in
+# registration order, and this single dynamic segment would otherwise shadow all of them.
+@router.get("/api/transcripts/{transcript_id}")
+def get_transcript(transcript_id: str, _: dict = Depends(require_user)) -> dict:
+    """Full document for the detail panel — the list endpoint above omits transcript/
+    muted_transcript to keep the list payload light, so the detail view re-fetches here
+    on selection instead of relying on data already being in the list response."""
+    doc = transcripts.find_one({"_id": _oid(transcript_id)}, {"config_snapshot": 0})
+    if not doc:
+        raise HTTPException(404, "Transcript not found")
+    return _serialize(doc)

@@ -99,15 +99,36 @@ def generate_prompt(mode: str, instruction: str, current_prompt: str, target: st
 
 _CREATE_AGENT_INSTRUCTIONS = (
     "You are helping a non-technical user create a voice call center agent from a plain-English "
-    "description of what they want. Given their description, produce exactly three things:\n"
-    "1. agent_name — a short, plausible spoken persona first name for the bot (e.g. \"Priya\", \"Rahul\").\n"
-    "2. initial_message — the bot's opening line when the call connects. One or two short "
+    "description of what they want. Given their description, produce exactly nine things:\n"
+    "1. agent_name — a common Hindi/Indian first name for the bot's persona (e.g. \"Priya\", \"Rahul\", "
+    "\"Meera\", \"Aman\"). Never use an English/Western name (e.g. \"Alex\", \"Sarah\", \"John\"), even "
+    "if the conversation itself will be in English.\n"
+    "2. description — one short sentence (no headers, no placeholders like \"[Company Name]\") "
+    "summarizing what this bot does, consistent with agent_name. Never copy boilerplate structure "
+    "from the user's description verbatim.\n"
+    "3. persona_gender — \"male\" or \"female\", matching the gender implied by agent_name (e.g. "
+    "\"Rahul\" implies \"male\", \"Priya\" implies \"female\").\n"
+    "4. stt_language / tts_language — the language the caller and bot will actually speak, as a "
+    "BCP-47-style code from this exact set: hi-IN (Hindi), en-IN (English/India), bn-IN (Bengali), "
+    "gu-IN (Gujarati), kn-IN (Kannada), ml-IN (Malayalam), mr-IN (Marathi), od-IN (Odia), pa-IN "
+    "(Punjabi), ta-IN (Tamil), te-IN (Telugu). Infer this from the description (e.g. \"for Tamil "
+    "customers\" -> ta-IN); default to hi-IN if nothing in the description implies a language. Both "
+    "fields must be set to the same value.\n"
+    "5. initial_message — the bot's opening line when the call connects, written in the language "
+    "chosen for tts_language (script and all, not transliterated English). One or two short "
     "conversational sentences, in the bot's own persona, that greet the caller and state why "
     "it's calling/what it can help with.\n"
-    "3. system_prompt — a complete system prompt for the bot: its role, the conversation's goal, "
-    "a rough step-by-step flow, tone/style guidance, and 2-3 explicit constraints.\n\n"
-    "Respond with ONLY a raw JSON object with exactly these three keys (agent_name, "
-    "initial_message, system_prompt), no markdown fences, no commentary before or after."
+    "6. call_end_text — the bot's closing line when it hangs up, in the same language as "
+    "tts_language, consistent in tone with initial_message.\n"
+    "7. system_prompt — a complete system prompt for the bot: its role, the conversation's goal, "
+    "a rough step-by-step flow, tone/style guidance, and 2-3 explicit constraints.\n"
+    "8. interruption_sensitivity — \"patient\" if the description implies letting callers speak at "
+    "length without cutting in (e.g. elderly callers, detailed complaints), \"responsive\" if it "
+    "implies a fast, no-nonsense call (e.g. quick verification, sales qualification), otherwise "
+    "\"balanced\".\n\n"
+    "Respond with ONLY a raw JSON object with exactly these eight keys (agent_name, description, "
+    "persona_gender, stt_language, tts_language, initial_message, call_end_text, system_prompt, "
+    "interruption_sensitivity), no markdown fences, no commentary before or after."
 )
 
 
@@ -118,26 +139,52 @@ def _extract_json_object(text: str) -> dict:
     return json.loads(cleaned)
 
 
+_VALID_SARVAM_LANGUAGES = {
+    "hi-IN", "en-IN", "bn-IN", "gu-IN", "kn-IN", "ml-IN", "mr-IN", "od-IN", "pa-IN", "ta-IN", "te-IN",
+}
+_VALID_INTERRUPTION_SENSITIVITIES = {"patient", "balanced", "responsive"}
+
+
 def generate_agent_from_description(description: str) -> dict:
-    """Create Agent > Create with AI: derives agent_name/initial_message/system_prompt from a
-    free-text description in one call, so a non-technical user never has to write a prompt by
-    hand. Everything else (TTS/STT/language/etc.) is left to the platform's own defaults —
-    this only fills in the fields an LLM can reasonably infer from a short description."""
+    """Create Agent > Create with AI: derives agent_name/initial_message/system_prompt (plus
+    persona/language fields below) from a free-text description in one call, so a non-technical
+    user never has to write a prompt by hand or hunt down the matching language/voice settings
+    themselves. Everything else is left to the platform's own defaults — this only fills in the
+    fields an LLM can reasonably infer from a short description."""
     prompt = f"{_CREATE_AGENT_INSTRUCTIONS}\n\nUser's description of the agent they want:\n{description}"
     client = _client()
     raw = client.models.generate_content(model=_GEMINI_MODEL, contents=prompt).text
     try:
         parsed = _extract_json_object(raw)
+        persona_gender = str(parsed.get("persona_gender", "")).strip().lower()
+        if persona_gender not in ("male", "female"):
+            persona_gender = "female"
+        tts_language = str(parsed.get("tts_language", "")).strip()
+        if tts_language not in _VALID_SARVAM_LANGUAGES:
+            tts_language = "hi-IN"
+        interruption_sensitivity = str(parsed.get("interruption_sensitivity", "")).strip().lower()
+        if interruption_sensitivity not in _VALID_INTERRUPTION_SENSITIVITIES:
+            interruption_sensitivity = "balanced"
         return {
             "agent_name": str(parsed.get("agent_name", "")).strip(),
+            "description": str(parsed.get("description", "")).strip(),
+            "persona_gender": persona_gender,
+            "stt_language": tts_language,
+            "tts_language": tts_language,
             "initial_message": str(parsed.get("initial_message", "")).strip(),
+            "call_end_text": str(parsed.get("call_end_text", "")).strip(),
             "system_prompt": str(parsed.get("system_prompt", "")).strip(),
+            "interruption_sensitivity": interruption_sensitivity,
         }
     except (json.JSONDecodeError, AttributeError):
         # Model didn't follow the JSON format — fall back to treating the whole response as
         # the system prompt rather than losing the generation entirely; agent_name/
         # initial_message just stay blank for the user to fill in themselves.
-        return {"agent_name": "", "initial_message": "", "system_prompt": raw.strip()}
+        return {
+            "agent_name": "", "description": "", "persona_gender": "", "stt_language": "",
+            "tts_language": "", "initial_message": "", "call_end_text": "",
+            "system_prompt": raw.strip(), "interruption_sensitivity": "",
+        }
 
 
 # Sentinel written into any URL field the model would otherwise have to invent (function-node
@@ -153,7 +200,23 @@ executed in order at call time (no free-form LLM wandering between steps).
 
 Produce ONLY a raw JSON object (no markdown fences, no commentary) with exactly these top-level keys:
 
-- "agent_name": short spoken persona first name (e.g. "Priya", "Rahul").
+- "agent_name": a common Hindi/Indian first name for the bot's persona (e.g. "Priya", "Rahul", "Meera",
+  "Aman"). Never use an English/Western name (e.g. "Alex", "Sarah", "John"), even if the conversation
+  itself will be in English.
+- "description": one short sentence (no headers, no placeholders like "[Company Name]") summarizing
+  what this bot does, consistent with "agent_name" — e.g. "Priya handles HR onboarding queries and
+  routes escalations to a human." Never copy boilerplate structure from the user's description verbatim.
+- "persona_gender": "male" or "female", matching the gender implied by "agent_name" (e.g. "Rahul"
+  implies "male", "Priya" implies "female").
+- "tts_language": the language the caller and bot will actually speak, as a code from this exact set:
+  hi-IN (Hindi), en-IN (English/India), bn-IN (Bengali), gu-IN (Gujarati), kn-IN (Kannada), ml-IN
+  (Malayalam), mr-IN (Marathi), od-IN (Odia), pa-IN (Punjabi), ta-IN (Tamil), te-IN (Telugu). Infer
+  from the description (e.g. "for Tamil customers" -> ta-IN); default to hi-IN if nothing implies a
+  language. The start node's "first_message" and any "closing_message" must be written in this
+  language's script, not transliterated English.
+- "interruption_sensitivity": "patient" if the description implies letting callers speak at length
+  without cutting in (e.g. elderly callers, detailed complaints), "responsive" if it implies a fast,
+  no-nonsense call (e.g. quick verification, sales qualification), otherwise "balanced".
 - "global_prompt": 1-3 sentences of shared persona/context prepended to every node's instructions.
 - "nodes": array of node objects, each: {{"id": string, "data": {{...}}}}. Every "id" must be unique
   and referenced consistently by edges. Node "data.kind" must be one of:
@@ -336,8 +399,23 @@ def generate_workflow_from_description(description: str) -> dict:
     nodes, edges = _sanitize_graph(nodes, edges)
     _autolayout(nodes, edges)
 
+    persona_gender = str(parsed.get("persona_gender", "")).strip().lower()
+    if persona_gender not in ("male", "female"):
+        persona_gender = "female"
+    tts_language = str(parsed.get("tts_language", "")).strip()
+    if tts_language not in _VALID_SARVAM_LANGUAGES:
+        tts_language = "hi-IN"
+    interruption_sensitivity = str(parsed.get("interruption_sensitivity", "")).strip().lower()
+    if interruption_sensitivity not in _VALID_INTERRUPTION_SENSITIVITIES:
+        interruption_sensitivity = "balanced"
+
     return {
         "agent_name": str(parsed.get("agent_name", "")).strip(),
+        "description": str(parsed.get("description", "")).strip(),
+        "persona_gender": persona_gender,
+        "stt_language": tts_language,
+        "tts_language": tts_language,
+        "interruption_sensitivity": interruption_sensitivity,
         "global_prompt": str(parsed.get("global_prompt", "")).strip(),
         "workflow": {"nodes": nodes, "edges": edges},
         "functions": parsed.get("functions") or [],

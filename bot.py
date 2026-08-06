@@ -847,6 +847,9 @@ def start_worker_heartbeat(agent_name: str) -> None:
 HINDI_LANG_CONFIG = {
     "name": "Hindi",
     "timeout_message": "जी, details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए धन्यवाद.",
+    "stt_lang_code": "hi-IN",
+    "inactivity_phrase": "क्या आप अभी line पर हैं?",
+    "inactivity_end_phrase": "जी, कोई response नहीं आया, इसलिए मैं call समाप्त कर रही हूँ. अगर future में आपको किसी भी तरह की requirement हो, तो आप Justdial पर कभी भी call कर सकते हैं. धन्यवाद.",
     "lang_notes": (
         "LANGUAGE NOTES — HINDI\n\n"
         "INPUT: The buyer typically speaks Hindi, Hinglish, or Indian-accented English. If audio is unclear and no explicit language-switch has happened, assume Hindi. If the buyer clearly speaks in English or explicitly requests a language change, honour it — refer to LANGUAGE SWITCHING rules above.\n\n"
@@ -874,8 +877,76 @@ HINDI_LANG_CONFIG = {
     ),
 }
 
-INACTIVITY_PHRASE = "क्या आप अभी line पर हैं?"
-INACTIVITY_END_PHRASE = "जी, कोई response नहीं आया, इसलिए मैं call समाप्त कर रही हूँ. अगर future में आपको किसी भी तरह की requirement हो, तो आप Justdial पर कभी भी call कर सकते हैं. धन्यवाद."
+ENGLISH_LANG_CONFIG = {
+    "name": "English",
+    "timeout_message": "Great, we've got your details. Relevant sellers will reach out to you shortly. Thanks for your time.",
+    "stt_lang_code": "en-IN",
+    "inactivity_phrase": "Are you still there?",
+    "inactivity_end_phrase": "Since we haven't heard a response, I'll end the call here. Feel free to call Justdial again anytime you have a requirement. Thank you.",
+    "lang_notes": (
+        "LANGUAGE NOTES — ENGLISH\n\n"
+        "INPUT: The buyer is speaking English. Stay in English for the rest of the call unless they explicitly ask to switch.\n\n"
+        "STYLE: Natural spoken Indian-English — how a real person talks on a call. Conversational and warm, never formal or literary.\n"
+        "  Good: 'Sure', 'Okay, got it', 'Alright'\n"
+        "  Avoid: 'It brings me great pleasure to assist you', 'I am here to help you'\n\n"
+        "NUMBERS — HARD RULE: Always say a number as a whole number, never digit-by-digit unless it's a code (e.g. 1100 → 'eleven hundred', a code like 1100 read digit-by-digit → 'one one zero zero').\n\n"
+        "DECIMALS: Read decimals the natural way — e.g. 9.3 → 'nine point three'."
+    ),
+}
+
+# Registry of supported conversational languages, keyed by the BotConfig.language
+# value. Add a new language by adding an entry here — no other code changes
+# needed as long as the entry provides the same keys as the ones above.
+LANG_CONFIGS: dict = {
+    "hi": HINDI_LANG_CONFIG,
+    "en": ENGLISH_LANG_CONFIG,
+}
+# Accept the older full-word spellings too, since some existing bot configs / scripts use them.
+_LANG_KEY_ALIASES = {"hindi": "hi", "english": "en"}
+DEFAULT_LANG_KEY = "hi"
+
+
+def resolve_lang_config(bot_config: dict | None) -> dict:
+    """Per-bot language lookup. bot_config['language'] is a free-text key into
+    LANG_CONFIGS (e.g. "hi", "en"); unknown/missing values fall back to
+    DEFAULT_LANG_KEY so existing bots keep behaving exactly as before."""
+    key = ((bot_config or {}).get("language") or DEFAULT_LANG_KEY).strip().lower()
+    key = _LANG_KEY_ALIASES.get(key, key)
+    return LANG_CONFIGS.get(key, LANG_CONFIGS[DEFAULT_LANG_KEY])
+
+
+# Tone presets layered on top of whichever language is selected. "casual" matches
+# today's existing behaviour (the default), "formal" is an opt-in per-bot variant.
+TONE_CONFIGS: dict = {
+    "casual": {
+        "name": "Casual",
+        "notes": (
+            "TONE — CASUAL (default)\n\n"
+            "Speak like a friendly, efficient call-center agent talking to someone they respect but aren't stiff with. "
+            "Contractions, colloquial fillers, and a relaxed pace are all fine. Keep sentences short."
+        ),
+    },
+    "formal": {
+        "name": "Formal",
+        "notes": (
+            "TONE — FORMAL\n\n"
+            "Speak politely and professionally — as if addressing a senior client. Avoid slang and overly casual fillers. "
+            "Use complete, courteous sentences (e.g. prefer a respectful register over shortened colloquial phrasing), "
+            "but stay natural and conversational — never robotic or literary. Do not become curt or terse."
+        ),
+    },
+}
+DEFAULT_TONE_KEY = "casual"
+
+
+def resolve_tone_config(bot_config: dict | None) -> dict:
+    key = ((bot_config or {}).get("tone") or DEFAULT_TONE_KEY).strip().lower()
+    return TONE_CONFIGS.get(key, TONE_CONFIGS[DEFAULT_TONE_KEY])
+
+
+# Back-compat aliases — some call sites still reference these module-level names.
+INACTIVITY_PHRASE = HINDI_LANG_CONFIG["inactivity_phrase"]
+INACTIVITY_END_PHRASE = HINDI_LANG_CONFIG["inactivity_end_phrase"]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1223,8 +1294,11 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     else:
         base_prompt = _bc.get("system_prompt", "You are Simran, a product qualification agent for Justdial.")
 
+    _lang_cfg = resolve_lang_config(_bc)
+    _tone_cfg = resolve_tone_config(_bc)
+
     cfg = _load_prompt_config()
-    language_name = cfg.get("language_name") or HINDI_LANG_CONFIG["name"]
+    language_name = cfg.get("language_name") or _lang_cfg["name"]
 
     if _pc.get("script_rule"):
         script_rule = _pc["script_rule"]
@@ -1233,12 +1307,16 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     else:
         script_rule = f"Every word MUST be in {language_name} script ONLY."
 
-    lang_notes = HINDI_LANG_CONFIG.get("lang_notes", "")
+    lang_notes = _lang_cfg.get("lang_notes", "")
     lang_notes_block = f"\n\nLANGUAGE NOTES\n\n{lang_notes}\n" if lang_notes else ""
+
+    tone_notes = _tone_cfg.get("notes", "")
+    tone_notes_block = f"\n\n{tone_notes}\n" if tone_notes else ""
 
     base = (
         base_prompt.replace("{script_rule}", script_rule).replace("{language_name}", language_name)
         + lang_notes_block
+        + tone_notes_block
     )
 
     _functions_cfg = _bc.get("functions") or []
@@ -1831,7 +1909,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _api_urls = _bot_config.get("api_urls") or {}
     _mis_api_base        = _api_urls.get("mis_api_base") or MIS_API_BASE
     _category_change_api = _api_urls.get("category_change_api") or CATEGORY_CHANGE_API
-    _language           = "hindi"
+    _language           = ((_bot_config.get("language") or DEFAULT_LANG_KEY).strip().lower())
     _temperature        = float(_bot_config.get("temperature") or 0.4)
     _vad_start          = _bot_config.get("gemini_start_sensitivity") or "START_SENSITIVITY_HIGH"
     _vad_end            = _bot_config.get("gemini_end_sensitivity")   or "END_SENSITIVITY_HIGH"
@@ -1853,7 +1931,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _inactivity_close_secs           = float(_bot_config.get("inactivity_close_secs")           or 5.0)
     _functions: list[dict] = _bot_config.get("functions") or []
     _function_calling   = bool(_bot_config.get("function_calling", False)) and bool(_functions)
-    _lang_cfg           = HINDI_LANG_CONFIG
+    _lang_cfg           = resolve_lang_config(_bot_config)
 
     # 3. Per-call state
     call_state = {
@@ -2051,6 +2129,10 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
             "tagged": False,
             "tagged_at": None,
             "created_at": datetime.now(timezone.utc),
+            # Bot's configured spoken language (LANG_CONFIGS key, e.g. "hi"/"en") — lets
+            # callback_worker/analysis.py tailor its post-call analysis instructions to the
+            # language actually spoken instead of assuming Hindi for every call.
+            "language": _language,
         }
         try:
             loop = asyncio.get_running_loop()
@@ -2310,7 +2392,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 return
             _log.info("[INACTIVITY] extended silence — ending call directly")
             call_state["ended_naturally"] = True
-            end_phrase = INACTIVITY_END_PHRASE
+            end_phrase = _lang_cfg.get("inactivity_end_phrase") or INACTIVITY_END_PHRASE
             await _speak_via_gemini(end_phrase, reason="inactivity-end")
             # _speak_via_gemini returns immediately after sending the directive.
             # Poll agent_state to wait for Gemini to start then fully finish
@@ -2424,7 +2506,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _nudge_count = 0
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
                 return
-            nudge = INACTIVITY_PHRASE
+            nudge = _lang_cfg.get("inactivity_phrase") or INACTIVITY_PHRASE
             _log.info(f"[INACTIVITY] {sleep_secs:.0f}s silence — nudge {_nudge_count}: {nudge!r}")
             _nudge_in_progress = True
             await _speak_via_gemini(nudge, reason="inactivity-nudge")
