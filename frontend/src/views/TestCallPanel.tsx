@@ -291,9 +291,11 @@ export function TestCallPanel({
     setForm((current) => ({ ...current, dynamic_variables: { ...current.dynamic_variables, [key]: value } }));
   }
 
-  // Prefer the saved runtime setting; fall back to the backend's actual env var
-  // (LIVEKIT_AGENT_NAME — what the real worker process registers under) before any placeholder.
-  const defaultWorker = runtimeSettings?.livekit_agent_name || runtimeSettings?.livekit_agent_name_env_default || 'voice-bot-justdial';
+  // The name the backend actually dispatches to (testcall.py's TESTCALL_AGENT_NAME). This
+  // used to display runtimeSettings.livekit_agent_name, which the test-call endpoint never
+  // reads — so the panel could confidently show one worker while the dispatch went to
+  // another, and a call that reached nobody looked correctly configured on screen.
+  const defaultWorker = 'voice-bot-justdial-dashboard-test';
   const effectiveWorker = form.test_worker_agent_name || defaultWorker;
   const agentState = deriveAgentState(status, remoteAudioReady, Boolean(roomName));
   const connected = Boolean(roomName) && status !== 'Idle' && status !== 'Failed';
