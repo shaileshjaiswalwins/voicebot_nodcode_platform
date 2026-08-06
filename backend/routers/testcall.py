@@ -23,6 +23,15 @@ dispatch_failures = db["tbl_ai_vb_dispatch_failures"]
 # this only needs to be generous enough to not false-positive on a slow network hop.
 _DISPATCH_ASSIGN_TIMEOUT_S = 10
 
+# The worker that serves dashboard Test Calls — bot_dev_param.py registers under this exact
+# name (see its _AGENT_NAME). LiveKit matches a job to a worker on this string alone, so when
+# the two sides disagree the failure is silent: the dispatch is accepted, nothing claims it,
+# and the caller waits on "waiting for bot to join" with no error logged anywhere. This used
+# to read LIVEKIT_AGENT_NAME, which meant the pairing depended on two processes happening to
+# load the same value from .env — and a machine whose env named a different worker got no bot
+# at all. Fixed here so clicking Test Call always reaches the worker that handles test calls.
+TESTCALL_AGENT_NAME = "voice-bot-justdial-dashboard-test"
+
 
 async def _watch_dispatch_assignment(room_name: str, agent_name: str, bot_id: str) -> None:
     """Distinct failure mode from bot.py's fallback-events (which cover a *resolved*
@@ -72,7 +81,7 @@ async def start_test_call(payload: TestCallStartRequest, user: dict = Depends(re
     audit: test_bot_version_id lets you test any draft/historical version without publishing.
     """
     room_name = f"test-{uuid.uuid4().hex[:12]}"
-    agent_name = payload.test_worker_agent_name or os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial-live-2")
+    agent_name = payload.test_worker_agent_name or TESTCALL_AGENT_NAME
 
     metadata = json.dumps(
         {
