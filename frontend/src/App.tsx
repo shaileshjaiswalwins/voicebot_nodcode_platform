@@ -1565,7 +1565,7 @@ function AppShell() {
           <Menu size={18} />
         </button>
         <button className="sidebar-brand sidebar-brand-btn" style={{ padding: 0 }} onClick={handleGoHome} aria-label="Go to home">
-          <img src="/justdial-logo.png" alt="Justdial" className="sidebar-logo" />
+          <img src="/justdial-logo.png" alt="Justdial" className="sidebar-logo sidebar-logo-full" />
           <span className="sidebar-brand-subtitle">Voice AI Platform</span>
         </button>
       </div>

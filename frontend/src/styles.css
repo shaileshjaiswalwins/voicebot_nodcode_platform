@@ -321,6 +321,10 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--primary); outlin
 .agents-search { width: 33%; min-width: 240px; }
 .agents-search input { width: 100%; }
 .agents-toolbar-controls { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+/* Without a cap, the global `select { width: 100% }` rule makes this claim the entire row
+   width once it wraps (nothing else here needs more than its content width), shoving Tags/
+   sort-direction/Show Drafts/view-toggle each onto their own line below it. */
+.agents-toolbar-controls select { width: auto; min-width: 160px; }
 .agents-toolbar-controls button.active { background: var(--primary-bg); color: var(--primary); border-color: var(--primary-bg); }
 .count-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 1.1rem; height: 1.1rem; padding: 0 0.3rem; border-radius: var(--radius-pill); background: var(--primary-bg); color: var(--primary); font-size: 0.68rem; font-weight: 700; margin-left: 0.3rem; }
 .tag-filter { position: relative; }

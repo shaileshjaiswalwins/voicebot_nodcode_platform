@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  AlertTriangle, ChevronRight, Database, GitBranch, History, Info, Pencil, PhoneCall, Plus,
+  AlertTriangle, ChevronLeft, Database, GitBranch, History, Info, Pencil, PhoneCall, Plus,
   Rocket, Save, ShieldCheck, X
 } from 'lucide-react';
 import type { Bot as BotType, BotVersion, LanguageOption, PricingConfig } from '../api';
@@ -264,7 +264,7 @@ export function BuilderView({
       <div className="builder-action-bar">
         {onBack && (
           <button className="back-link" onClick={onBack}>
-            <ChevronRight className="rotate-180" size={15} /> Back to agents
+            <ChevronLeft size={15} /> Back to agents
           </button>
         )}
         <div className="builder-action-bar-right">

@@ -15,7 +15,7 @@ import { Dialog } from '../components/Dialog';
 import { Spinner } from '../components/Spinner';
 import { RecentlyDeletedModal } from '../components/RecentlyDeletedModal';
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 10;
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/);
