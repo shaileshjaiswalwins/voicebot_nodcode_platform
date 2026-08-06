@@ -366,6 +366,7 @@ export function NewAgentWizard({
   languages,
   busy,
   onCancel,
+  onDiscard,
   onConfirm
 }: {
   form: {
@@ -381,6 +382,7 @@ export function NewAgentWizard({
   languages: LanguageOption[];
   busy: boolean;
   onCancel: () => void;
+  onDiscard?: () => void;
   onConfirm: () => void;
 }) {
   const canCreate = form.name.trim().length > 0 && form.agent_name.trim().length > 0;
@@ -399,17 +401,27 @@ export function NewAgentWizard({
     });
   }
 
+  // Global replace: a line may use the same placeholder twice, and String.replace with a
+  // string pattern only swaps the first — which previewed as half-substituted text.
+  const previewOpening = form.initial_message
+    .replace(/\{agent_name\}/g, form.agent_name || '<agent_name>')
+    .replace(/\{organization_name\}/g, form.organization_name || '<org_name>')
+    .replace(/\{product\}/g, '<product>');
+
   return (
     <Dialog
       title="New voice agent"
       icon={<Rocket size={17} />}
       maxWidth={560}
       onClose={onCancel}
-      closeOnBackdrop={!busy}
+      // Never dismiss a half-filled creation form on a stray backdrop click — releasing a
+      // text-selection drag outside the panel used to wipe every field. Escape still closes,
+      // but the caller keeps the draft so reopening restores it; only Cancel discards.
+      closeOnBackdrop={false}
       closeOnEscape={!busy}
       footer={
         <>
-          <button onClick={onCancel} disabled={busy}>Cancel</button>
+          <button onClick={onDiscard ?? onCancel} disabled={busy}>Cancel</button>
           <button className="primary" onClick={onConfirm} disabled={!canCreate || busy}>
             {busy ? <Spinner label="Creating" size={13} /> : <Rocket size={15} />} {busy ? 'Creating…' : 'Create agent'}
           </button>
@@ -421,6 +433,7 @@ export function NewAgentWizard({
             <label>
               <span>Bot name <span style={{ color: 'var(--danger)' }}>*</span></span>
               <input value={form.name} onChange={set('name')} placeholder="e.g. JD Outbound — Hindi" autoFocus />
+              <small>A label for the agent</small>
             </label>
           </div>
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
@@ -429,6 +442,7 @@ export function NewAgentWizard({
               <label>
                 <span>Agent name <span style={{ color: 'var(--danger)' }}>*</span></span>
                 <input value={form.agent_name} onChange={set('agent_name')} placeholder="e.g. Tarun, Priya, Aman" />
+                <small>Name of the agent</small>
               </label>
               <label>
                 Gender
@@ -458,11 +472,16 @@ export function NewAgentWizard({
               <textarea
                 value={form.initial_message}
                 onChange={set('initial_message')}
-                rows={2}
-                style={{ fontFamily: 'inherit', fontSize: 'var(--font-size-lg)' }}
+                rows={3}
+                style={{ fontFamily: 'inherit', fontSize: 'var(--font-size-lg)', resize: 'vertical' }}
               />
               <small>Use <code style={{ fontSize: 'var(--font-size-sm)' }}>{'{product}'}</code>, <code style={{ fontSize: 'var(--font-size-sm)' }}>{'{agent_name}'}</code>, <code style={{ fontSize: 'var(--font-size-sm)' }}>{'{organization_name}'}</code> as placeholders.</small>
             </label>
+            {previewOpening && (
+              <div style={{ background: 'var(--surface-2)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: 'var(--font-size-md)', fontStyle: 'italic', marginTop: '0.4rem', color: 'var(--text-2)' }}>
+                Preview: "{previewOpening}"
+              </div>
+            )}
           </div>
         </div>
     </Dialog>

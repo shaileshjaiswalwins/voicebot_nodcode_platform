@@ -316,6 +316,9 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--primary); outlin
    flex row, which wrapped unpredictably (each control landing on its own line) once the
    window got narrower than the sum of every control's natural width. */
 .agents-toolbar { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 0.85rem; }
+/* A third of the toolbar — the agent names it searches are short, so a full-width field
+   just left a long empty box under the header. Widens back to full on narrow viewports. */
+.agents-search { width: 33%; min-width: 240px; }
 .agents-search input { width: 100%; }
 .agents-toolbar-controls { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .agents-toolbar-controls button.active { background: var(--primary-bg); color: var(--primary); border-color: var(--primary-bg); }
@@ -675,6 +678,12 @@ kbd.kbd { display: inline-flex; align-items: center; justify-content: center; mi
 .modal-panel, .modal, .cmdk-panel { background: var(--surface); border-radius: var(--radius-lg); padding: 1.25rem; max-width: 520px; width: 90%; max-height: 85vh; overflow-y: auto; box-shadow: var(--shadow-lg); animation: modal-panel-in 0.15s ease-out; }
 @keyframes modal-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes modal-panel-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+/* Scroll the body, not the whole panel: with the panel itself scrolling, a tall form pushed
+   the header and the confirm/cancel footer off-screen on short viewports. Scoped to
+   .modal-panel (Dialog) — .modal and .cmdk-panel keep the shared whole-panel scroll. */
+.modal-panel { display: flex; flex-direction: column; overflow: hidden; }
+.modal-panel > .modal-header, .modal-panel > .modal-footer { flex: 0 0 auto; }
+.modal-panel > .modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .modal-header { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.9rem; }
 .modal-header h2 { font-size: 1.05rem; }
 .modal-icon { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 2.1rem; height: 2.1rem; border-radius: var(--radius-md); background: var(--primary-bg); color: var(--primary); }
@@ -1002,6 +1011,7 @@ kbd.kbd { display: inline-flex; align-items: center; justify-content: center; mi
   .transcripts-grid { grid-template-columns: 1fr; }
   .flow-builder-grid { grid-template-columns: 1fr; height: auto; }
   .table-scroll table { min-width: 480px; }
+  .agents-search { width: 100%; min-width: 0; }
   .login-screen form { width: 90%; max-width: 320px; }
   .admin-tools-grid { grid-template-columns: 1fr; }
   .phone-detail-grid { grid-template-columns: repeat(2, 1fr); }

@@ -759,6 +759,15 @@ function AppShell() {
     setWorkspaceMode('list');
   }
 
+  const EMPTY_NEW_AGENT_FORM = {
+    name: '', description: '', agent_name: '', organization_name: '',
+    persona_gender: 'female' as const, language: 'hindi',
+    initial_message: defaultConfig.initial_message || '',
+  };
+
+  // Deliberately does NOT reset the form: closing the wizard with Escape used to be
+  // indistinguishable from discarding it, so an accidental keypress lost every field.
+  // The draft survives until the agent is created or Cancel is pressed.
   function handleNewAgent() {
     setCreateAgentStep('picker');
   }
@@ -772,11 +781,19 @@ function AppShell() {
     // agent eligible for the first-test-call confetti, not `bots.length` at call time.
     const isFirstEverAgent = bots.length === 0;
     const bot = await api.createBot({ name, description, config });
+    // Clear the scratch draft only once the agent actually exists — the wizard no longer
+    // resets on close, so this (and an explicit Cancel) are the only paths that discard it.
+    setNewAgentForm(EMPTY_NEW_AGENT_FORM);
     setCreateAgentStep('closed');
     await loadBots();
     if (isFirstEverAgent) setFirstAgentPendingTestId(bot._id);
     handleEditBot(bot._id);
     return bot;
+  }
+
+  function discardNewAgent() {
+    setNewAgentForm(EMPTY_NEW_AGENT_FORM);
+    setCreateAgentStep('picker');
   }
 
   async function confirmNewAgent() {
@@ -1799,13 +1816,9 @@ function AppShell() {
           onSelectAI={() => setCreateAgentStep('ai')}
           onSelectWorkflowAI={() => setCreateAgentStep('workflow_ai')}
           onSelectTemplate={() => setCreateAgentStep('template')}
-          onSelectScratch={() => {
-            setNewAgentForm({
-              name: '', description: '', agent_name: '', organization_name: '',
-              persona_gender: 'female', language: 'hindi', initial_message: defaultConfig.initial_message || ''
-            });
-            setCreateAgentStep('scratch');
-          }}
+          // No reset here: re-entering "from scratch" after an accidental Escape must restore
+          // the draft, not blank it. The form is cleared on successful create and on Cancel.
+          onSelectScratch={() => setCreateAgentStep('scratch')}
         />
       )}
 
@@ -1847,7 +1860,10 @@ function AppShell() {
           onChange={setNewAgentForm}
           languages={languages}
           busy={newAgentBusy}
+          // onCancel = Escape/close: step back to the picker but keep the draft.
+          // onDiscard = the Cancel button: an explicit throw-away, so clear it.
           onCancel={() => setCreateAgentStep('picker')}
+          onDiscard={discardNewAgent}
           onConfirm={confirmNewAgent}
         />
       )}
