@@ -43,9 +43,10 @@ vi.mock('./api', async () => {
       languageSettings: vi.fn(),
       upsertLanguageSettings: vi.fn(),
       transcripts: vi.fn(),
+      transcriptDetail: vi.fn(),
       callEvents: vi.fn(),
       testRecordingLookup: vi.fn(),
-      exportCsvUrl: vi.fn(),
+      exportTranscriptsCsv: vi.fn(),
       outcomeAnalytics: vi.fn(),
       qualityAlerts: vi.fn(),
       startTestCall: vi.fn(),
@@ -88,7 +89,7 @@ function mockAuthedDataLoads() {
   mockedApi.phrases.mockResolvedValue([]);
   mockedApi.outcomes.mockResolvedValue([]);
   mockedApi.languageSettings.mockResolvedValue([]);
-  mockedApi.exportCsvUrl.mockReturnValue('http://localhost/export.csv');
+  mockedApi.exportTranscriptsCsv.mockResolvedValue(new Blob(['']));
 }
 
 async function login(user: ReturnType<typeof userEvent.setup>) {

@@ -67,7 +67,7 @@ function ManualChat({
   return (
     <div>
       <ChatTranscript turns={turns} pending={sending} />
-      {!turns.length && <p className="muted" style={{ fontSize: '0.82rem' }}>Type a message below to start chatting with the bot's LLM directly.</p>}
+      {!turns.length && <p className="muted" style={{ fontSize: 'var(--font-size-md)' }}>Type a message below to start chatting with the bot's LLM directly.</p>}
       {error && <div className="notice error" role="alert">{error}</div>}
       <div className="agent-chat-input" style={{ marginTop: '0.6rem' }}>
         <input

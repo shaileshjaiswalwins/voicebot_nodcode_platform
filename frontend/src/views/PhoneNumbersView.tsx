@@ -144,7 +144,7 @@ export function PhoneNumbersView({
           <div>
             <h2>Phone numbers</h2>
             <p>Telephony/SIP provisioning per number, plus which bot outbound batch campaigns dial through it.</p>
-            <p className="muted" style={{ fontSize: '0.8rem', marginTop: '0.2rem' }}>
+            <p className="muted" style={{ fontSize: 'var(--font-size-md)', marginTop: '0.2rem' }}>
               This does <strong>not</strong> control which bot answers an inbound call — that's set per-agent on{' '}
               {onGoToNumberMapping ? (
                 <button
@@ -234,7 +234,7 @@ export function PhoneNumbersView({
                 {expandedId === phone._id && (
                   <tr>
                     <td colSpan={6} style={{ background: 'var(--surface-2)' }}>
-                      <div className="phone-detail-grid" style={{ padding: '0.5rem 0.25rem', fontSize: '0.8rem' }}>
+                      <div className="phone-detail-grid" style={{ padding: '0.5rem 0.25rem', fontSize: 'var(--font-size-md)' }}>
                         <div><small className="muted">Service ID</small><div>{phone.service_id || '—'}</div></div>
                         <div><small className="muted">AOD ports</small><div>{phone.aod_ports ?? '—'}</div></div>
                         <div><small className="muted">IP</small><div>{phone.ip || '—'}</div></div>

@@ -631,7 +631,7 @@ export function CampaignsView({
                         value={campaign.bot_id || ''}
                         onChange={e => onAssignBot(campaign.campaign_key, e.target.value)}
                         disabled={assignBotState?.[campaign.campaign_key] === 'running'}
-                        style={{ fontSize: '0.82rem', width: '100%' }}
+                        style={{ fontSize: 'var(--font-size-md)', width: '100%' }}
                       >
                         <option value="">— unassigned —</option>
                         {bots.map(b => <option key={b._id} value={b._id}>{b.name}</option>)}

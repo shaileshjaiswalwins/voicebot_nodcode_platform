@@ -93,11 +93,12 @@ const EMPTY_TEST_FORM: TestForm = {
   dynamic_variables: {},
 };
 
-// Hindi only — the runtime (bot_dev_param.py) hardcodes HINDI_LANG_CONFIG and Sarvam
-// hi-IN STT/TTS, so any other option here would save to Mongo and then be ignored on the
-// call. Add a language back only once the runtime can actually speak it.
+// Keys must match bot.py's LANG_CONFIGS ("hi"/"en") — add an entry here only once
+// bot.py has a matching LANG_CONFIGS entry, otherwise it saves to Mongo and falls
+// back silently at call time.
 const DEFAULT_LANGUAGES: LanguageOption[] = [
-  { id: 'hindi', label: 'Hindi' },
+  { id: 'hi', label: 'Hindi' },
+  { id: 'en', label: 'English' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -248,11 +249,27 @@ function AppShell() {
   const [loadingBots, setLoadingBots] = useState(false);
   const [loadingCampaigns, setLoadingCampaigns] = useState(false);
   const [loadingTranscripts, setLoadingTranscripts] = useState(false);
+  const [loadingMoreTranscripts, setLoadingMoreTranscripts] = useState(false);
+  const [hasMoreTranscripts, setHasMoreTranscripts] = useState(false);
+  const [selectedTranscriptDetail, setSelectedTranscriptDetail] = useState<Transcript | undefined>(undefined);
   const [loadingPhoneNumbers, setLoadingPhoneNumbers] = useState(false);
   const [loadingNumberMappings, setLoadingNumberMappings] = useState(false);
+  const [loadingLibrary, setLoadingLibrary] = useState(false);
   const [mapAgentState, setMapAgentState] = useState<Record<string, AsyncState>>({});
 
-  const languages = DEFAULT_LANGUAGES;
+  // Built-in hi/en (bot.py's LANG_CONFIGS) plus any PM-added entries from Library →
+  // Language Settings — merged by id so a PM addition (e.g. Punjabi) shows up without
+  // dropping the defaults, and without needing a code deploy.
+  const languages: LanguageOption[] = [
+    ...DEFAULT_LANGUAGES,
+    ...languageSettings
+      .filter((l) => !DEFAULT_LANGUAGES.some((d) => d.id === l.id))
+      // bot.py's LANG_CONFIGS only has "hi"/"en" runtime configs (prompts, STT/TTS codes) —
+      // a PM-added language beyond that saves fine but the bot speaks Hindi on calls until
+      // an engineer adds a matching LANG_CONFIGS entry. Flag that in the label so it's not
+      // a silent trap.
+      .map((l) => ({ id: l.id, label: `${l.name} (not live on calls yet)` })),
+  ];
 
   // ── Bots / builder state ────────────────────────────────────────────
   const [selectedBotId, setSelectedBotId] = useState<string>('');
@@ -525,16 +542,41 @@ function AppShell() {
     }
   }, []);
 
+  const TRANSCRIPTS_PAGE_SIZE = 50;
+
   const loadTranscripts = useCallback(async () => {
     setLoadingTranscripts(true);
     try {
-      setTranscripts(await api.transcripts({ text: transcriptSearchText || undefined, source: transcriptSource || undefined, limit: 200 }));
+      const page = await api.transcripts({ text: transcriptSearchText || undefined, source: transcriptSource || undefined, limit: TRANSCRIPTS_PAGE_SIZE });
+      setTranscripts(page);
+      setHasMoreTranscripts(page.length === TRANSCRIPTS_PAGE_SIZE);
     } catch (err) {
       pushDiagnostic('Transcripts', err, 'Retry loading transcripts', 'warning');
     } finally {
       setLoadingTranscripts(false);
     }
   }, [transcriptSearchText, transcriptSource]);
+
+  const loadMoreTranscripts = useCallback(async () => {
+    if (loadingMoreTranscripts || !hasMoreTranscripts || transcripts.length === 0) return;
+    const oldest = transcripts[transcripts.length - 1]?.created_at;
+    if (!oldest) return;
+    setLoadingMoreTranscripts(true);
+    try {
+      const page = await api.transcripts({
+        text: transcriptSearchText || undefined,
+        source: transcriptSource || undefined,
+        before: oldest,
+        limit: TRANSCRIPTS_PAGE_SIZE,
+      });
+      setTranscripts((prev) => [...prev, ...page]);
+      setHasMoreTranscripts(page.length === TRANSCRIPTS_PAGE_SIZE);
+    } catch (err) {
+      pushDiagnostic('Transcripts', err, 'Retry loading more transcripts', 'warning');
+    } finally {
+      setLoadingMoreTranscripts(false);
+    }
+  }, [loadingMoreTranscripts, hasMoreTranscripts, transcripts, transcriptSearchText, transcriptSource]);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -557,6 +599,7 @@ function AppShell() {
   }, []);
 
   const loadLibrary = useCallback(async () => {
+    setLoadingLibrary(true);
     try {
       const [p, o, l, a] = await Promise.all([
         api.phrases(), api.outcomes(), api.languageSettings(), api.analysisPrompts()
@@ -564,6 +607,8 @@ function AppShell() {
       setPhrases(p); setOutcomes(o); setLanguageSettings(l); setAnalysisPrompts(a);
     } catch (err) {
       pushDiagnostic('Library', err, 'Retry loading library', 'warning');
+    } finally {
+      setLoadingLibrary(false);
     }
   }, []);
 
@@ -652,7 +697,27 @@ function AppShell() {
     });
   }, [selectedTranscriptId]);
 
-  const selectedTranscript = transcripts.find((t) => t._id === selectedTranscriptId);
+  // The list endpoint omits transcript/muted_transcript to keep list payload light —
+  // fetch the full document here once a row is selected, same pattern as callEvents above.
+  useEffect(() => {
+    if (!selectedTranscriptId) { setSelectedTranscriptDetail(undefined); return; }
+    let cancelled = false;
+    api.transcriptDetail(selectedTranscriptId).then((detail) => {
+      if (!cancelled) setSelectedTranscriptDetail(detail);
+    }).catch((err) => {
+      if (!cancelled) {
+        setSelectedTranscriptDetail(undefined);
+        pushDiagnostic('Transcript detail', err, undefined, 'warning');
+      }
+    });
+    return () => { cancelled = true; };
+  }, [selectedTranscriptId]);
+
+  // Prefer the full fetched detail; fall back to the list row (missing transcript/
+  // analysis) so the header/status still show instantly while the detail loads.
+  const selectedTranscript = selectedTranscriptDetail?._id === selectedTranscriptId
+    ? selectedTranscriptDetail
+    : transcripts.find((t) => t._id === selectedTranscriptId);
 
   // ── Command palette navigation ───────────────────────────────────────
   function navigateFromCmdK(target: View, extra?: CmdKExtra) {
@@ -758,13 +823,20 @@ function AppShell() {
       const config: RuntimeConfig = {
         ...defaultConfig,
         agent_name: generated.agent_name || defaultConfig.agent_name,
+        persona_gender: (generated.persona_gender as RuntimeConfig['persona_gender']) || defaultConfig.persona_gender,
+        stt_language: generated.stt_language || defaultConfig.stt_language,
+        tts_language: generated.tts_language || defaultConfig.tts_language,
         initial_message: generated.initial_message || defaultConfig.initial_message,
+        call_end_text: generated.call_end_text || defaultConfig.call_end_text,
         system_prompt: generated.system_prompt || defaultConfig.system_prompt,
+        interruption_sensitivity:
+          (generated.interruption_sensitivity as RuntimeConfig['interruption_sensitivity']) ||
+          defaultConfig.interruption_sensitivity,
       };
       // Bot name: fall back to the persona name (or a generic label) since "Create with AI"
       // never asks for one separately — asking would defeat the point of a one-box flow.
       const name = generated.agent_name ? `${generated.agent_name} — AI-generated` : 'New AI-generated agent';
-      await createAgentAndEnter(name, description.slice(0, 200), config);
+      await createAgentAndEnter(name, generated.description || description.slice(0, 200), config);
     } catch (err) {
       setAiCreateError(err instanceof Error ? err.message : 'Agent generation failed.');
     } finally {
@@ -780,6 +852,12 @@ function AppShell() {
       const config: RuntimeConfig = {
         ...defaultConfig,
         agent_name: generated.agent_name || defaultConfig.agent_name,
+        persona_gender: (generated.persona_gender as RuntimeConfig['persona_gender']) || defaultConfig.persona_gender,
+        stt_language: generated.stt_language || defaultConfig.stt_language,
+        tts_language: generated.tts_language || defaultConfig.tts_language,
+        interruption_sensitivity:
+          (generated.interruption_sensitivity as RuntimeConfig['interruption_sensitivity']) ||
+          defaultConfig.interruption_sensitivity,
         bot_type: 'workflow',
         // Re-layout with the builder's own algorithm (same one "Auto Arrange" uses) rather
         // than trusting whatever positions the backend guessed — keeps exactly one source of
@@ -793,7 +871,7 @@ function AppShell() {
         function_calling: generated.functions.length > 0,
       };
       const name = generated.agent_name ? `${generated.agent_name} — AI-generated workflow` : 'New AI-generated workflow';
-      await createAgentAndEnter(name, description.slice(0, 200), config);
+      await createAgentAndEnter(name, generated.description || description.slice(0, 200), config);
     } catch (err) {
       setWorkflowAiCreateError(err instanceof Error ? err.message : 'Workflow generation failed.');
     } finally {
@@ -887,7 +965,35 @@ function AppShell() {
   }
 
   function updateLanguage(value: string) {
-    updateConfig('language', value);
+    // Auto-fill sensible STT/TTS language defaults so a PM picking a language gets a
+    // coherent pipeline without separately configuring 3 dropdowns. Only fills in blanks —
+    // never clobbers an stt_language/tts_language the user already set explicitly.
+    const STT_TTS_DEFAULTS: Record<string, { stt: string; tts: string }> = {
+      hi: { stt: 'hi-IN', tts: 'hi-IN' },
+      en: { stt: 'en-US', tts: 'en-IN' },
+    };
+    const defaults = STT_TTS_DEFAULTS[value];
+    setConfigText((prev) => {
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(prev);
+      } catch {
+        return prev;
+      }
+      const next: Record<string, unknown> = { ...parsed, language: value };
+      // Only auto-fill if the current value is blank OR still equals the default we
+      // auto-filled for the PREVIOUS language (so a real user override always sticks,
+      // but switching hi -> en -> hi doesn't leave stt/tts stuck on a stale language).
+      const prevLang = typeof parsed.language === 'string' ? parsed.language : '';
+      const prevDefaults = STT_TTS_DEFAULTS[prevLang];
+      if (defaults) {
+        const sttWasAuto = !next.stt_language || (prevDefaults && next.stt_language === prevDefaults.stt);
+        const ttsWasAuto = !next.tts_language || (prevDefaults && next.tts_language === prevDefaults.tts);
+        if (sttWasAuto) next.stt_language = defaults.stt;
+        if (ttsWasAuto) next.tts_language = defaults.tts;
+      }
+      return JSON.stringify(next, null, 2);
+    });
   }
 
   async function handleSaveDraft() {
@@ -1459,7 +1565,7 @@ function AppShell() {
           <Menu size={18} />
         </button>
         <button className="sidebar-brand sidebar-brand-btn" style={{ padding: 0 }} onClick={handleGoHome} aria-label="Go to home">
-          <img src="/justdial-logo.png" alt="Justdial" className="sidebar-logo" />
+          <img src="/justdial-logo.png" alt="Justdial" className="sidebar-logo sidebar-logo-full" />
           <span className="sidebar-brand-subtitle">Voice AI Platform</span>
         </button>
       </div>
@@ -1649,6 +1755,9 @@ function AppShell() {
               onSourceChange={setTranscriptSource}
               onSelect={setSelectedTranscriptId}
               onNavigateTest={() => setView('test')}
+              hasMore={hasMoreTranscripts}
+              loadingMore={loadingMoreTranscripts}
+              onLoadMore={loadMoreTranscripts}
             />
           )}
 
@@ -1664,6 +1773,7 @@ function AppShell() {
               outcomes={outcomes}
               languageSettings={languageSettings}
               analysisPrompts={analysisPrompts}
+              loading={loadingLibrary}
               onCreate={handleCreatePhrase}
               onUpdate={handleUpdatePhrase}
               onDelete={handleDeletePhrase}

@@ -37,7 +37,7 @@ export function NumberMappingView({
           <div>
             <h2>Number mapping</h2>
             <p>Give each agent a number to answer on. One number belongs to one agent — this is what actually decides which bot picks up an inbound call.</p>
-            <p className="muted" style={{ fontSize: '0.8rem', marginTop: '0.2rem' }}>
+            <p className="muted" style={{ fontSize: 'var(--font-size-md)', marginTop: '0.2rem' }}>
               Need to add a new number or edit its SIP trunk details first? Do that on{' '}
               {onGoToPhoneNumbers ? (
                 <button

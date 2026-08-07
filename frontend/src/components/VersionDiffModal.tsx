@@ -47,27 +47,27 @@ export function VersionDiffModal({
         {diffs.length > 0 && (
           <>
             {summaryState === 'loading' && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem', color: 'var(--muted)', marginBottom: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 'var(--font-size-md)', color: 'var(--muted)', marginBottom: '0.75rem' }}>
                 <Sparkles size={13} /> Summarizing…
               </div>
             )}
             {summary && (
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.6rem 0.75rem', marginBottom: '0.9rem', fontSize: '0.83rem', whiteSpace: 'pre-wrap' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.6rem 0.75rem', marginBottom: '0.9rem', fontSize: 'var(--font-size-md)', whiteSpace: 'pre-wrap' }}>
                 <Sparkles size={14} style={{ flexShrink: 0, marginTop: '0.15rem' }} />
                 <div>{summary}</div>
               </div>
             )}
-            <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>Changed fields ({diffs.length})</div>
+            <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>Changed fields ({diffs.length})</div>
             {diffs.map(key => (
               <div key={key} style={{ marginBottom: '0.75rem', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border)' }}>
-                <div style={{ background: 'var(--surface-2)', padding: '4px 10px', fontSize: '0.78rem', fontWeight: 700 }}>{key}</div>
+                <div style={{ background: 'var(--surface-2)', padding: '4px 10px', fontSize: 'var(--font-size-sm)', fontWeight: 700 }}>{key}</div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
-                  <div style={{ background: '#fef2f2', padding: '8px 10px', fontSize: '0.78rem', borderRight: '1px solid var(--border)' }}>
-                    <div style={{ fontSize: '0.68rem', color: '#b91c1c', marginBottom: '3px' }}>v{versionA.version}</div>
+                  <div style={{ background: '#fef2f2', padding: '8px 10px', fontSize: 'var(--font-size-sm)', borderRight: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--danger)', marginBottom: '3px' }}>v{versionA.version}</div>
                     <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{JSON.stringify(versionA.config[key], null, 2)}</pre>
                   </div>
-                  <div style={{ background: '#f0fdf4', padding: '8px 10px', fontSize: '0.78rem' }}>
-                    <div style={{ fontSize: '0.68rem', color: '#15803d', marginBottom: '3px' }}>v{versionB.version}</div>
+                  <div style={{ background: '#f0fdf4', padding: '8px 10px', fontSize: 'var(--font-size-sm)' }}>
+                    <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--success)', marginBottom: '3px' }}>v{versionB.version}</div>
                     <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{JSON.stringify(versionB.config[key], null, 2)}</pre>
                   </div>
                 </div>
@@ -75,9 +75,9 @@ export function VersionDiffModal({
             ))}
             {same.length > 0 && (
               <details style={{ marginTop: '0.5rem' }}>
-                <summary style={{ fontSize: '0.78rem', color: 'var(--muted)', cursor: 'pointer' }}>Unchanged fields ({same.length})</summary>
+                <summary style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)', cursor: 'pointer' }}>Unchanged fields ({same.length})</summary>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '4px' }}>
-                  {same.map(k => <code key={k} style={{ fontSize: '0.72rem', background: 'var(--surface-2)', padding: '2px 6px', borderRadius: '4px' }}>{k}</code>)}
+                  {same.map(k => <code key={k} style={{ fontSize: 'var(--font-size-xs)', background: 'var(--surface-2)', padding: '2px 6px', borderRadius: '4px' }}>{k}</code>)}
                 </div>
               </details>
             )}

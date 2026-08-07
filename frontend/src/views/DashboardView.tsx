@@ -24,7 +24,7 @@ function useNowTicker() {
 function CardEmptyState({ text }: { text: string }) {
   return (
     <div style={{ textAlign: 'center', padding: '0.75rem 0.5rem', color: 'var(--muted)' }}>
-      <p style={{ fontSize: '0.82rem', margin: 0 }}>{text}</p>
+      <p style={{ fontSize: 'var(--font-size-md)', margin: 0 }}>{text}</p>
     </div>
   );
 }
@@ -180,7 +180,7 @@ export function DashboardView({ onGoToAgents }: { onGoToAgents?: () => void }) {
             <h2><LayoutDashboard size={16} style={{ verticalAlign: '-2px', marginRight: '6px' }} />Overview</h2>
             <p>Across all active agents. Auto-refreshes every 60s.</p>
           </div>
-          <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+          <span style={{ fontSize: 'var(--font-size-sm)', color: 'var(--text-secondary)' }}>
             {loading ? 'Refreshing…' : secondsAgo !== null ? `Updated ${secondsAgo}s ago` : ''}
           </span>
         </div>
@@ -284,13 +284,13 @@ export function DashboardView({ onGoToAgents }: { onGoToAgents?: () => void }) {
                   </Card>
                 </div>
 
-                <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>Daily call volume (last 14 days)</h3>
+                <h3 style={{ fontSize: 'var(--font-size-lg)', color: 'var(--text-secondary)', marginBottom: '8px' }}>Daily call volume (last 14 days)</h3>
                 <MiniBarChart data={summary.daily_volume.map(d => ({ label: d.date.slice(5), value: d.count }))} />
               </>
             )}
           </>
         )}
-        {loading && !summary && <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading…</p>}
+        {loading && !summary && <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-size-lg)' }}>Loading…</p>}
       </div>
     </section>
   );

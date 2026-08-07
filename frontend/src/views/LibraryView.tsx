@@ -4,6 +4,7 @@ import type { AnalysisPromptEntry, AnalysisPromptKey, LanguageSettings, Language
 import { TimeAgo } from '../components/TimeAgo';
 import { EmptyState } from '../components/EmptyState';
 import { RowActions } from '../components/RowActions';
+import { Spinner } from '../components/Spinner';
 import { PHRASE_CATEGORY_META } from '../constants/phrases';
 
 type LibrarySection = PhraseCategory | 'outcomes' | 'languages' | 'analysis_prompts';
@@ -524,6 +525,7 @@ export function LibraryView({
   outcomes,
   languageSettings,
   analysisPrompts,
+  loading,
   onCreate,
   onUpdate,
   onDelete,
@@ -536,6 +538,10 @@ export function LibraryView({
   outcomes: OutcomeEntry[];
   languageSettings: LanguageSettings[];
   analysisPrompts: AnalysisPromptEntry[];
+  /** True while the initial library fetch (phrases/outcomes/language settings/analysis
+   * prompts) is in flight. Without this, a first-ever load renders every tab as "0 items"
+   * indistinguishable from a genuinely empty library. */
+  loading?: boolean;
   onCreate: (payload: Partial<LibraryPhrase>) => Promise<void> | void;
   onUpdate: (id: string, payload: Partial<LibraryPhrase>) => Promise<void> | void;
   onDelete: (id: string) => Promise<void> | void;
@@ -592,6 +598,14 @@ export function LibraryView({
       notes: editingNotes.trim()
     });
     cancelEdit();
+  }
+
+  if (loading && !phrases.length && !outcomes.length && !languageSettings.length && !analysisPrompts.length) {
+    return (
+      <section className="library-layout" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '240px' }}>
+        <Spinner label="Loading library" size={22} />
+      </section>
+    );
   }
 
   return (

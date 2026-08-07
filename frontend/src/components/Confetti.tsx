@@ -24,7 +24,7 @@ export function Confetti({ fire, onDone }: { fire: boolean; onDone?: () => void 
     resize();
     window.addEventListener('resize', resize);
 
-    const colors = ['#6366f1', '#22c55e', '#f59e0b', '#ec4899', '#06b6d4', '#eab308'];
+    const colors = ['#6366f1', '#1ba94c', '#b45309', '#ec4899', '#06b6d4', '#eab308'];
     const count = 140;
     const particles = Array.from({ length: count }, () => ({
       x: window.innerWidth / 2 + (Math.random() - 0.5) * 120,

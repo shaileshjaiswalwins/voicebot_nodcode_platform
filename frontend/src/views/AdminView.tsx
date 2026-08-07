@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Save, Trash2 } from 'lucide-react';
 import type { PricingConfig, PricingModelEntry } from '../api';
+import { IconButton } from '../components/ui/icon-button';
 import { FEEDBACK_TIMEOUT_MS } from '../constants/ui';
 
 function slugify(label: string): string {
@@ -135,9 +136,9 @@ function PricingCategoryEditor({
                 </label>
               </>
             )}
-            <button className="fallback-button" title="Remove" onClick={() => removeRow(i)}>
+            <IconButton className="fallback-button" title="Remove" aria-label="Remove" onClick={() => removeRow(i)}>
               <Trash2 size={14} />
-            </button>
+            </IconButton>
           </div>
               );
             })}

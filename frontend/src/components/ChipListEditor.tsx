@@ -35,12 +35,12 @@ export function ChipListEditor({
       {helpText && <small>{helpText}</small>}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.4rem', marginBottom: '0.4rem', minHeight: '2rem' }}>
         {items.map((item) => (
-          <span key={item} style={{ background: 'var(--surface-2)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span key={item} style={{ background: 'var(--surface-2)', borderRadius: '4px', padding: '2px 8px', fontSize: 'var(--font-size-md)', display: 'flex', alignItems: 'center', gap: '4px' }}>
             {item}
             <button style={{ padding: 0, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', lineHeight: 1 }} onClick={() => onChange(items.filter((x) => x !== item))}>×</button>
           </span>
         ))}
-        {items.length === 0 && emptyText && <span style={{ fontSize: '0.78rem', color: 'var(--muted)', fontStyle: 'italic' }}>{emptyText}</span>}
+        {items.length === 0 && emptyText && <span style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)', fontStyle: 'italic' }}>{emptyText}</span>}
       </div>
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         <input

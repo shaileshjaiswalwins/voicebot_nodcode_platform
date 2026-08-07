@@ -41,19 +41,19 @@ export function DispatchFailuresPanel() {
           <RefreshCw size={14} />
         </button>
       </div>
-      <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginTop: 0 }}>
+      <p style={{ fontSize: 'var(--font-size-lg)', color: 'var(--muted)', marginTop: 0 }}>
         Calls where LiveKit accepted the dispatch but never handed it to any registered worker —
         this is why a test call can sit on "waiting for bot to join" forever with the worker
         itself perfectly healthy. Distinct from worker health (process down) and fallback events
         (ran, but on the wrong config).
       </p>
-      {error && <p style={{ color: 'var(--error, #c0392b)' }}>{error}</p>}
+      {error && <p style={{ color: 'var(--error, #e5342b)' }}>{error}</p>}
       {failures && failures.length === 0 && !error && (
-        <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>None recorded — good sign.</p>
+        <p style={{ fontSize: 'var(--font-size-lg)', color: 'var(--muted)' }}>None recorded — good sign.</p>
       )}
       {failures && failures.length > 0 && (
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', fontSize: '0.82rem', borderCollapse: 'collapse' }}>
+          <table style={{ width: '100%', fontSize: 'var(--font-size-md)', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
                 <th style={{ padding: '0.3rem 0.5rem' }}>When</th>
@@ -64,7 +64,7 @@ export function DispatchFailuresPanel() {
             </thead>
             <tbody>
               {failures.map((f) => (
-                <tr key={f._id} style={{ borderTop: '1px solid var(--border, #e5e5e5)' }}>
+                <tr key={f._id} style={{ borderTop: '1px solid var(--border, #e1e4ea)' }}>
                   <td style={{ padding: '0.3rem 0.5rem', whiteSpace: 'nowrap' }}>
                     {new Date(f.created_at).toLocaleString()}
                   </td>

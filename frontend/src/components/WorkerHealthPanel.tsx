@@ -45,20 +45,20 @@ export function WorkerHealthPanel() {
           <RefreshCw size={14} />
         </button>
       </div>
-      <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginTop: 0 }}>
+      <p style={{ fontSize: 'var(--font-size-lg)', color: 'var(--muted)', marginTop: 0 }}>
         Whether a LiveKit worker process is actually alive and reachable, per agent name — check this
         <em> before</em> placing a test call if you want to rule out "nothing is listening" as the cause
         of a stuck call.
       </p>
-      {error && <p style={{ color: 'var(--error, #c0392b)' }}>{error}</p>}
+      {error && <p style={{ color: 'var(--error, #e5342b)' }}>{error}</p>}
       {workers && workers.length === 0 && !error && (
-        <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>
+        <p style={{ fontSize: 'var(--font-size-lg)', color: 'var(--muted)' }}>
           No worker has ever reported a heartbeat yet.
         </p>
       )}
       {workers && workers.length > 0 && (
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', fontSize: '0.82rem', borderCollapse: 'collapse' }}>
+          <table style={{ width: '100%', fontSize: 'var(--font-size-md)', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
                 <th style={{ padding: '0.3rem 0.5rem' }}>Agent name</th>
@@ -69,19 +69,19 @@ export function WorkerHealthPanel() {
             </thead>
             <tbody>
               {workers.map((w) => (
-                <tr key={w.agent_name} style={{ borderTop: '1px solid var(--border, #e5e5e5)' }}>
+                <tr key={w.agent_name} style={{ borderTop: '1px solid var(--border, #e1e4ea)' }}>
                   <td style={{ padding: '0.3rem 0.5rem', fontFamily: 'monospace' }}>{w.agent_name}</td>
                   <td style={{ padding: '0.3rem 0.5rem' }}>
                     <span
                       style={{
                         display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
-                        color: w.stale ? 'var(--danger, #c0392b)' : 'var(--success, #2e7d32)',
+                        color: w.stale ? 'var(--danger, #e5342b)' : 'var(--success, #1ba94c)',
                         fontWeight: 600,
                       }}
                     >
                       <span style={{
                         width: '8px', height: '8px', borderRadius: '50%',
-                        background: w.stale ? 'var(--danger, #c0392b)' : 'var(--success, #2e7d32)',
+                        background: w.stale ? 'var(--danger, #e5342b)' : 'var(--success, #1ba94c)',
                         display: 'inline-block',
                       }} />
                       {w.stale ? 'Not responding' : 'Alive'}

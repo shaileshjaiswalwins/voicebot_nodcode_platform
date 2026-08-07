@@ -53,11 +53,11 @@ export function OnboardingTour({ run }: { run: boolean }) {
       locale={{ last: 'Done', skip: 'Skip tour' }}
       styles={{
         options: {
-          primaryColor: '#6366f1',
+          primaryColor: '#116db6',
           zIndex: 10000,
           arrowColor: '#ffffff',
           backgroundColor: '#ffffff',
-          textColor: '#0f172a',
+          textColor: '#116db6',
         },
       }}
     />

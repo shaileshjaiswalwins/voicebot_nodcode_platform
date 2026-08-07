@@ -42,7 +42,7 @@ const baseProps = {
   publishedCount: 0,
   config: { ok: true as const, value: defaultConfig },
   configText: JSON.stringify(defaultConfig, null, 2),
-  languages: [{ id: 'hindi', label: 'Hindi' }],
+  languages: [{ id: 'hi', label: 'Hindi' }, { id: 'en', label: 'English' }],
   onConfigTextChange: vi.fn(),
   onUpdateConfig: vi.fn(),
   onUpdateLanguage: vi.fn(),

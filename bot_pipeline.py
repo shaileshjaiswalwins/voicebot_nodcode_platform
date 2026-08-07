@@ -85,6 +85,9 @@ from bot import (
     build_system_prompt,
     build_transcript_from_session,
     _dedup_words,
+    resolve_lang_config,
+    resolve_tone_config,
+    DEFAULT_LANG_KEY,
     # Detections
     _is_closing_phrase,
     _is_not_interested_close,
@@ -313,7 +316,8 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     _api_urls = _bot_config.get("api_urls") or {}
     _mis_api_base = _api_urls.get("mis_api_base") or MIS_API_BASE
     _category_change_api = _api_urls.get("category_change_api") or CATEGORY_CHANGE_API
-    _language = "hindi"
+    _language = ((_bot_config.get("language") or DEFAULT_LANG_KEY).strip().lower())
+    _lang_cfg = resolve_lang_config(_bot_config)
     _temperature = float(_bot_config.get("temperature") or 0.4)
     _max_call_duration = int(_bot_config.get("max_call_duration") or 300)
     # Pipeline mode: higher threshold than bot.py defaults — filters TTS echo
@@ -654,7 +658,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 return
             _log.info("[INACTIVITY] extended silence — ending call directly")
             call_state["ended_naturally"] = True
-            end_phrase = INACTIVITY_END_PHRASE
+            end_phrase = _lang_cfg.get("inactivity_end_phrase") or INACTIVITY_END_PHRASE
             try:
                 # session.say returns a SpeechHandle; await it to wait for full playout
                 await session.say(end_phrase, allow_interruptions=False)
@@ -688,7 +692,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
                 _nudge_count = 0
                 _inactivity_task = asyncio.create_task(_inactivity_timeout())
                 return
-            nudge = INACTIVITY_PHRASE
+            nudge = _lang_cfg.get("inactivity_phrase") or INACTIVITY_PHRASE
             _log.info(f"[INACTIVITY] {sleep_secs:.0f}s silence — nudge {_nudge_count}: {nudge!r}")
             _nudge_in_progress = True
             # Fire-and-forget: agent_state "speaking" → "listening" will call _reset_inactivity()
@@ -978,7 +982,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         try:
             form = aiohttp.FormData()
             form.add_field("file", wav_data, filename="audio.wav", content_type="audio/wav")
-            form.add_field("language_code", "hi-IN")
+            form.add_field("language_code", _lang_cfg.get("stt_lang_code", "hi-IN"))
             form.add_field("model", "saaras:v3")
             form.add_field("mode", "codemix")
             async with aiohttp.ClientSession() as _http:

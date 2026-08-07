@@ -79,7 +79,7 @@ export function CreateAgentPicker({
     // closeOnBackdrop intentionally false: an accidental click just outside the card grid
     // used to silently discard this step (no unsaved data, but still a jarring dead-end for
     // a new user) — dismiss only via the explicit close control or Escape now.
-    <Dialog title="Create a new agent" maxWidth={760} onClose={onClose} closeOnBackdrop={false}>
+    <Dialog title="Create a new agent" maxWidth={1040} onClose={onClose} closeOnBackdrop={false}>
       <p className="create-agent-subtitle">Pick a starting point — all three land you in the same builder.</p>
       <div className="create-agent-options">
         {options.map((opt) => (

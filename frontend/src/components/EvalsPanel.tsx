@@ -107,18 +107,18 @@ export function EvalsPanel({
 
       {showEditor && (
         <div style={{ marginBottom: '0.75rem' }}>
-          <p style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>
+          <p style={{ fontSize: 'var(--font-size-md)', color: 'var(--muted)' }}>
             Leave empty to run the two built-in scenarios (interested buyer / not-interested caller). Add scenarios below to run your own instead.
           </p>
           <ScenarioEditor scenarios={customScenarios} onChange={setCustomScenarios} />
         </div>
       )}
 
-      {!latest && !running && <p style={{ fontSize: '0.82rem', color: 'var(--muted)' }}>No eval runs yet for this draft.</p>}
+      {!latest && !running && <p style={{ fontSize: 'var(--font-size-md)', color: 'var(--muted)' }}>No eval runs yet for this draft.</p>}
 
       {runs.length > 1 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '0.75rem' }}>
-          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
             Run history ({runs.length})
           </div>
           {runs.map((run) => (
@@ -141,27 +141,27 @@ export function EvalsPanel({
 
       {selectedRun && (
         <div>
-          <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.6rem', fontSize: '0.85rem' }}>
+          <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.6rem', fontSize: 'var(--font-size-lg)' }}>
             <span>{selectedRun.passed}/{selectedRun.total} scenarios passed</span>
             <span style={{ color: 'var(--muted)' }}>Run at {new Date(selectedRun.created_at).toLocaleString()}</span>
           </div>
           {selectedRun.results.map((result) => (
             <details key={result.scenario} style={{ marginBottom: '0.5rem', border: '1px solid var(--border)', borderRadius: 6, padding: '0.5rem' }}>
               <summary style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
-                {result.passed ? <CheckCircle2 size={14} color="#16a34a" /> : <XCircle size={14} color="#dc2626" />}
+                {result.passed ? <CheckCircle2 size={14} color="var(--success)" /> : <XCircle size={14} color="var(--danger)" />}
                 {result.scenario}
               </summary>
-              <div style={{ marginTop: '0.5rem', fontSize: '0.82rem' }}>
+              <div style={{ marginTop: '0.5rem', fontSize: 'var(--font-size-md)' }}>
                 {result.transcript.map((turn, idx) => (
                   <p key={idx} style={{ margin: '0.2rem 0' }}>
                     <strong>{turn.role === 'caller' ? 'Caller' : 'Bot'}:</strong> {turn.text}
                   </p>
                 ))}
                 {result.missing_required_phrases.length > 0 && (
-                  <p style={{ color: '#d97706' }}>Missing required phrases: {result.missing_required_phrases.join(', ')}</p>
+                  <p style={{ color: 'var(--warning)' }}>Missing required phrases: {result.missing_required_phrases.join(', ')}</p>
                 )}
                 {result.forbidden_phrases_found.length > 0 && (
-                  <p style={{ color: '#dc2626' }}>Forbidden phrases found: {result.forbidden_phrases_found.join(', ')}</p>
+                  <p style={{ color: 'var(--danger)' }}>Forbidden phrases found: {result.forbidden_phrases_found.join(', ')}</p>
                 )}
               </div>
             </details>

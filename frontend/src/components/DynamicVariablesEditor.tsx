@@ -43,7 +43,7 @@ export function DynamicVariablesEditor({
         {variables.map((v) => (
           <span
             key={v.name}
-            style={{ background: 'var(--surface-2)', borderRadius: '4px', padding: '2px 8px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+            style={{ background: 'var(--surface-2)', borderRadius: '4px', padding: '2px 8px', fontSize: 'var(--font-size-md)', display: 'flex', alignItems: 'center', gap: '4px' }}
           >
             <button
               type="button"
@@ -66,7 +66,7 @@ export function DynamicVariablesEditor({
           </span>
         ))}
         {variables.length === 0 && (
-          <span style={{ fontSize: '0.78rem', color: 'var(--muted)', fontStyle: 'italic' }}>No dynamic variables yet</span>
+          <span style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)', fontStyle: 'italic' }}>No dynamic variables yet</span>
         )}
       </div>
       <div style={{ display: 'flex', gap: '0.5rem' }}>

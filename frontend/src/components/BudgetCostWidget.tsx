@@ -12,8 +12,8 @@ const LABELS: Record<string, string> = {
 };
 
 const TIER_ACCENT: Record<string, string> = {
-  Budget: '#2f9e6f',
-  'Current default': '#3468d1',
+  Budget: '#1ba94c',
+  'Current default': '#116db6',
   Performance: '#b9770e',
   Ultra: '#9b3fc7',
 };

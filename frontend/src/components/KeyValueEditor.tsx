@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
+import { IconButton } from './ui/icon-button';
 
 type Row = { k: string; v: string };
 
@@ -56,10 +57,10 @@ export function KeyValueEditor({
     <div className="kv-editor" style={{ marginBottom: '0.9rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.4rem' }}>
         <div>
-          {label && <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>{label}</div>}
-          {hint && <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{hint}</div>}
+          {label && <div style={{ fontSize: 'var(--font-size-lg)', fontWeight: 600 }}>{label}</div>}
+          {hint && <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)' }}>{hint}</div>}
         </div>
-        <button type="button" onClick={() => apply([...rows, { k: '', v: '' }])} style={{ fontSize: '0.78rem', flexShrink: 0 }}>
+        <button type="button" onClick={() => apply([...rows, { k: '', v: '' }])} style={{ fontSize: 'var(--font-size-sm)', flexShrink: 0 }}>
           <Plus size={13} /> {addLabel}
         </button>
       </div>
@@ -67,8 +68,8 @@ export function KeyValueEditor({
         <div style={{
           border: '1px dashed var(--border)', borderRadius: '6px', padding: '1.1rem', textAlign: 'center',
         }}>
-          <div style={{ fontSize: '0.82rem', color: 'var(--muted)' }}>{emptyLabel}</div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--muted)', opacity: 0.8 }}>Click "{addLabel}" above to add one.</div>
+          <div style={{ fontSize: 'var(--font-size-md)', color: 'var(--muted)' }}>{emptyLabel}</div>
+          <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)', opacity: 0.8 }}>Click "{addLabel}" above to add one.</div>
         </div>
       ) : (
         <div style={{ border: '1px solid var(--border)', borderRadius: '6px', padding: '0.6rem' }}>
@@ -88,9 +89,9 @@ export function KeyValueEditor({
                 value={row.v}
                 onChange={(e) => apply(rows.map((r, idx) => (idx === i ? { ...r, v: e.target.value } : r)))}
               />
-              <button type="button" title="Remove" onClick={() => apply(rows.filter((_, idx) => idx !== i))} style={{ padding: '0 0.5rem', flexShrink: 0 }}>
+              <IconButton type="button" title="Remove" aria-label="Remove" onClick={() => apply(rows.filter((_, idx) => idx !== i))} style={{ padding: '0 0.5rem', flexShrink: 0 }}>
                 <Trash2 size={14} />
-              </button>
+              </IconButton>
             </div>
           ))}
         </div>

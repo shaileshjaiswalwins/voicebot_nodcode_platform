@@ -48,7 +48,7 @@ export function ProviderOptionsEditor({
       {groups.map((g, gi) => (
         <div key={gi} style={{ marginTop: g.group ? '0.75rem' : 0 }}>
           {g.group && (
-            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.5rem 0' }}>
+            <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.5rem 0' }}>
               {g.group}
             </div>
           )}
@@ -68,7 +68,7 @@ export function ProviderOptionsEditor({
                       onChange={(e) => setKey(f.key, e.target.checked ? true : '')}
                       style={{ width: 'auto' }}
                     />
-                    <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>{f.hint}</span>
+                    <span style={{ fontSize: 'var(--font-size-md)', color: 'var(--muted)' }}>{f.hint}</span>
                   </div>
                 ) : f.kind === 'select' ? (
                   <select aria-label={f.label} title={f.hint} value={String(value[f.key] ?? '')} onChange={(e) => setKey(f.key, e.target.value)}>

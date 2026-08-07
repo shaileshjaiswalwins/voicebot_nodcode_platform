@@ -10,10 +10,8 @@ import { SARVAM_TTS_VOICES, SARVAM_TTS_LANGUAGES, TTS_PROVIDER_MODEL_KEY } from 
 import { CustomFunctionsEditor } from './CustomFunctionsEditor';
 import { ChipListEditor } from './ChipListEditor';
 import { DynamicVariablesEditor } from './DynamicVariablesEditor';
-import { ProviderOptionsEditor } from './ProviderOptionsEditor';
 import { CostEstimateStrip } from './CostEstimateStrip';
 import { WorkflowBuilderView } from '../views/WorkflowBuilderView';
-import { SARVAM_STT_FIELDS, SARVAM_TTS_FIELDS } from '../constants/providerParams';
 import type { AgentCostEstimate } from '../utils/agentCost';
 
 export type BuilderTab = 'metrics' | 'basic' | 'prompt' | 'voice' | 'functions' | 'workflow' | 'advanced';
@@ -73,7 +71,7 @@ function MetricsTab({ botId }: { botId?: string }) {
       </div>
 
       {error && <div className="notice error" role="alert">{error}</div>}
-      {loading && !metrics && <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading…</p>}
+      {loading && !metrics && <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-size-lg)' }}>Loading…</p>}
 
       {metrics && metrics.total_calls === 0 ? (
         <EmptyState
@@ -87,12 +85,12 @@ function MetricsTab({ botId }: { botId?: string }) {
             <div className="metric">
               <span>Total calls</span>
               <strong>{metrics.total_calls}</strong>
-              <small style={{ fontWeight: 400, fontSize: '0.75rem' }}>{fmtTrend(metrics.trend_vs_previous_pct.total_calls)}</small>
+              <small style={{ fontWeight: 400, fontSize: 'var(--font-size-sm)' }}>{fmtTrend(metrics.trend_vs_previous_pct.total_calls)}</small>
             </div>
             <div className="metric">
               <span>Success rate</span>
               <strong>{metrics.success_rate_pct}%</strong>
-              <small style={{ fontWeight: 400, fontSize: '0.75rem' }}>{fmtTrend(metrics.trend_vs_previous_pct.success_rate)}</small>
+              <small style={{ fontWeight: 400, fontSize: 'var(--font-size-sm)' }}>{fmtTrend(metrics.trend_vs_previous_pct.success_rate)}</small>
             </div>
             <div className="metric">
               <span>Avg duration</span>
@@ -107,28 +105,28 @@ function MetricsTab({ botId }: { botId?: string }) {
 
           <div className="content-grid two-col" style={{ marginBottom: '16px' }}>
             <div className="panel">
-              <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Volume Trends</h3>
+              <h3 style={{ fontSize: 'var(--font-size-lg)', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Volume Trends</h3>
               <MiniBarChart data={metrics.daily_volume.map(d => ({ label: d.date.slice(5), value: d.count }))} />
             </div>
             <div className="panel">
-              <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Duration Trends</h3>
+              <h3 style={{ fontSize: 'var(--font-size-lg)', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Duration Trends</h3>
               <MiniLineChart data={metrics.daily_avg_duration.map(d => ({ label: d.date.slice(5), value: d.avg_duration_sec }))} unit="s" />
             </div>
           </div>
 
           {metrics.outcome_breakdown.length > 0 && (
             <>
-              <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Success Analysis</h3>
+              <h3 style={{ fontSize: 'var(--font-size-lg)', color: 'var(--text-secondary)', marginBottom: '8px' }}>Call Success Analysis</h3>
               <div className="detail-list">
                 {metrics.outcome_breakdown.map(({ outcome, count }) => {
                   const total = metrics.outcome_breakdown.reduce((s, o) => s + o.count, 0) || 1;
                   return (
                     <div key={outcome} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <span style={{ minWidth: '140px', fontSize: '0.82rem' }}>{outcome}</span>
+                      <span style={{ minWidth: '140px', fontSize: 'var(--font-size-md)' }}>{outcome}</span>
                       <div style={{ flex: 1, background: 'var(--bg-tertiary)', borderRadius: '3px', height: '8px', overflow: 'hidden' }}>
                         <div style={{ width: `${(count / total) * 100}%`, background: 'var(--success)', height: '100%', transition: 'width 0.3s' }} />
                       </div>
-                      <span style={{ fontSize: '0.82rem', minWidth: '40px', textAlign: 'right' }}>{count}</span>
+                      <span style={{ fontSize: 'var(--font-size-md)', minWidth: '40px', textAlign: 'right' }}>{count}</span>
                     </div>
                   );
                 })}
@@ -442,9 +440,14 @@ export function BotConfigTabs({
   // (Google TTS/STT, Cartesia, Anthropic, ...) that would silently no-op on a real call.
   const byCompany = (entries: PricingModelEntry[] | undefined, company: string): PricingModelEntry[] =>
     (entries || []).filter((e) => e.company === company);
+  const geminiLlmModels = byCompany(pricing?.llm, 'Google');
+  const openaiLlmModels = byCompany(pricing?.llm, 'OpenAI');
+  const llmModelLabel = (e: PricingModelEntry): string =>
+    `${e.label} · ₹${e.cost_inr_per_min.toFixed(2)}/min${e.latency_ms_min ? ` · ${e.latency_ms_min}-${e.latency_ms_max}ms` : ''}`;
+  const sarvamSttModels = byCompany(pricing?.stt, 'Sarvam');
   const deepgramSttModels = byCompany(pricing?.stt, 'Deepgram');
-  const optsFor = (key: 'stt_options' | 'tts_options'): Record<string, unknown> =>
-    (typeof value[key] === 'object' && value[key] ? value[key] : {}) as Record<string, unknown>;
+  const sttModelLabel = (e: PricingModelEntry): string =>
+    `${e.label} · ₹${e.cost_inr_per_min.toFixed(2)}/min${e.latency_ms_min ? ` · ${e.latency_ms_min}-${e.latency_ms_max}ms` : ''}`;
 
   // Soft numeric range check: returns a warning string when `n` violates min/max, else null.
   // We warn rather than block so an operator can still push an edge value if they mean to.
@@ -529,7 +532,15 @@ export function BotConfigTabs({
               <select value={String(value.language || '')} onChange={(e) => onUpdateLanguage(e.target.value)}>
                 {languages.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
               </select>
-              <small>Not yet wired into the runtime — bot_pipeline.py's Sarvam STT/TTS always runs in Hindi (hi-IN) regardless of this setting.</small>
+              <small>Drives bot.py's LANG_CONFIGS and auto-fills STT/TTS language defaults when those are unset — override them separately in the STT/TTS tabs if needed.</small>
+            </label>
+            <label style={isWorkflow ? inertFieldStyle : undefined}>
+              Tone
+              <select value={String(value.tone || 'casual')} onChange={(e) => onUpdateConfig('tone', e.target.value)}>
+                <option value="casual">Casual</option>
+                <option value="formal">Formal</option>
+              </select>
+              <small>Conversational tone for the bot's prompt/opening line — drives bot.py's TONE_CONFIGS.</small>
             </label>
             <label>
               Max call duration: {Number(value.max_call_duration || 300)}s ({Math.round(Number(value.max_call_duration || 300) / 60)} min)
@@ -633,10 +644,10 @@ export function BotConfigTabs({
             </div>
           </div>
 
-          <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '1rem 0 0.25rem' }}>
+          <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '1rem 0 0.25rem' }}>
             Inactivity & silence handling
           </div>
-          <p style={{ fontSize: '0.78rem', color: 'var(--muted)', margin: '0 0 0.5rem' }}>Timers used when the caller goes silent mid-call.</p>
+          <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)', margin: '0 0 0.5rem' }}>Timers used when the caller goes silent mid-call.</p>
           <div className="form-grid" style={isWorkflow ? inertFieldStyle : undefined}>
             <label title="Seconds of silence at the start of a turn before the bot gently re-engages the caller.">
               First rescue (s)
@@ -702,12 +713,73 @@ export function BotConfigTabs({
       {tab === 'voice' && (
         <div role="tabpanel">
           <div className="form-grid">
-            <label title="Silence (ms) the bot waits after the caller stops before replying. Lower feels snappier but risks cutting the caller off.">
-              Post-speech hold (ms)
-              <input type="number" min={0} max={5000} step={50} value={Number(value.post_speech_hold_ms ?? 400)} onChange={(e) => onUpdateConfig('post_speech_hold_ms', Number(e.target.value))} />
-              <small>Pause after the caller stops speaking before the bot responds. Typical 200–800 ms.</small>
-              <Warn msg={numWarn(Number(value.post_speech_hold_ms ?? 400), { min: 0, max: 5000, integer: true })} />
+            <label>
+              LLM
+              <select
+                value={String(value.llm_provider || '')}
+                onChange={(e) => {
+                  const provider = e.target.value;
+                  onUpdateConfig('llm_provider', provider);
+                  // Clear the model when switching provider — a leftover Gemini model string
+                  // would otherwise silently fail to match any OpenAI catalog entry (or vice
+                  // versa), so the cost estimate would show stale/wrong numbers until re-picked.
+                  onUpdateConfig('llm_model', '');
+                }}
+              >
+                <option value="">Gemini (default)</option>
+                <option value="gemini">Gemini</option>
+                <option value="openai">OpenAI</option>
+              </select>
+              <small>The language model driving this bot's conversation.</small>
             </label>
+            {(value.llm_provider === 'openai' ? openaiLlmModels : geminiLlmModels).length > 0 && (
+              <label>
+                LLM model
+                <select value={String(value.llm_model || '')} onChange={(e) => onUpdateConfig('llm_model', e.target.value)}>
+                  <option value="">
+                    {value.llm_provider === 'openai' ? 'gpt-4.1 (default)' : 'gemini-3.1-flash-lite (default)'}
+                  </option>
+                  {(value.llm_provider === 'openai' ? openaiLlmModels : geminiLlmModels).map((e) => (
+                    <option key={e.key} value={e.label}>{llmModelLabel(e)}</option>
+                  ))}
+                </select>
+                <small>Price and expected latency per model, from the Admin pricing catalog.</small>
+              </label>
+            )}
+            <label>
+              Speech-to-text (STT)
+              <select
+                value={String(value.stt_provider || '')}
+                onChange={(e) => {
+                  const provider = e.target.value;
+                  onUpdateConfig('stt_provider', provider);
+                  // Clear the model on provider switch — same reasoning as the LLM/TTS
+                  // pickers: a leftover Sarvam model string wouldn't match anything in
+                  // Deepgram's catalog (or vice versa), so cost would silently stay wrong
+                  // until re-picked.
+                  onUpdateConfig('stt_model', '');
+                }}
+              >
+                <option value="">Sarvam (default)</option>
+                <option value="sarvam">Sarvam</option>
+                <option value="deepgram">Deepgram</option>
+              </select>
+              <small>The speech-to-text provider transcribing the caller.</small>
+            </label>
+            {(value.stt_provider === 'deepgram' ? deepgramSttModels : sarvamSttModels).length > 0 && (
+              <label>
+                STT model
+                <select value={String(value.stt_model || '')} onChange={(e) => onUpdateConfig('stt_model', e.target.value)}>
+                  <option value="">
+                    {value.stt_provider === 'deepgram' ? 'nova-3 (default)' : 'saaras:v3 (default)'}
+                  </option>
+                  {(value.stt_provider === 'deepgram' ? deepgramSttModels : sarvamSttModels).map((e) => (
+                    <option key={e.key} value={e.label}>{sttModelLabel(e)}</option>
+                  ))}
+                </select>
+                <small>Price per model, from the Admin pricing catalog.</small>
+              </label>
+            )}
             <label>
               Text-to-speech (TTS)
               <select
@@ -765,71 +837,6 @@ export function BotConfigTabs({
               </label>
             )}
           </div>
-
-          <details style={{ marginTop: '1rem' }}>
-            <summary style={{ cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 }}>Advanced voice tuning</summary>
-            <div style={{ marginTop: '0.75rem' }}>
-              {isWorkflow && (
-                <InertNotice>
-                  Everything in this section is ignored for workflow bots — workflow_engine.py hardcodes Sarvam
-                  STT (<code>saaras:v3</code>, Hindi hi-IN) and its own VAD tuning, regardless of anything set here.
-                </InertNotice>
-              )}
-              <div className="form-grid" style={isWorkflow ? inertFieldStyle : undefined}>
-                <label title="Speech-detection sensitivity (0–1). Higher = stricter, ignores more background noise but may miss soft speech.">
-                  Voice-activity threshold
-                  <input type="number" min="0" max="1" step="0.05" value={Number(value.silero_threshold ?? 0.6)} onChange={(e) => onUpdateConfig('silero_threshold', Number(e.target.value))} />
-                  <small>Sensitivity for real speech vs. background noise (0–1). Default 0.6.</small>
-                  <Warn msg={numWarn(Number(value.silero_threshold ?? 0.6), { min: 0, max: 1 })} />
-                </label>
-                <label title="Minimum length (ms) of sound before it counts as speech. Filters out coughs and clicks.">
-                  Min speech duration (ms)
-                  <input type="number" min={0} max={10000} step={50} value={Number(value.silero_min_speech_ms ?? 1000)} onChange={(e) => onUpdateConfig('silero_min_speech_ms', Number(e.target.value))} />
-                  <small>Shortest utterance treated as real speech. Raise to ignore brief noises.</small>
-                  <Warn msg={numWarn(Number(value.silero_min_speech_ms ?? 1000), { min: 0, max: 10000, integer: true })} />
-                </label>
-                <label>
-                  Speech-to-text (STT)
-                  <select value={String(value.stt_provider || '')} onChange={(e) => onUpdateConfig('stt_provider', e.target.value)}>
-                    <option value="">Sarvam (default)</option>
-                    <option value="sarvam">Sarvam</option>
-                    <option value="deepgram">Deepgram</option>
-                  </select>
-                </label>
-                {value.stt_provider === 'deepgram' && (
-                  <>
-                    <label>
-                      STT model
-                      <select value={String(value.stt_model || '')} onChange={(e) => onUpdateConfig('stt_model', e.target.value)}>
-                        <option value="">nova-3 (default)</option>
-                        {deepgramSttModels.map((e) => <option key={e.key} value={e.label}>{e.label}</option>)}
-                      </select>
-                    </label>
-                    <label>
-                      STT language
-                      <input value={String(value.stt_language || '')} placeholder="en-US (default)" onChange={(e) => onUpdateConfig('stt_language', e.target.value)} />
-                    </label>
-                  </>
-                )}
-              </div>
-              {(value.stt_provider === 'sarvam' || !value.stt_provider) && (
-                <div style={isWorkflow ? inertFieldStyle : undefined}>
-                  <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
-                    Sarvam STT parameters (engineering)
-                  </div>
-                  <ProviderOptionsEditor fields={SARVAM_STT_FIELDS} value={optsFor('stt_options')} onChange={(next) => onUpdateConfig('stt_options', next)} />
-                </div>
-              )}
-              {(value.tts_provider === 'sarvam' || !value.tts_provider) && (
-                <div>
-                  <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0.75rem 0 0.25rem' }}>
-                    Sarvam TTS parameters (engineering)
-                  </div>
-                  <ProviderOptionsEditor fields={SARVAM_TTS_FIELDS} value={optsFor('tts_options')} onChange={(next) => onUpdateConfig('tts_options', next)} />
-                </div>
-              )}
-            </div>
-          </details>
         </div>
       )}
 
@@ -904,13 +911,13 @@ export function BotConfigTabs({
             <button
               type="button"
               onClick={() => setWorkflowJsonOpen((v) => !v)}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: 'var(--font-size-md)' }}
             >
               <Database size={14} /> {workflowJsonOpen ? 'Hide' : 'Show'} raw graph JSON (advanced)
             </button>
             {workflowJsonOpen && (
               <div style={{ marginTop: '0.6rem' }}>
-                <p style={{ fontSize: '0.78rem', color: 'var(--muted)', margin: '0 0 0.4rem' }}>
+                <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)', margin: '0 0 0.4rem' }}>
                   Same graph as the canvas above, as raw nodes/edges JSON consumed by
                   workflow_engine.py — see backend/models.py's WorkflowGraphDef for the exact
                   shape. Editing here updates the canvas immediately; the two stay in sync.
@@ -938,9 +945,9 @@ export function BotConfigTabs({
           <div style={{ marginTop: '1rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
               <Database size={16} />
-              <strong style={{ fontSize: '0.9rem' }}>Developer JSON</strong>
+              <strong style={{ fontSize: 'var(--font-size-lg)' }}>Developer JSON</strong>
             </div>
-            <p style={{ fontSize: '0.78rem', color: 'var(--muted)', margin: '0 0 0.4rem' }}>Full runtime config. Edits here override the fields above.</p>
+            <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--muted)', margin: '0 0 0.4rem' }}>Full runtime config. Edits here override the fields above.</p>
             <textarea className="json-editor" value={configText} onChange={(e) => onConfigTextChange(e.target.value)} spellCheck={false} aria-invalid={!configOk} />
             {!configOk && (
               <div className="notice error" role="alert" style={{ marginTop: '0.5rem' }}>
