@@ -178,6 +178,11 @@ input[type="checkbox"]:checked {
 }
 input[type="checkbox"]:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
+/* Placeholders had no colour of their own, so each browser picked its own grey — noticeably
+   darker in Safari than Chrome, and close enough to real input text to be misread as a
+   filled field. Pin them to the same muted token every other hint uses. */
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
+
 /* ── App shell ── */
 .app-shell { display: flex; min-height: 100vh; background: var(--bg); }
 .sidebar {
