@@ -18,7 +18,7 @@ vi.mock('../api', () => ({
 
 function makeRule(overrides: Partial<AlertRule> = {}): AlertRule {
   return {
-    id: 'rule_1',
+    _id: 'rule_1',
     name: 'Call volume dropped',
     metric: 'call_count',
     threshold_type: 'absolute',
@@ -37,7 +37,7 @@ function makeRule(overrides: Partial<AlertRule> = {}): AlertRule {
 
 function makeIncident(overrides: Partial<AlertIncident> = {}): AlertIncident {
   return {
-    id: 'incident_1',
+    _id: 'incident_1',
     rule_id: 'rule_1',
     rule_name: 'Call volume dropped',
     bot_ids: [],
@@ -56,7 +56,7 @@ beforeEach(() => {
   vi.mocked(api.listAlertIncidents).mockResolvedValue([]);
   vi.mocked(api.createAlertRule).mockImplementation(async (payload) => ({
     ...payload,
-    id: 'rule_1',
+    _id: 'rule_1',
     threshold_type: 'absolute',
     notify_via: 'in_app',
     created_by: 'admin@justdial.com',
@@ -98,9 +98,9 @@ describe('AlertsPanel create-alert dialog', () => {
 describe('AlertsPanel rules list', () => {
   it('renders the fetched rules by name', async () => {
     vi.mocked(api.listAlertRules).mockResolvedValue([
-      makeRule({ id: 'rule_1', name: 'Call volume dropped' }),
-      makeRule({ id: 'rule_2', name: 'Latency spike' }),
-      makeRule({ id: 'rule_3', name: 'Error rate high' }),
+      makeRule({ _id: 'rule_1', name: 'Call volume dropped' }),
+      makeRule({ _id: 'rule_2', name: 'Latency spike' }),
+      makeRule({ _id: 'rule_3', name: 'Error rate high' }),
     ]);
 
     render(<AlertsPanel bots={[]} />);
@@ -115,7 +115,7 @@ describe('AlertsPanel history tab', () => {
   it('fetches and renders incidents when switching to the History sub-tab', async () => {
     vi.mocked(api.listAlertIncidents).mockResolvedValue([
       makeIncident({
-        id: 'incident_1',
+        _id: 'incident_1',
         rule_name: 'Call volume dropped',
         metric: 'call_count',
         threshold_value: 10,
@@ -166,9 +166,9 @@ describe('AlertsPanel create round-trip', () => {
 
 describe('AlertsPanel edit round-trip', () => {
   it('submits updateAlertRule with the rule id and the changed field', async () => {
-    vi.mocked(api.listAlertRules).mockResolvedValue([makeRule({ id: 'rule_1', name: 'Call volume dropped' })]);
+    vi.mocked(api.listAlertRules).mockResolvedValue([makeRule({ _id: 'rule_1', name: 'Call volume dropped' })]);
     vi.mocked(api.updateAlertRule).mockImplementation(async (id, payload) => ({
-      ...makeRule({ id }),
+      ...makeRule({ _id: id }),
       ...payload,
     }));
 
@@ -195,7 +195,7 @@ describe('AlertsPanel edit round-trip', () => {
 
 describe('AlertsPanel delete round-trip', () => {
   it('calls deleteAlertRule with the rule id and removes it from the list on success', async () => {
-    vi.mocked(api.listAlertRules).mockResolvedValue([makeRule({ id: 'rule_1', name: 'Call volume dropped' })]);
+    vi.mocked(api.listAlertRules).mockResolvedValue([makeRule({ _id: 'rule_1', name: 'Call volume dropped' })]);
     vi.mocked(api.deleteAlertRule).mockResolvedValue({ ok: true });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
@@ -210,7 +210,7 @@ describe('AlertsPanel delete round-trip', () => {
   });
 
   it('does not remove the rule from the list before the delete request resolves', async () => {
-    vi.mocked(api.listAlertRules).mockResolvedValue([makeRule({ id: 'rule_1', name: 'Call volume dropped' })]);
+    vi.mocked(api.listAlertRules).mockResolvedValue([makeRule({ _id: 'rule_1', name: 'Call volume dropped' })]);
     let resolveDelete: (() => void) | undefined;
     vi.mocked(api.deleteAlertRule).mockImplementation(
       () => new Promise((resolve) => { resolveDelete = () => resolve({ ok: true }); }),
@@ -232,7 +232,7 @@ describe('AlertsPanel delete round-trip', () => {
   });
 
   it('surfaces the error banner and keeps the rule in the list when delete fails', async () => {
-    vi.mocked(api.listAlertRules).mockResolvedValue([makeRule({ id: 'rule_1', name: 'Call volume dropped' })]);
+    vi.mocked(api.listAlertRules).mockResolvedValue([makeRule({ _id: 'rule_1', name: 'Call volume dropped' })]);
     vi.mocked(api.deleteAlertRule).mockRejectedValue(new Error('Could not delete this alert.'));
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
@@ -249,8 +249,8 @@ describe('AlertsPanel delete round-trip', () => {
 
 describe('AlertsPanel toggle-enabled round-trip', () => {
   it('calls updateAlertRule with the flipped enabled value', async () => {
-    vi.mocked(api.listAlertRules).mockResolvedValue([makeRule({ id: 'rule_1', name: 'Call volume dropped', enabled: true })]);
-    vi.mocked(api.updateAlertRule).mockImplementation(async (id, payload) => ({ ...makeRule({ id }), ...payload }));
+    vi.mocked(api.listAlertRules).mockResolvedValue([makeRule({ _id: 'rule_1', name: 'Call volume dropped', enabled: true })]);
+    vi.mocked(api.updateAlertRule).mockImplementation(async (id, payload) => ({ ...makeRule({ _id: id }), ...payload }));
 
     render(<AlertsPanel bots={[]} />);
     const checkbox = await screen.findByRole('checkbox', { name: /disable rule/i });
@@ -263,7 +263,7 @@ describe('AlertsPanel toggle-enabled round-trip', () => {
   });
 
   it('does not optimistically flip the checkbox before the request resolves, and shows an error on failure', async () => {
-    vi.mocked(api.listAlertRules).mockResolvedValue([makeRule({ id: 'rule_1', name: 'Call volume dropped', enabled: true })]);
+    vi.mocked(api.listAlertRules).mockResolvedValue([makeRule({ _id: 'rule_1', name: 'Call volume dropped', enabled: true })]);
     vi.mocked(api.updateAlertRule).mockRejectedValue(new Error('Could not update this alert.'));
 
     render(<AlertsPanel bots={[]} />);

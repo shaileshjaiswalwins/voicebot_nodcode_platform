@@ -262,7 +262,7 @@ export type AlertRuleFilters = {
 export type AlertNotifyVia = 'in_app';
 
 export type AlertRule = {
-  id: string;
+  _id: string;
   name: string;
   metric: AlertMetric;
   threshold_type: AlertThresholdType;
@@ -294,7 +294,7 @@ export type AlertRuleInput = {
 export type AlertIncidentStatus = 'open' | 'resolved';
 
 export type AlertIncident = {
-  id: string;
+  _id: string;
   rule_id: string;
   rule_name: string;
   bot_ids: string[];

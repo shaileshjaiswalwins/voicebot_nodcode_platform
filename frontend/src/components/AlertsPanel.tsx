@@ -310,7 +310,7 @@ function RulesTab({ rules, bots, loading, onCreate, onUpdate, onToggleEnabled, o
         </thead>
         <tbody>
           {rules.map((rule) => (
-            <tr key={rule.id}>
+            <tr key={rule._id}>
               <td><strong style={{ cursor: 'pointer' }} onClick={() => openEdit(rule)}>{rule.name}</strong></td>
               <td><code>{formatCondition(rule.metric, rule.comparator, rule.threshold_value)}</code></td>
               <td><small>every {rule.frequency} / last {rule.window}</small></td>
@@ -350,7 +350,7 @@ function RulesTab({ rules, bots, loading, onCreate, onUpdate, onToggleEnabled, o
           bots={bots}
           existingCount={rules.length}
           onClose={() => setShowDialog(false)}
-          onSave={(payload) => (editingRule ? onUpdate(editingRule.id, payload) : onCreate(payload))}
+          onSave={(payload) => (editingRule ? onUpdate(editingRule._id, payload) : onCreate(payload))}
         />
       )}
     </div>
@@ -380,7 +380,7 @@ function HistoryTab({ incidents, loading }: { incidents: AlertIncident[]; loadin
         </thead>
         <tbody>
           {incidents.map((incident) => (
-            <tr key={incident.id}>
+            <tr key={incident._id}>
               <td>
                 <small>
                   <TimeAgo value={incident.triggered_at} />
@@ -461,7 +461,7 @@ export function AlertsPanel({ bots, onUnreadCountChange }: { bots: Bot[]; onUnre
 
   async function handleUpdate(id: string, payload: AlertRuleInput) {
     const updated = await api.updateAlertRule(id, payload);
-    setRules((prev) => prev.map((r) => (r.id === id ? updated : r)));
+    setRules((prev) => prev.map((r) => (r._id === id ? updated : r)));
   }
 
   async function handleToggleEnabled(rule: AlertRule) {
@@ -477,8 +477,8 @@ export function AlertsPanel({ bots, onUnreadCountChange }: { bots: Bot[]; onUnre
     };
     setError('');
     try {
-      const updated = await api.updateAlertRule(rule.id, payload);
-      setRules((prev) => prev.map((r) => (r.id === rule.id ? updated : r)));
+      const updated = await api.updateAlertRule(rule._id, payload);
+      setRules((prev) => prev.map((r) => (r._id === rule._id ? updated : r)));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not update this alert.');
     }
@@ -488,8 +488,8 @@ export function AlertsPanel({ bots, onUnreadCountChange }: { bots: Bot[]; onUnre
     if (!window.confirm(`Delete alert "${rule.name}"? This can't be undone.`)) return;
     setError('');
     try {
-      await api.deleteAlertRule(rule.id);
-      setRules((prev) => prev.filter((r) => r.id !== rule.id));
+      await api.deleteAlertRule(rule._id);
+      setRules((prev) => prev.filter((r) => r._id !== rule._id));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not delete this alert.');
     }
