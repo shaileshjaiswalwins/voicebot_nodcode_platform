@@ -18,13 +18,21 @@ Skip-logic mirrors generate_call_analysis: a call that never connected
 nothing for it to extract, and it would just waste an API call.
 """
 
+import asyncio
 import json
 import os
+from typing import Literal
 
 import aiohttp
 from loguru import logger
 
 from .models import AnalysisFieldDef
+
+# Status values returned by `generate_generic_analysis` (see its docstring). Exported so
+# callers (bot.py) can use the same literal type for their own hand-written status
+# strings (e.g. the outer defense-in-depth except block's "failed") instead of a bare
+# string literal that could silently typo out of sync with this module's spellings.
+AnalysisStatus = Literal["ok", "skipped", "failed"]
 
 # Same env var callback_worker/config.py reads GEMINI_API_KEY from — read directly here
 # rather than importing callback_worker.config, since that module requires several
@@ -128,7 +136,7 @@ async def generate_generic_analysis(
     http_session: aiohttp.ClientSession,
     gemini_connect_failed: bool = False,
     model: str = _GEMINI_MODEL,
-) -> tuple[str, dict]:
+) -> tuple[AnalysisStatus, dict]:
     """Extract a PM-defined set of `analysis_fields` from a call transcript via Gemini.
 
     Returns a `(status, result)` tuple. `result` is a flat {key: value} dict, one entry

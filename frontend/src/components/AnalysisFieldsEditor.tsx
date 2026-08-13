@@ -45,7 +45,8 @@ function newUiId(): string {
 
 /** Per-field validation, mirrored client-side from the backend rules (unique keys within
  * one bot version, enum_options required + non-empty when type === 'enum'). The backend
- * remains the source of truth (backend/routers/bots.py) — this is inline UX only, shown as
+ * remains the source of truth (the AnalysisFieldDef model_validator in backend/models.py) —
+ * this is inline UX only, shown as
  * the PM types rather than only surfaced after a failed save. */
 export function fieldErrors(field: AnalysisFieldDef, allFields: AnalysisFieldDef[]): string[] {
   const errors: string[] = [];
