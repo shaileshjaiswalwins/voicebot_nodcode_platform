@@ -343,10 +343,10 @@ async def _save_transcript_to_dashboard_db(
     _is_workflow_bot = (bot_config or {}).get("bot_type") == "workflow"
 
     if _is_workflow_bot and _analysis_fields:
-        from backend.post_call_analysis import generate_generic_analysis
+        from backend.post_call_analysis import empty_analysis_result, generate_generic_analysis
 
         try:
-            generic_result = await generate_generic_analysis(
+            generic_status, generic_result = await generate_generic_analysis(
                 mongo_doc.get("transcript") or [],
                 _analysis_fields,
                 _get_http_session(),
@@ -354,9 +354,15 @@ async def _save_transcript_to_dashboard_db(
             )
         except Exception as e:
             logger.warning(f"[ANALYSIS] Generic extraction failed for room={mongo_doc.get('room_name')!r}: {e}")
-            generic_result = {f.get("key"): None for f in _analysis_fields if f.get("key")}
+            generic_status = "failed"
+            generic_result = empty_analysis_result(_analysis_fields)
 
         _doc["analysis_fields_result"] = generic_result
+        # Sibling status flag (not a wrapper around analysis_fields_result, to avoid
+        # disturbing that field's existing flat {key: value} shape for any consumer):
+        # lets a PM viewing the dashboard tell "the model said no/0/empty" apart from
+        # "this call was skipped or Gemini errored, nothing was ever really analyzed".
+        _doc["analysis_fields_status"] = generic_status
         # Still call the legacy classifier's cheap deterministic fallback so `analysis`
         # is never entirely absent from the doc — Transcript Viewer/dashboard code that
         # reads `analysis.call_outcome` etc. keeps working for a workflow bot too, just

@@ -1,5 +1,6 @@
 import csv
 import io
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
+from pydantic import ValidationError
 
 from ..analysis_prompts import CALL_ANALYSIS_KEY, validate_prompt_template
 from ..audit import log_audit
@@ -80,21 +82,35 @@ def _validate_config_analysis_prompt(config: BotConfig) -> None:
 
 
 # Generic per-bot post-call analysis schema (Part 2 of the post-call-analysis revamp).
-# Mirrors the alerting feature's MAX_RULES_PER_USER=10 cap pattern — a guardrail against
-# an unbounded prompt (every field turns into a line in the extraction prompt, and a
-# Gemini call whose output schema keeps growing), not a hard product constraint. 20 is
-# double alerting's cap since a PM plausibly wants more analysis fields than alert rules
-# per bot; raise later if that proves too tight.
+# A guardrail against an unbounded prompt (every field turns into a line in the
+# extraction prompt, and a Gemini call whose output schema keeps growing), not a hard
+# product constraint. 20 is a generous ceiling for what a PM can realistically define
+# and keep track of per bot without the extraction prompt/schema becoming unwieldy;
+# raise later if that proves too tight.
 MAX_ANALYSIS_FIELDS_PER_BOT = 20
+
+# Keys are interpolated directly into the Gemini extraction prompt by
+# post_call_analysis._build_prompt with no escaping, and are used as literal dict keys
+# on the persisted analysis result. The frontend's slugifyKey already restricts
+# PM-entered keys to this character class client-side; this is the server-side
+# enforcement of the same constraint so a direct API call can't bypass it and submit a
+# key containing quotes/newlines/backslashes that could break the prompt's structure.
+_ANALYSIS_FIELD_KEY_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 
 
 def _validate_config_analysis_fields(config: BotConfig) -> None:
     """Validates the PM-defined analysis_fields schema at every save site, mirroring
     _validate_config_analysis_prompt above: unique field keys within one bot version (the
     generic extractor's output is a flat {key: value} dict, so a duplicate key would
-    silently overwrite an earlier field's result), enum_options required and non-empty
-    when type == "enum" (nothing else tells the extractor what values are valid), and a
-    field-count cap."""
+    silently overwrite an earlier field's result), and a field-count cap. These are
+    list-level invariants that can't live on AnalysisFieldDef itself.
+
+    The enum_options-required-for-type=="enum" invariant lives on AnalysisFieldDef itself
+    now (a model_validator in backend/models.py), so it holds at construction time
+    everywhere — including here, since by the time a `config: BotConfig` reaches this
+    function every AnalysisFieldDef in it already exists and has therefore already passed
+    that check. Nothing left to re-check for it here; see _parse_bot_payload below for
+    where the resulting pydantic.ValidationError gets turned into this router's usual 400."""
     fields = config.analysis_fields
     if not fields:
         return
@@ -107,11 +123,29 @@ def _validate_config_analysis_fields(config: BotConfig) -> None:
         key = (f.key or "").strip()
         if not key:
             raise HTTPException(400, "Each analysis_fields entry must have a non-empty key")
+        if not _ANALYSIS_FIELD_KEY_RE.match(key):
+            raise HTTPException(
+                400,
+                f"analysis_fields key {key!r} may only contain letters, digits, and underscores",
+            )
         if key in seen_keys:
             raise HTTPException(400, f"Duplicate analysis_fields key: {key!r}")
         seen_keys.add(key)
-        if f.type == "enum" and not (f.enum_options and [o for o in f.enum_options if o.strip()]):
-            raise HTTPException(400, f"analysis_fields entry {key!r} has type 'enum' but no enum_options")
+
+
+def _parse_bot_payload(model_cls: type, payload: dict):
+    """Construct a BotCreate/BotUpdateConfig from the raw request body ourselves (rather
+    than typing the route parameter as the model, which would let FastAPI validate it
+    before the handler runs and return a 422) so that a pydantic.ValidationError — notably
+    AnalysisFieldDef's enum_options-required-for-type=="enum" invariant, enforced as a
+    model_validator in backend/models.py and otherwise raised while parsing the nested
+    config.analysis_fields list — surfaces as the same 400 this router already uses for
+    _validate_config_analysis_fields's own checks. Mirrors backend/routers/alerts.py's
+    _parse_rule, which established this exact pattern for AlertRuleBase."""
+    try:
+        return model_cls(**payload)
+    except ValidationError as exc:
+        raise HTTPException(400, str(exc))
 
 
 def _oid(id_str: str) -> ObjectId:
@@ -275,7 +309,8 @@ def export_bots(user: dict = Depends(require_user)) -> Response:
 
 
 @router.post("")
-def create_bot(payload: BotCreate, user: dict = Depends(require_user)) -> dict:
+def create_bot(payload: dict, user: dict = Depends(require_user)) -> dict:
+    payload = _parse_bot_payload(BotCreate, payload)
     name = payload.name.strip()
     if not name:
         raise HTTPException(400, "Name is required")
@@ -541,9 +576,10 @@ def _fork_new_draft(bot_id: str, config: dict, notes: str = "") -> str:
 
 
 @router.put("/{bot_id}/draft")
-def save_draft(bot_id: str, payload: BotUpdateConfig, user: dict = Depends(require_user)) -> dict:
+def save_draft(bot_id: str, payload: dict, user: dict = Depends(require_user)) -> dict:
     """'New version' action — always forks a brand-new draft, even if one already exists.
     Distinct from PUT /versions/{version_id}, which edits an existing draft in place."""
+    payload = _parse_bot_payload(BotUpdateConfig, payload)
     bot = bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)})
     if not bot:
         raise HTTPException(404, "Bot not found")
@@ -554,9 +590,10 @@ def save_draft(bot_id: str, payload: BotUpdateConfig, user: dict = Depends(requi
 
 
 @router.put("/{bot_id}/versions/{version_id}")
-def update_version(bot_id: str, version_id: str, payload: BotUpdateConfig, user: dict = Depends(require_user)) -> dict:
+def update_version(bot_id: str, version_id: str, payload: dict, user: dict = Depends(require_user)) -> dict:
     """'Update version' action — edits a specific existing DRAFT version's config in place.
     Published versions are immutable and cannot be targeted here (audit item 1/16)."""
+    payload = _parse_bot_payload(BotUpdateConfig, payload)
     if not bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)}):
         raise HTTPException(404, "Bot not found")
     version = bot_versions.find_one({"_id": _oid(version_id), "bot_id": _oid(bot_id)})

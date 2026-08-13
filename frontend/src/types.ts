@@ -35,19 +35,26 @@ export type StoreVariable = {
  * single PM-defined field the generic post-call extractor (backend/post_call_analysis.py)
  * should pull out of the transcript, in addition to (or instead of, for Workflow bots with
  * a configured schema) the legacy hardcoded lead-qualification classifier. `key` is the
- * machine-readable JSON key the extractor writes into `analysis.custom_fields`; `label` is
+ * machine-readable JSON key the extractor writes into `analysis_fields_result`; `label` is
  * the PM-facing display name. `description` feeds the generated prompt so the extractor
  * knows what the field means. `enum_options` is required and must be non-empty when
- * `type === 'enum'` — validated both here (inline UX) and server-side (source of truth). */
+ * `type === 'enum'` — validated both here (inline UX) and server-side (source of truth).
+ *
+ * The transcript doc bot.py writes alongside `analysis_fields_result` also carries a
+ * sibling `analysis_fields_status: 'ok' | 'skipped' | 'failed'` field (not modeled as a
+ * TS type here since no frontend code reads the transcript doc's shape today — see
+ * backend/post_call_analysis.py::generate_generic_analysis) so a PM viewing the dashboard
+ * can tell "the model determined this value" apart from "this call was skipped or Gemini
+ * errored and nothing was ever really analyzed" — both cases would otherwise persist the
+ * exact same per-type-empty `analysis_fields_result` shape. */
 export type AnalysisFieldType = 'boolean' | 'text' | 'number' | 'enum';
 
-export type AnalysisFieldDef = {
-  key: string;
-  label: string;
-  type: AnalysisFieldType;
-  description: string;
-  enum_options?: string[];
-};
+/** Discriminated union on `type` so the compiler rejects invalid combinations (e.g. a
+ * 'boolean' field carrying enum_options, or an 'enum' field missing them) instead of
+ * silently allowing them the way a flat type with an optional `enum_options` would. */
+export type AnalysisFieldDef =
+  | { key: string; label: string; description: string; type: 'boolean' | 'text' | 'number'; enum_options?: undefined }
+  | { key: string; label: string; description: string; type: 'enum'; enum_options: string[] };
 
 export type FunctionTrigger = 'pre_call' | 'during_call' | 'post_call';
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';

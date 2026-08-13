@@ -9,7 +9,12 @@ import asyncio
 
 import pytest
 
-from backend.post_call_analysis import _coerce_value, _empty_result, generate_generic_analysis
+from backend.post_call_analysis import (
+    _coerce_value,
+    _empty_result,
+    empty_analysis_result,
+    generate_generic_analysis,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -115,11 +120,17 @@ class _FakeResponseCtx:
 
 
 class _FakeResponse:
-    def __init__(self, response_json):
+    def __init__(self, response_json, status=200):
         self._response_json = response_json
+        self.status = status
 
     async def json(self):
         return self._response_json
+
+    async def text(self):
+        import json as _json
+
+        return _json.dumps(self._response_json)
 
 
 SAMPLE_FIELDS = [
@@ -142,40 +153,44 @@ def _gemini_ok_response(payload: dict) -> dict:
 
 def test_gemini_connect_failed_short_circuits_without_calling_gemini():
     spy = _SpyHttpSession()
-    result = asyncio.run(
+    status, result = asyncio.run(
         generate_generic_analysis(
             SAMPLE_TRANSCRIPT, SAMPLE_FIELDS, spy, gemini_connect_failed=True,
         )
     )
     assert spy.post_called is False
+    assert status == "skipped"
     assert result == {"resolved": False, "sentiment": "", "summary": ""}
 
 
 def test_empty_transcript_short_circuits_without_calling_gemini():
     spy = _SpyHttpSession()
-    result = asyncio.run(
+    status, result = asyncio.run(
         generate_generic_analysis([], SAMPLE_FIELDS, spy, gemini_connect_failed=False)
     )
     assert spy.post_called is False
+    assert status == "skipped"
     assert result == {"resolved": False, "sentiment": "", "summary": ""}
 
 
 def test_transcript_with_no_text_content_short_circuits_without_calling_gemini():
     spy = _SpyHttpSession()
     blank_transcript = [{"role": "agent", "text": ""}, {"role": "user", "text": "   "}]
-    result = asyncio.run(
+    status, result = asyncio.run(
         generate_generic_analysis(blank_transcript, SAMPLE_FIELDS, spy, gemini_connect_failed=False)
     )
     assert spy.post_called is False
+    assert status == "skipped"
     assert result == {"resolved": False, "sentiment": "", "summary": ""}
 
 
 def test_no_fields_configured_returns_empty_dict_without_calling_gemini():
     spy = _SpyHttpSession()
-    result = asyncio.run(
+    status, result = asyncio.run(
         generate_generic_analysis(SAMPLE_TRANSCRIPT, [], spy, gemini_connect_failed=False)
     )
     assert spy.post_called is False
+    assert status == "ok"
     assert result == {}
 
 
@@ -186,10 +201,11 @@ def test_no_fields_configured_returns_empty_dict_without_calling_gemini():
 def test_happy_path_returns_parsed_type_validated_dict():
     gemini_payload = {"resolved": True, "sentiment": "positive", "summary": "Issue was resolved."}
     spy = _SpyHttpSession(response_json=_gemini_ok_response(gemini_payload))
-    result = asyncio.run(
+    status, result = asyncio.run(
         generate_generic_analysis(SAMPLE_TRANSCRIPT, SAMPLE_FIELDS, spy, gemini_connect_failed=False)
     )
     assert spy.post_called is True
+    assert status == "ok"
     assert result == {"resolved": True, "sentiment": "positive", "summary": "Issue was resolved."}
 
 
@@ -198,28 +214,61 @@ def test_happy_path_coerces_bad_values_in_the_response():
     # the function must still return a full, type-safe dict rather than raising.
     gemini_payload = {"resolved": "yes-ish", "sentiment": "furious", "summary": None}
     spy = _SpyHttpSession(response_json=_gemini_ok_response(gemini_payload))
-    result = asyncio.run(
+    status, result = asyncio.run(
         generate_generic_analysis(SAMPLE_TRANSCRIPT, SAMPLE_FIELDS, spy, gemini_connect_failed=False)
     )
+    assert status == "ok"
     assert result == {"resolved": False, "sentiment": "", "summary": ""}
 
 
 def test_gemini_error_response_falls_back_to_empty_result():
     spy = _SpyHttpSession(response_json={"error": {"message": "quota exceeded"}})
-    result = asyncio.run(
+    status, result = asyncio.run(
         generate_generic_analysis(SAMPLE_TRANSCRIPT, SAMPLE_FIELDS, spy, gemini_connect_failed=False)
     )
     assert spy.post_called is True
+    assert status == "failed"
     assert result == {"resolved": False, "sentiment": "", "summary": ""}
 
 
 def test_malformed_json_falls_back_to_empty_result():
     bad_response = {"candidates": [{"content": {"parts": [{"text": "not json at all"}]}}]}
     spy = _SpyHttpSession(response_json=bad_response)
-    result = asyncio.run(
+    status, result = asyncio.run(
         generate_generic_analysis(SAMPLE_TRANSCRIPT, SAMPLE_FIELDS, spy, gemini_connect_failed=False)
     )
+    assert status == "failed"
     assert result == {"resolved": False, "sentiment": "", "summary": ""}
+
+
+def test_non_object_json_array_falls_back_to_empty_result():
+    # Gemini can legitimately return valid JSON that isn't an object — e.g. a bare
+    # array — when responseMimeType=application/json is honored but the model doesn't
+    # follow the "respond with an object" instruction. `parsed.get(...)` would raise
+    # AttributeError on a list; that must be caught internally rather than propagating.
+    bad_response = {"candidates": [{"content": {"parts": [{"text": "[1, 2, 3]"}]}}]}
+    spy = _SpyHttpSession(response_json=bad_response)
+    status, result = asyncio.run(
+        generate_generic_analysis(SAMPLE_TRANSCRIPT, SAMPLE_FIELDS, spy, gemini_connect_failed=False)
+    )
+    assert status == "failed"
+    assert result == {"resolved": False, "sentiment": "", "summary": ""}
+
+
+def test_non_object_json_string_falls_back_to_empty_result():
+    # Same as above but for a bare JSON string.
+    bad_response = {"candidates": [{"content": {"parts": [{"text": '"just a string"'}]}}]}
+    spy = _SpyHttpSession(response_json=bad_response)
+    status, result = asyncio.run(
+        generate_generic_analysis(SAMPLE_TRANSCRIPT, SAMPLE_FIELDS, spy, gemini_connect_failed=False)
+    )
+    assert status == "failed"
+    assert result == {"resolved": False, "sentiment": "", "summary": ""}
+
+
+def test_empty_analysis_result_matches_empty_result():
+    fields = [BOOL_FIELD, TEXT_FIELD, NUMBER_FIELD, ENUM_FIELD]
+    assert empty_analysis_result(fields) == _empty_result(fields)
 
 
 def test_accepts_analysis_field_def_model_instances():
@@ -228,10 +277,104 @@ def test_accepts_analysis_field_def_model_instances():
     fields = [AnalysisFieldDef(key="ok", label="OK", type="boolean")]
     gemini_payload = {"ok": True}
     spy = _SpyHttpSession(response_json=_gemini_ok_response(gemini_payload))
-    result = asyncio.run(
+    status, result = asyncio.run(
         generate_generic_analysis(SAMPLE_TRANSCRIPT, fields, spy, gemini_connect_failed=False)
     )
+    assert status == "ok"
     assert result == {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# generate_generic_analysis — non-2xx HTTP status handling (Fix 2)
+# ---------------------------------------------------------------------------
+
+class _StatusFakeResponse:
+    """Like _FakeResponse but with a configurable .status and .text() for the
+    HTTP-status-check branch, which reads status/body before touching .json()."""
+
+    def __init__(self, status, body_text="", response_json=None):
+        self.status = status
+        self._body_text = body_text
+        self._response_json = response_json
+
+    async def text(self):
+        return self._body_text
+
+    async def json(self):
+        return self._response_json
+
+
+class _StatusFakeResponseCtx:
+    def __init__(self, response):
+        self._response = response
+
+    async def __aenter__(self):
+        return self._response
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _StatusSpyHttpSession:
+    def __init__(self, status, body_text=""):
+        self.post_called = False
+        self._status = status
+        self._body_text = body_text
+
+    def post(self, url, **kwargs):
+        self.post_called = True
+        return _StatusFakeResponseCtx(_StatusFakeResponse(self._status, self._body_text))
+
+
+@pytest.fixture
+def captured_log_messages(monkeypatch):
+    """loguru's `logger` isn't bridged into stdlib logging in this codebase (no
+    conftest sink wires it up), so `caplog` can't see it — capture messages by
+    monkeypatching `logger.error` directly instead, same spirit as caplog but for
+    a loguru logger."""
+    import backend.post_call_analysis as post_call_analysis_module
+
+    messages = []
+    monkeypatch.setattr(post_call_analysis_module.logger, "error", lambda msg: messages.append(msg))
+    return messages
+
+
+def test_non_2xx_http_status_logs_distinct_signature_and_falls_back(captured_log_messages):
+    spy = _StatusSpyHttpSession(status=429, body_text="rate limited")
+    status, result = asyncio.run(
+        generate_generic_analysis(SAMPLE_TRANSCRIPT, SAMPLE_FIELDS, spy, gemini_connect_failed=False)
+    )
+    assert spy.post_called is True
+    assert status == "failed"
+    assert result == {"resolved": False, "sentiment": "", "summary": ""}
+    assert any(
+        "error_category=http_status" in m and "429" in m for m in captured_log_messages
+    )
+
+
+def test_5xx_http_status_also_tagged_as_http_status_category(captured_log_messages):
+    spy = _StatusSpyHttpSession(status=500, body_text="internal error")
+    status, result = asyncio.run(
+        generate_generic_analysis(SAMPLE_TRANSCRIPT, SAMPLE_FIELDS, spy, gemini_connect_failed=False)
+    )
+    assert status == "failed"
+    assert result == {"resolved": False, "sentiment": "", "summary": ""}
+    assert any(
+        "error_category=http_status" in m and "500" in m for m in captured_log_messages
+    )
+
+
+def test_network_exception_tagged_as_network_category(captured_log_messages):
+    class _RaisingHttpSession:
+        def post(self, url, **kwargs):
+            raise ConnectionError("boom")
+
+    status, result = asyncio.run(
+        generate_generic_analysis(SAMPLE_TRANSCRIPT, SAMPLE_FIELDS, _RaisingHttpSession(), gemini_connect_failed=False)
+    )
+    assert status == "failed"
+    assert result == {"resolved": False, "sentiment": "", "summary": ""}
+    assert any("error_category=network" in m for m in captured_log_messages)
 
 
 # ---------------------------------------------------------------------------
@@ -427,7 +570,7 @@ def test_workflow_bot_with_analysis_fields_writes_result_and_skips_legacy_classi
 
     async def _fake_generic(*args, **kwargs):
         generic_called["count"] += 1
-        return {"resolved": True}
+        return "ok", {"resolved": True}
 
     async def _fake_legacy_call_analysis(*args, **kwargs):
         legacy_called["count"] += 1
@@ -456,10 +599,61 @@ def test_workflow_bot_with_analysis_fields_writes_result_and_skips_legacy_classi
     assert legacy_called["count"] == 0
     saved = bot_module._test_saved_docs[0]
     assert saved["analysis_fields_result"] == {"resolved": True}
+    assert saved["analysis_fields_status"] == "ok"
     # Legacy `analysis` object is still populated via the cheap deterministic
     # fallback (not the real Gemini classifier), so old dashboard code keeps working.
     assert "analysis" in saved
     assert saved["analysis"]["call_outcome"] != "Approved"
+
+
+def test_workflow_bot_generic_extraction_exception_falls_back_to_typed_empty_result(bot_module, monkeypatch):
+    # generate_generic_analysis is documented to never raise, but bot.py's outer
+    # except block exists as a defense-in-depth for genuine bugs in the calling code
+    # (bad config shape, missing session, etc). Its fallback must match the SAME
+    # per-type-correct shape as post_call_analysis._empty_result, not untyped None.
+    import backend.post_call_analysis as post_call_analysis_module
+    import callback_worker.analysis as legacy_analysis_module
+
+    async def _raising_generic(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    async def _fake_legacy_call_analysis(*args, **kwargs):
+        return {"call_outcome": "Approved"}
+
+    async def _fake_b2b_score(*args, **kwargs):
+        return {"deal_value": "100"}
+
+    monkeypatch.setattr(post_call_analysis_module, "generate_generic_analysis", _raising_generic)
+    monkeypatch.setattr(legacy_analysis_module, "generate_call_analysis", _fake_legacy_call_analysis)
+    monkeypatch.setattr(legacy_analysis_module, "generate_b2b_score", _fake_b2b_score)
+
+    analysis_fields = [
+        {"key": "resolved", "label": "Resolved", "type": "boolean"},
+        {"key": "sentiment", "label": "Sentiment", "type": "enum", "enum_options": ["positive", "negative"]},
+        {"key": "summary", "label": "Summary", "type": "text"},
+        {"key": "score", "label": "Score", "type": "number"},
+    ]
+    bot_config = {"bot_type": "workflow", "analysis_fields": analysis_fields}
+
+    asyncio.run(
+        bot_module._save_transcript_to_dashboard_db(
+            _base_mongo_doc(), bot_id="bot-1", bot_config=bot_config,
+        )
+    )
+
+    saved = bot_module._test_saved_docs[0]
+    expected = post_call_analysis_module.empty_analysis_result(analysis_fields)
+    assert saved["analysis_fields_result"] == expected
+    assert saved["analysis_fields_result"] == {
+        "resolved": False,
+        "sentiment": "",
+        "summary": "",
+        "score": 0,
+    }
+    # bot.py's own outer except block (defense-in-depth around a raising
+    # generate_generic_analysis) must record status="failed" too, so this doesn't
+    # read as a genuine "ok" extraction that happened to come back all-empty.
+    assert saved["analysis_fields_status"] == "failed"
 
 
 def test_workflow_bot_without_analysis_fields_falls_through_to_legacy_path(bot_module, monkeypatch):
@@ -471,7 +665,7 @@ def test_workflow_bot_without_analysis_fields_falls_through_to_legacy_path(bot_m
 
     async def _fake_generic(*args, **kwargs):
         generic_called["count"] += 1
-        return {}
+        return "ok", {}
 
     async def _fake_legacy_call_analysis(*args, **kwargs):
         legacy_called["count"] += 1
@@ -496,6 +690,7 @@ def test_workflow_bot_without_analysis_fields_falls_through_to_legacy_path(bot_m
     assert legacy_called["count"] == 1
     saved = bot_module._test_saved_docs[0]
     assert "analysis_fields_result" not in saved
+    assert "analysis_fields_status" not in saved
     assert saved["analysis"]["call_outcome"] == "Approved"
 
 
@@ -509,7 +704,7 @@ def test_non_workflow_bot_always_takes_legacy_path_regardless_of_analysis_fields
 
     async def _fake_generic(*args, **kwargs):
         generic_called["count"] += 1
-        return {"resolved": True}
+        return "ok", {"resolved": True}
 
     async def _fake_legacy_call_analysis(*args, **kwargs):
         legacy_called["count"] += 1
@@ -540,3 +735,228 @@ def test_non_workflow_bot_always_takes_legacy_path_regardless_of_analysis_fields
     assert legacy_called["count"] == 1
     saved = bot_module._test_saved_docs[0]
     assert "analysis_fields_result" not in saved
+    assert "analysis_fields_status" not in saved
+
+
+# ---------------------------------------------------------------------------
+# AnalysisFieldDef model-level invariant (backend/models.py)
+# ---------------------------------------------------------------------------
+
+
+def test_analysis_field_def_enum_without_enum_options_raises_at_construction():
+    """The enum_options-required-for-type=='enum' invariant must be enforced by
+    AnalysisFieldDef itself (a model_validator), not only by the router's
+    _validate_config_analysis_fields — so constructing the model directly, anywhere,
+    with an invalid combination is impossible."""
+    import pydantic
+
+    from backend.models import AnalysisFieldDef
+
+    with pytest.raises(pydantic.ValidationError):
+        AnalysisFieldDef(key="sentiment", label="Sentiment", type="enum")
+
+    with pytest.raises(pydantic.ValidationError):
+        AnalysisFieldDef(key="sentiment", label="Sentiment", type="enum", enum_options=[])
+
+    with pytest.raises(pydantic.ValidationError):
+        AnalysisFieldDef(key="sentiment", label="Sentiment", type="enum", enum_options=["  ", ""])
+
+    # Sanity check: a valid enum field still constructs fine.
+    field = AnalysisFieldDef(key="sentiment", label="Sentiment", type="enum", enum_options=["a", "b"])
+    assert field.enum_options == ["a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# _build_prompt — robustness against prompt-breaking key characters
+#
+# `_build_prompt` interpolates `f['key']` directly into the extraction prompt with no
+# escaping, and neither AnalysisFieldDef nor _validate_config_analysis_fields previously
+# constrained which characters a key can contain (only the frontend's slugifyKey did,
+# client-side, bypassable via a direct API call). _validate_config_analysis_fields now
+# also enforces `^[a-zA-Z0-9_]+$` server-side (see backend/routers/bots.py), matching
+# what slugifyKey already produces — so a malicious/malformed key can no longer reach
+# _build_prompt via the router. _build_prompt itself is still exercised directly here for
+# robustness: it must never crash regardless of what key string it's handed.
+# ---------------------------------------------------------------------------
+
+class TestBuildPromptKeyCharacterRobustness:
+    def test_key_with_double_quote_does_not_crash_and_is_included(self):
+        from backend.post_call_analysis import _build_prompt
+
+        fields = [{"key": 'bad"key', "label": "Bad", "type": "text"}]
+        prompt = _build_prompt(fields, "AGENT: hi\nUSER: hello")
+        assert isinstance(prompt, str)
+        assert 'bad"key' in prompt
+
+    def test_key_with_newlines_does_not_crash_and_is_included(self):
+        from backend.post_call_analysis import _build_prompt
+
+        fields = [{"key": "key\nwith\nnewlines", "label": "Bad", "type": "text"}]
+        prompt = _build_prompt(fields, "AGENT: hi\nUSER: hello")
+        assert isinstance(prompt, str)
+        assert "key\nwith\nnewlines" in prompt
+
+    def test_generate_generic_analysis_with_prompt_breaking_key_end_to_end(self):
+        # Confirm the whole pipeline (prompt build -> mocked Gemini call -> coercion)
+        # doesn't crash when a field key contains characters that could break a naively
+        # quoted prompt fragment, even though the router should reject such a key before
+        # it ever reaches here in practice.
+        fields = [{"key": 'weird"key\nvalue', "label": "Weird", "type": "text"}]
+        gemini_payload = {'weird"key\nvalue': "some text"}
+        spy = _SpyHttpSession(response_json=_gemini_ok_response(gemini_payload))
+        status, result = asyncio.run(
+            generate_generic_analysis(SAMPLE_TRANSCRIPT, fields, spy, gemini_connect_failed=False)
+        )
+        assert spy.post_called is True
+        assert status == "ok"
+        assert result == {'weird"key\nvalue': "some text"}
+
+
+# ---------------------------------------------------------------------------
+# Router validation — key character restriction (backend/routers/bots.py)
+# ---------------------------------------------------------------------------
+
+def test_analysis_field_key_with_double_quote_rejected(client, auth_headers):
+    resp = _create_bot(
+        client,
+        auth_headers,
+        config={
+            "organization_name": "Justdial",
+            "analysis_fields": [{"key": 'bad"key', "label": "Bad", "type": "text"}],
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_analysis_field_key_with_newlines_rejected(client, auth_headers):
+    resp = _create_bot(
+        client,
+        auth_headers,
+        config={
+            "organization_name": "Justdial",
+            "analysis_fields": [{"key": "key\nwith\nnewlines", "label": "Bad", "type": "text"}],
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_analysis_field_key_alphanumeric_underscore_still_accepted(client, auth_headers):
+    # Sanity check that the new character-class restriction doesn't regress normal keys.
+    resp = _create_bot(
+        client,
+        auth_headers,
+        config={
+            "organization_name": "Justdial",
+            "analysis_fields": [{"key": "sentiment_v2", "label": "Sentiment", "type": "text"}],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+
+# ---------------------------------------------------------------------------
+# Router validation — whitespace-normalized duplicate/empty keys
+# ---------------------------------------------------------------------------
+
+def test_whitespace_variant_duplicate_keys_rejected(client, auth_headers):
+    # " dup" and "dup " normalize to the same stripped key "dup" — must be rejected as a
+    # duplicate, not silently accepted and persisted as two colliding output keys.
+    resp = _create_bot(
+        client,
+        auth_headers,
+        config={
+            "organization_name": "Justdial",
+            "analysis_fields": [
+                {"key": " dup", "label": "A", "type": "text"},
+                {"key": "dup ", "label": "B", "type": "text"},
+            ],
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_whitespace_only_key_rejected_as_empty(client, auth_headers):
+    resp = _create_bot(
+        client,
+        auth_headers,
+        config={
+            "organization_name": "Justdial",
+            "analysis_fields": [{"key": "   ", "label": "A", "type": "text"}],
+        },
+    )
+    assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# generate_generic_analysis — the HTTP call itself raising (not just returning a bad
+# response). Existing tests only cover a mocked session whose .post() always succeeds in
+# returning a response object, even for malformed/error-shaped payloads; none simulate
+# the network call raising before any response is received.
+# ---------------------------------------------------------------------------
+
+class _RaisingHttpSession:
+    """Spy whose .post() raises immediately, simulating a connection failure or timeout
+    before any response is ever received (as opposed to a response object carrying an
+    error, which the other tests in this file already cover)."""
+
+    def __init__(self, exc):
+        self._exc = exc
+        self.post_called = False
+
+    def post(self, url, **kwargs):
+        self.post_called = True
+        raise self._exc
+
+
+def test_connection_error_during_post_falls_back_cleanly():
+    spy = _RaisingHttpSession(ConnectionError("connection refused"))
+    status, result = asyncio.run(
+        generate_generic_analysis(SAMPLE_TRANSCRIPT, SAMPLE_FIELDS, spy, gemini_connect_failed=False)
+    )
+    assert spy.post_called is True
+    assert status == "failed"
+    assert result == {"resolved": False, "sentiment": "", "summary": ""}
+
+
+def test_timeout_error_during_post_falls_back_cleanly():
+    status, result = asyncio.run(
+        generate_generic_analysis(
+            SAMPLE_TRANSCRIPT, SAMPLE_FIELDS, _RaisingHttpSession(asyncio.TimeoutError()),
+            gemini_connect_failed=False,
+        )
+    )
+    assert status == "failed"
+    assert result == {"resolved": False, "sentiment": "", "summary": ""}
+
+
+# ---------------------------------------------------------------------------
+# Router-level: a non-workflow bot with analysis_fields configured still saves (200) —
+# the fields are accepted-and-ignored by design (only bot.py's workflow-bot gate ever
+# consumes them at runtime), not silently rejected as an oversight. Complements
+# test_non_workflow_bot_always_takes_legacy_path_regardless_of_analysis_fields in the
+# gate-logic section, which covers the runtime behavior; this covers the save itself.
+# ---------------------------------------------------------------------------
+
+def test_non_workflow_bot_with_analysis_fields_saves_successfully(client, auth_headers):
+    resp = _create_bot(
+        client,
+        auth_headers,
+        config={
+            "organization_name": "Justdial",
+            "bot_type": "standard",
+            "analysis_fields": [
+                {"key": "resolved", "label": "Resolved", "type": "boolean"},
+                {
+                    "key": "sentiment",
+                    "label": "Sentiment",
+                    "type": "enum",
+                    "enum_options": ["positive", "neutral", "negative"],
+                },
+            ],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    bot = resp.json()
+    detail = client.get(f"/api/bots/{bot['_id']}", headers=auth_headers).json()
+    saved_fields = detail["versions"][0]["config"]["analysis_fields"]
+    assert len(saved_fields) == 2
+    assert detail["versions"][0]["config"].get("bot_type", "standard") == "standard"

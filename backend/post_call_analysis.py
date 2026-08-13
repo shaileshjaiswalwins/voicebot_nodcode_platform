@@ -9,8 +9,9 @@ leads). For a Workflow Builder bot with a PM-defined `analysis_fields` schema
 field list + the call transcript, asks Gemini for a single flat JSON object (one key
 per field), and validates each returned value against its declared type before
 persisting — mirrors the JSON-extraction/error-tolerance style already established in
-backend/prompt_assist.py and callback_worker/analysis.py's own Gemini call pattern,
-applied to a PM-defined schema instead of a hardcoded one.
+backend/prompt_assist.py (using the `google.genai` client wired up in backend/evals.py
+and reused by prompt_assist.py) and callback_worker/analysis.py's own Gemini call
+pattern, applied to a PM-defined schema instead of a hardcoded one.
 
 Skip-logic mirrors generate_call_analysis: a call that never connected
 (`gemini_connect_failed`) or produced no transcript never reaches the model — there is
@@ -113,33 +114,54 @@ def _empty_result(fields: list[dict]) -> dict:
     return {f["key"]: _coerce_value(None if f.get("type") != "boolean" else False, f) for f in fields}
 
 
+def empty_analysis_result(analysis_fields: list[dict] | list[AnalysisFieldDef]) -> dict:
+    """Public wrapper around `_empty_result` for callers (e.g. bot.py's outer except
+    block around `generate_generic_analysis`) that need the same per-type-correct empty
+    defaults without duplicating the type-default logic themselves."""
+    fields = [f.model_dump() if isinstance(f, AnalysisFieldDef) else dict(f) for f in analysis_fields]
+    return _empty_result(fields)
+
+
 async def generate_generic_analysis(
     transcript: list[dict],
     analysis_fields: list[dict] | list[AnalysisFieldDef],
     http_session: aiohttp.ClientSession,
     gemini_connect_failed: bool = False,
     model: str = _GEMINI_MODEL,
-) -> dict:
+) -> tuple[str, dict]:
     """Extract a PM-defined set of `analysis_fields` from a call transcript via Gemini.
 
-    Returns a flat {key: value} dict, one entry per configured field, every value already
-    coerced to its declared type. Never raises — on any failure (skip conditions, API
-    error, malformed JSON) falls back to per-type empty defaults so a bad call never
-    blocks the transcript save."""
+    Returns a `(status, result)` tuple. `result` is a flat {key: value} dict, one entry
+    per configured field, every value already coerced to its declared type. `status` is
+    one of:
+      - "ok": a real result — either no fields were configured (nothing to extract), or
+        Gemini was called and returned a parseable, type-coerced response.
+      - "skipped": skip-logic short-circuited before ever calling Gemini (the call never
+        connected, or produced no/blank transcript) — there was nothing to analyze.
+      - "failed": Gemini was called but the request/response pipeline broke (non-2xx HTTP
+        status, network/timeout error, or a malformed/unparseable response).
+
+    This status lets callers (bot.py) persist a sibling `analysis_fields_status` field
+    next to `analysis_fields_result` so a PM viewing the dashboard can distinguish "the
+    model determined this is false/empty" from "nothing was ever actually analyzed for
+    this call" — both cases would otherwise produce the exact same per-type-empty shape.
+
+    Never raises — on any failure (skip conditions, API error, malformed JSON) falls back
+    to per-type empty defaults so a bad call never blocks the transcript save."""
     fields = [f.model_dump() if isinstance(f, AnalysisFieldDef) else dict(f) for f in analysis_fields]
     if not fields:
-        return {}
+        return "ok", {}
 
     # Mirror generate_call_analysis's skip-logic: a call that never connected or produced
     # no transcript has nothing to extract from — don't waste a Gemini call on it.
     if gemini_connect_failed or not transcript:
-        return _empty_result(fields)
+        return "skipped", _empty_result(fields)
 
     lines = "\n".join(
         f"{t.get('role', '?').upper()}: {t.get('text', '')}" for t in transcript if t.get("text", "").strip()
     )
     if not lines.strip():
-        return _empty_result(fields)
+        return "skipped", _empty_result(fields)
 
     prompt = _build_prompt(fields, lines)
 
@@ -153,17 +175,51 @@ async def generate_generic_analysis(
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0},
         }
         async with http_session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            # Check the HTTP status BEFORE parsing the body. A non-2xx here (401/429/500/...)
+            # almost always signals a systemic problem (bad/expired key, rate limiting,
+            # Gemini outage) rather than a one-off bad response — tag it distinctly
+            # (error_category=http_status) so it's greppable apart from the parse/network
+            # failures below, letting someone debugging a production incident immediately
+            # tell "Gemini was down for an hour" from "a handful of calls got weird output".
+            if not (200 <= resp.status < 300):
+                body_text = await resp.text()
+                logger.error(
+                    f"[POST_CALL_ANALYSIS] error_category=http_status Gemini HTTP call failed with "
+                    f"status={resp.status}: {body_text[:500]}"
+                )
+                return "failed", _empty_result(fields)
+
             data = await resp.json()
             if "candidates" not in data or not data["candidates"]:
-                raise ValueError(f"No candidates: {data.get('error') or data}")
+                logger.error(
+                    f"[POST_CALL_ANALYSIS] error_category=parse No candidates in Gemini response: "
+                    f"{data.get('error') or data}"
+                )
+                return "failed", _empty_result(fields)
             raw = data["candidates"][0]["content"]["parts"][0]["text"]
-            parsed = json.loads(raw)
-    except Exception as e:
-        logger.error(f"[POST_CALL_ANALYSIS] Generic extraction failed: {type(e).__name__}: {e}")
-        return _empty_result(fields)
+            try:
+                parsed = json.loads(raw)
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.error(
+                    f"[POST_CALL_ANALYSIS] error_category=parse Malformed JSON from Gemini: "
+                    f"{type(e).__name__}: {e}"
+                )
+                return "failed", _empty_result(fields)
+            if not isinstance(parsed, dict):
+                logger.error(
+                    f"[POST_CALL_ANALYSIS] error_category=parse Expected a JSON object, got "
+                    f"{type(parsed).__name__}: {parsed!r}"
+                )
+                return "failed", _empty_result(fields)
 
-    result = {}
-    for f in fields:
-        key = f["key"]
-        result[key] = _coerce_value(parsed.get(key), f)
-    return result
+            result = {}
+            for f in fields:
+                key = f["key"]
+                result[key] = _coerce_value(parsed.get(key), f)
+            return "ok", result
+    except Exception as e:
+        logger.error(
+            f"[POST_CALL_ANALYSIS] error_category=network Generic extraction failed: "
+            f"{type(e).__name__}: {e}"
+        )
+        return "failed", _empty_result(fields)

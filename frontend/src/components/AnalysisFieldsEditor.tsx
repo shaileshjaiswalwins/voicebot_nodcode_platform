@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react';
 import type { AnalysisFieldDef, AnalysisFieldType } from '../types';
 import { ChipListEditor } from './ChipListEditor';
@@ -26,7 +26,7 @@ function newFieldKey(existing: AnalysisFieldDef[]): string {
   return key;
 }
 
-function slugifyKey(raw: string): string {
+export function slugifyKey(raw: string): string {
   return raw
     .trim()
     .toLowerCase()
@@ -34,11 +34,20 @@ function slugifyKey(raw: string): string {
     .replace(/^_+|_+$/g, '') || 'field';
 }
 
+let uiIdCounter = 0;
+/** Stable per-draft identity, generated once per field row and never displayed or sent to
+ * the backend. `field.key` is PM-editable (and therefore mutates on every keystroke), so it
+ * can't double as the React/expand-state identity for a card — see the openId usage below. */
+function newUiId(): string {
+  uiIdCounter += 1;
+  return `af_${Date.now().toString(36)}_${uiIdCounter}`;
+}
+
 /** Per-field validation, mirrored client-side from the backend rules (unique keys within
  * one bot version, enum_options required + non-empty when type === 'enum'). The backend
  * remains the source of truth (backend/routers/bots.py) — this is inline UX only, shown as
  * the PM types rather than only surfaced after a failed save. */
-function fieldErrors(field: AnalysisFieldDef, allFields: AnalysisFieldDef[]): string[] {
+export function fieldErrors(field: AnalysisFieldDef, allFields: AnalysisFieldDef[]): string[] {
   const errors: string[] = [];
   const key = field.key.trim();
   if (!key) errors.push('Field key is required.');
@@ -63,20 +72,56 @@ export function AnalysisFieldsEditor({
   fields: AnalysisFieldDef[];
   onChange: (next: AnalysisFieldDef[]) => void;
 }) {
-  const [openKey, setOpenKey] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const safeFields = fields;
 
-  const allErrorsByKey = useMemo(() => {
-    const map: Record<string, string[]> = {};
-    safeFields.forEach((f, i) => { map[`${f.key}__${i}`] = fieldErrors(f, safeFields); });
-    return map;
-  }, [safeFields]);
+  // Stable per-row identity, independent of `field.key` (which is PM-editable and mutates on
+  // every keystroke — using it for openId/errors lookup collapsed the card after one
+  // character, see the regression test). Kept parallel to `safeFields` and mutated in lockstep
+  // by update/remove/move/add below (all local to this component), so ids follow a given field
+  // through reorders rather than sticking to a numeric position.
+  const [ids, setIds] = useState<string[]>(() => safeFields.map(() => newUiId()));
+  useEffect(() => {
+    // Only resyncs when the *count* changes out from under us (e.g. a different bot's fields
+    // loaded in) — add/remove/move keep `ids` and `safeFields` in lockstep themselves, so this
+    // should not fire on ordinary edits.
+    if (ids.length !== safeFields.length) {
+      setIds(safeFields.map(() => newUiId()));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeFields.length]);
 
+  // Tracks whether a PM has hand-edited a field's key directly, per row (parallel array, same
+  // lockstep discipline as `ids`). While untouched, editing the label re-derives the key via
+  // slugifyKey; existing fields loaded from the backend default to "touched" so editing a
+  // saved field's label never silently rewrites a key something else may already reference.
+  const [keyTouched, setKeyTouched] = useState<boolean[]>(() => safeFields.map(() => true));
+  useEffect(() => {
+    if (keyTouched.length !== safeFields.length) {
+      setKeyTouched(safeFields.map(() => true));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeFields.length]);
+
+  const allErrorsById = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    safeFields.forEach((f, i) => { map[ids[i] ?? `idx_${i}`] = fieldErrors(f, safeFields); });
+    return map;
+  }, [safeFields, ids]);
+
+  // `AnalysisFieldDef` is a discriminated union on `type`, so a generic `{ ...f, ...patch }`
+  // merge can't be statically proven to land on a valid union member (e.g. a `label`-only
+  // patch is always safe, but TS can't see that from `Partial<AnalysisFieldDef>` alone). Call
+  // sites are responsible for keeping `enum_options` consistent with `type` in the patch they
+  // pass (see the type-switch <select> and ChipListEditor onChange below) — the cast just
+  // reflects that the union's invariant is enforced by the caller here, not structurally.
   function update(index: number, patch: Partial<AnalysisFieldDef>) {
-    onChange(safeFields.map((f, i) => (i === index ? { ...f, ...patch } : f)));
+    onChange(safeFields.map((f, i) => (i === index ? ({ ...f, ...patch } as AnalysisFieldDef) : f)));
   }
   function remove(index: number) {
     onChange(safeFields.filter((_, i) => i !== index));
+    setIds((prev) => prev.filter((_, i) => i !== index));
+    setKeyTouched((prev) => prev.filter((_, i) => i !== index));
   }
   function move(index: number, dir: -1 | 1) {
     const target = index + dir;
@@ -84,12 +129,25 @@ export function AnalysisFieldsEditor({
     const next = [...safeFields];
     [next[index], next[target]] = [next[target], next[index]];
     onChange(next);
+    setIds((prev) => {
+      const nextIds = [...prev];
+      [nextIds[index], nextIds[target]] = [nextIds[target], nextIds[index]];
+      return nextIds;
+    });
+    setKeyTouched((prev) => {
+      const nextTouched = [...prev];
+      [nextTouched[index], nextTouched[target]] = [nextTouched[target], nextTouched[index]];
+      return nextTouched;
+    });
   }
   function add() {
     const key = newFieldKey(safeFields);
     const field: AnalysisFieldDef = { key, label: '', type: 'boolean', description: '' };
+    const id = newUiId();
     onChange([...safeFields, field]);
-    setOpenKey(`${key}__${safeFields.length}`);
+    setIds((prev) => [...prev, id]);
+    setKeyTouched((prev) => [...prev, false]);
+    setOpenId(id);
   }
 
   const atCap = safeFields.length >= FIELD_COUNT_SOFT_CAP;
@@ -125,16 +183,16 @@ export function AnalysisFieldsEditor({
 
       <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
         {safeFields.map((field, index) => {
-          const errKey = `${field.key}__${index}`;
-          const isOpen = openKey === errKey;
-          const errors = allErrorsByKey[errKey] || [];
+          const rowId = ids[index] ?? `idx_${index}`;
+          const isOpen = openId === rowId;
+          const errors = allErrorsById[rowId] || [];
           return (
-            <div key={errKey} className="cf-card" style={{ border: '1px solid var(--border)', borderRadius: '8px' }}>
+            <div key={rowId} className="cf-card" style={{ border: '1px solid var(--border)', borderRadius: '8px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.6rem 0.75rem' }}>
                 <button
                   type="button"
                   aria-label={isOpen ? 'Collapse' : 'Expand'}
-                  onClick={() => setOpenKey(isOpen ? null : errKey)}
+                  onClick={() => setOpenId(isOpen ? null : rowId)}
                   style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
                 >
                   {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
@@ -173,11 +231,11 @@ export function AnalysisFieldsEditor({
                         placeholder="e.g. Appointment booked"
                         onChange={(e) => {
                           const label = e.target.value;
-                          // Auto-derive the key from the label only while it still matches the
-                          // machine-readable slug of the previous label — once a PM hand-edits
-                          // the key directly it stops tracking the label, same "derived until
-                          // touched" pattern used elsewhere in this codebase's id generation.
-                          update(index, { label });
+                          // Auto-derive the key from the label only until the PM hand-edits the
+                          // key field directly (tracked per-row in `keyTouched`) — matches the
+                          // "derived until touched" pattern used elsewhere in this codebase's
+                          // id generation.
+                          update(index, keyTouched[index] ? { label } : { label, key: slugifyKey(label) });
                         }}
                       />
                     </label>
@@ -186,7 +244,14 @@ export function AnalysisFieldsEditor({
                       <input
                         value={field.key}
                         placeholder="e.g. appointment_booked"
-                        onChange={(e) => update(index, { key: slugifyKey(e.target.value) })}
+                        onChange={(e) => {
+                          setKeyTouched((prev) => {
+                            const next = [...prev];
+                            next[index] = true;
+                            return next;
+                          });
+                          update(index, { key: slugifyKey(e.target.value) });
+                        }}
                       />
                       <small>Machine-readable key written into the analysis JSON. Must be unique within this bot.</small>
                     </label>
@@ -196,10 +261,12 @@ export function AnalysisFieldsEditor({
                         value={field.type}
                         onChange={(e) => {
                           const type = e.target.value as AnalysisFieldType;
-                          update(index, {
-                            type,
-                            enum_options: type === 'enum' ? (field.enum_options && field.enum_options.length ? field.enum_options : ['']) : undefined,
-                          });
+                          update(
+                            index,
+                            type === 'enum'
+                              ? { type, enum_options: field.enum_options && field.enum_options.length ? field.enum_options : [''] }
+                              : { type, enum_options: undefined },
+                          );
                         }}
                       >
                         <option value="boolean">Boolean</option>

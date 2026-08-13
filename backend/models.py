@@ -247,6 +247,12 @@ class AnalysisFieldDef(BaseModel):
     description: str = ""
     enum_options: list[str] | None = None
 
+    @model_validator(mode="after")
+    def _check_enum_options_present(self) -> "AnalysisFieldDef":
+        if self.type == "enum" and not (self.enum_options and [o for o in self.enum_options if o.strip()]):
+            raise ValueError(f"analysis_fields entry {self.key!r} has type 'enum' but no enum_options")
+        return self
+
 
 class BotConfig(BaseModel):
     """Mirrors RuntimeConfig in frontend/src/types.ts — the fields a PM can edit.
