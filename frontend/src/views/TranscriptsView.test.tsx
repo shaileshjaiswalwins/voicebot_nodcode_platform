@@ -70,6 +70,74 @@ describe('TranscriptsView chat turn labels', () => {
   });
 });
 
+describe('TranscriptsView PM analysis fields', () => {
+  it('renders analysis_fields_result entries with no status badge when status is ok', () => {
+    const transcript = makeTranscript({
+      analysis_fields_status: 'ok',
+      analysis_fields_result: { wants_callback: false, budget: 0 },
+    });
+    render(
+      <TranscriptsView
+        {...baseProps}
+        transcripts={[transcript]}
+        selectedTranscript={transcript}
+        bots={[]}
+      />
+    );
+    expect(screen.getByText('PM analysis fields')).toBeInTheDocument();
+    expect(screen.getByText('Wants Callback')).toBeInTheDocument();
+    expect(screen.getByText('false')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText(/not analyzed/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a failed warning badge when analysis_fields_status is failed', () => {
+    const transcript = makeTranscript({
+      analysis_fields_status: 'failed',
+      analysis_fields_result: { wants_callback: '' },
+    });
+    render(
+      <TranscriptsView
+        {...baseProps}
+        transcripts={[transcript]}
+        selectedTranscript={transcript}
+        bots={[]}
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(/analysis failed/i);
+  });
+
+  it('shows a low-key skipped notice when analysis_fields_status is skipped', () => {
+    const transcript = makeTranscript({
+      analysis_fields_status: 'skipped',
+      analysis_fields_result: { wants_callback: '' },
+    });
+    render(
+      <TranscriptsView
+        {...baseProps}
+        transcripts={[transcript]}
+        selectedTranscript={transcript}
+        bots={[]}
+      />
+    );
+    expect(screen.getByText(/not analyzed/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('does not render the section when analysis_fields_result is absent or empty', () => {
+    const transcript = makeTranscript({ analysis_fields_result: {} });
+    render(
+      <TranscriptsView
+        {...baseProps}
+        transcripts={[transcript]}
+        selectedTranscript={transcript}
+        bots={[]}
+      />
+    );
+    expect(screen.queryByText('PM analysis fields')).not.toBeInTheDocument();
+  });
+});
+
 describe('TranscriptsView date range validation', () => {
   async function renderWithFiltersOpen(filters: typeof baseProps.filters) {
     const user = userEvent.setup();

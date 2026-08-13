@@ -928,6 +928,25 @@ def test_timeout_error_during_post_falls_back_cleanly():
     assert result == {"resolved": False, "sentiment": "", "summary": ""}
 
 
+def test_safety_blocked_candidate_with_no_content_parts_tagged_as_parse_not_network(
+    captured_log_messages,
+):
+    # A safety-blocked (or otherwise refused) Gemini response has a candidate but no
+    # `content.parts` — extracting `data["candidates"][0]["content"]["parts"][0]["text"]`
+    # raises KeyError. This is a response-shape/parse problem, not a network problem, and
+    # must be tagged error_category=parse, not error_category=network.
+    bad_response = {"candidates": [{"finishReason": "SAFETY"}]}
+    spy = _SpyHttpSession(response_json=bad_response)
+    status, result = asyncio.run(
+        generate_generic_analysis(SAMPLE_TRANSCRIPT, SAMPLE_FIELDS, spy, gemini_connect_failed=False)
+    )
+    assert spy.post_called is True
+    assert status == "failed"
+    assert result == {"resolved": False, "sentiment": "", "summary": ""}
+    assert any("error_category=parse" in m for m in captured_log_messages)
+    assert not any("error_category=network" in m for m in captured_log_messages)
+
+
 # ---------------------------------------------------------------------------
 # Router-level: a non-workflow bot with analysis_fields configured still saves (200) —
 # the fields are accepted-and-ignored by design (only bot.py's workflow-bot gate ever
@@ -935,6 +954,70 @@ def test_timeout_error_during_post_falls_back_cleanly():
 # test_non_workflow_bot_always_takes_legacy_path_regardless_of_analysis_fields in the
 # gate-logic section, which covers the runtime behavior; this covers the save itself.
 # ---------------------------------------------------------------------------
+
+def test_save_draft_rejects_enum_field_without_enum_options(client, auth_headers):
+    resp = _create_bot(client, auth_headers)
+    assert resp.status_code == 200, resp.text
+    bot = resp.json()
+    put_resp = client.put(
+        f"/api/bots/{bot['_id']}/draft",
+        json={
+            "config": {
+                "analysis_fields": [{"key": "sentiment", "label": "Sentiment", "type": "enum"}]
+            }
+        },
+        headers=auth_headers,
+    )
+    assert put_resp.status_code == 400
+
+
+def test_update_version_rejects_enum_field_without_enum_options(client, auth_headers):
+    resp = _create_bot(client, auth_headers)
+    assert resp.status_code == 200, resp.text
+    bot = resp.json()
+    put_resp = client.put(
+        f"/api/bots/{bot['_id']}/versions/{bot['draft_version_id']}",
+        json={
+            "config": {
+                "analysis_fields": [{"key": "sentiment", "label": "Sentiment", "type": "enum"}]
+            }
+        },
+        headers=auth_headers,
+    )
+    assert put_resp.status_code == 400
+
+
+def test_save_draft_rejects_analysis_field_key_with_bad_characters(client, auth_headers):
+    resp = _create_bot(client, auth_headers)
+    assert resp.status_code == 200, resp.text
+    bot = resp.json()
+    put_resp = client.put(
+        f"/api/bots/{bot['_id']}/draft",
+        json={
+            "config": {
+                "analysis_fields": [{"key": 'bad"key', "label": "Bad", "type": "text"}]
+            }
+        },
+        headers=auth_headers,
+    )
+    assert put_resp.status_code == 400
+
+
+def test_update_version_rejects_analysis_field_key_with_bad_characters(client, auth_headers):
+    resp = _create_bot(client, auth_headers)
+    assert resp.status_code == 200, resp.text
+    bot = resp.json()
+    put_resp = client.put(
+        f"/api/bots/{bot['_id']}/versions/{bot['draft_version_id']}",
+        json={
+            "config": {
+                "analysis_fields": [{"key": "key\nwith\nnewlines", "label": "Bad", "type": "text"}]
+            }
+        },
+        headers=auth_headers,
+    )
+    assert put_resp.status_code == 400
+
 
 def test_non_workflow_bot_with_analysis_fields_saves_successfully(client, auth_headers):
     resp = _create_bot(

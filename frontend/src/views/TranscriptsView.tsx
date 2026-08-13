@@ -437,6 +437,26 @@ export function TranscriptsView({
                 <p className="muted">No analysis available for this call yet.</p>
               </div>
             )}
+            {selectedTranscript.analysis_fields_result && Object.keys(selectedTranscript.analysis_fields_result).length > 0 && (
+              <div className="analysis-section">
+                <div className="section-heading">
+                  <h3>PM analysis fields</h3>
+                </div>
+                {selectedTranscript.analysis_fields_status === 'failed' && (
+                  <p className="notice error" role="alert">
+                    Analysis failed — results may be incomplete
+                  </p>
+                )}
+                {selectedTranscript.analysis_fields_status === 'skipped' && (
+                  <p className="muted">Not analyzed (no transcript content)</p>
+                )}
+                <div className="detail-list">
+                  {Object.entries(selectedTranscript.analysis_fields_result).map(([key, value]) => (
+                    <Detail key={key} label={titleCase(key)} value={value === null || value === undefined || value === '' ? '-' : String(value)} />
+                  ))}
+                </div>
+              </div>
+            )}
             {recordingUrl && (
               <div className="recording-player">
                 <div>

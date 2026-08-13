@@ -421,6 +421,13 @@ export type Transcript = {
     urgency_flag?: string;
     [key: string]: unknown;
   };
+  /** PM-defined schema-driven analysis for Workflow Builder bots (bot.py
+   * `_save_transcript_to_dashboard_db`), kept separate from the legacy `analysis`
+   * object above. `analysis_fields_status` distinguishes "the model genuinely
+   * determined false/0/empty" ('ok') from "nothing was ever actually analyzed"
+   * ('skipped' — no transcript content, or 'failed' — e.g. Gemini was down). */
+  analysis_fields_status?: 'ok' | 'skipped' | 'failed';
+  analysis_fields_result?: Record<string, unknown>;
 };
 
 export type PhraseCategory = 'voicemail' | 'hold_music' | 'dnc_trigger';

@@ -204,7 +204,19 @@ async def generate_generic_analysis(
                     f"{data.get('error') or data}"
                 )
                 return "failed", _empty_result(fields)
-            raw = data["candidates"][0]["content"]["parts"][0]["text"]
+            try:
+                raw = data["candidates"][0]["content"]["parts"][0]["text"]
+            except (KeyError, IndexError, TypeError) as e:
+                # A safety-blocked / otherwise malformed candidate (e.g. no `content.parts`
+                # because Gemini refused to answer) is a response-SHAPE problem, not a
+                # network problem — tag it error_category=parse like the JSON-decode and
+                # non-dict checks below, so it doesn't get lumped into error_category=network
+                # in the outer handler.
+                logger.error(
+                    f"[POST_CALL_ANALYSIS] error_category=parse Malformed candidate shape in "
+                    f"Gemini response: {type(e).__name__}: {e} — data={str(data)[:500]}"
+                )
+                return "failed", _empty_result(fields)
             try:
                 parsed = json.loads(raw)
             except (json.JSONDecodeError, TypeError) as e:
@@ -225,9 +237,27 @@ async def generate_generic_analysis(
                 key = f["key"]
                 result[key] = _coerce_value(parsed.get(key), f)
             return "ok", result
-    except Exception as e:
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+        # OSError covers plain socket/connection failures (e.g. builtin ConnectionError)
+        # that aren't wrapped in an aiohttp.ClientError — aiohttp's own connection errors
+        # (aiohttp.ClientConnectorError, etc.) already subclass both ClientError and
+        # OSError, so this doesn't broaden the net beyond genuine network failures.
         logger.error(
             f"[POST_CALL_ANALYSIS] error_category=network Generic extraction failed: "
+            f"{type(e).__name__}: {e}"
+        )
+        return "failed", _empty_result(fields)
+    except Exception as e:
+        # Anything else (e.g. a bug in `_coerce_value`, or some other unexpected exception
+        # raised while building the result) is neither a network failure nor a response-
+        # shape/parse failure — it's an actual bug. We still don't want it to propagate and
+        # take down the caller (this module's docstring promises "never raises" so a bad
+        # call never blocks the transcript save), so it's caught here as a last resort, but
+        # tagged distinctly (error_category=unexpected) rather than folded into
+        # error_category=network, so it isn't silently mislabeled as a Gemini connectivity
+        # issue during an incident.
+        logger.error(
+            f"[POST_CALL_ANALYSIS] error_category=unexpected Generic extraction failed: "
             f"{type(e).__name__}: {e}"
         )
         return "failed", _empty_result(fields)
