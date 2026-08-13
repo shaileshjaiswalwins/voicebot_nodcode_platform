@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AlertTriangle, Database, Sparkles } from 'lucide-react';
-import type { RuntimeConfig, CustomFunction, FunctionTestResult } from '../types';
-import type { BotMetrics, LanguageOption, PricingConfig, PricingModelEntry } from '../api';
+import type { RuntimeConfig, CustomFunction, FunctionTestResult, AnalysisFieldDef } from '../types';
+import type { BotMetrics, LanguageOption, PricingConfig, PricingModelEntry, EvalRun, EvalScenario } from '../api';
 import { api } from '../api';
+import { EvalsPanel } from './EvalsPanel';
 import { diffWords } from '../utils/diffText';
 import { EmptyState } from './EmptyState';
 import { MiniBarChart, MiniLineChart } from './MiniCharts';
@@ -10,11 +11,12 @@ import { SARVAM_TTS_VOICES, SARVAM_TTS_LANGUAGES, TTS_PROVIDER_MODEL_KEY } from 
 import { CustomFunctionsEditor } from './CustomFunctionsEditor';
 import { ChipListEditor } from './ChipListEditor';
 import { DynamicVariablesEditor } from './DynamicVariablesEditor';
+import { AnalysisFieldsEditor } from './AnalysisFieldsEditor';
 import { CostEstimateStrip } from './CostEstimateStrip';
 import { WorkflowBuilderView } from '../views/WorkflowBuilderView';
 import type { AgentCostEstimate } from '../utils/agentCost';
 
-export type BuilderTab = 'metrics' | 'basic' | 'prompt' | 'voice' | 'functions' | 'workflow' | 'advanced';
+export type BuilderTab = 'metrics' | 'basic' | 'prompt' | 'voice' | 'functions' | 'workflow' | 'analysis' | 'advanced';
 
 const TABS: { id: BuilderTab; label: string }[] = [
   { id: 'metrics', label: 'Metrics' },
@@ -23,6 +25,7 @@ const TABS: { id: BuilderTab; label: string }[] = [
   { id: 'voice', label: 'Voice' },
   { id: 'functions', label: 'Functions' },
   { id: 'workflow', label: 'Workflow' },
+  { id: 'analysis', label: 'Post-Call Analysis' },
   { id: 'advanced', label: 'Advanced' },
 ];
 
@@ -342,6 +345,10 @@ export function BotConfigTabs({
   costEstimate,
   pricing,
   onTabChange,
+  evalRuns,
+  onRunEvals,
+  evalsRunning,
+  onStopEvals,
 }: {
   value: RuntimeConfig;
   onUpdateConfig: (key: keyof RuntimeConfig, value: unknown) => void;
@@ -377,6 +384,10 @@ export function BotConfigTabs({
    * two-column layout (test rail + other builder chrome) and give the graph canvas the
    * full viewport — it's unusable squeezed into a 340px-narrower shared column. */
   onTabChange?: (tab: BuilderTab) => void;
+  evalRuns?: EvalRun[];
+  onRunEvals?: (scenarios?: EvalScenario[]) => void;
+  evalsRunning?: boolean;
+  onStopEvals?: () => void;
 }) {
   const [tab, setTabState] = useState<BuilderTab>('basic');
   function setTab(next: BuilderTab) {
@@ -940,6 +951,21 @@ export function BotConfigTabs({
         </div>
       )}
 
+      {tab === 'analysis' && (
+        <div role="tabpanel">
+          <div className="notice" style={{ marginBottom: '0.75rem' }}>
+            Runs through a separate generic extractor (unrelated to the "Analysis prompt override" on
+            the Prompt tab, which only applies to the legacy lead-qualification classifier). If this
+            bot is a Workflow Builder bot and has at least one field below, calls use this schema
+            instead of the legacy classifier; otherwise the legacy path runs unchanged.
+          </div>
+          <AnalysisFieldsEditor
+            fields={Array.isArray(value.analysis_fields) ? (value.analysis_fields as AnalysisFieldDef[]) : []}
+            onChange={(next) => onUpdateConfig('analysis_fields', next)}
+          />
+        </div>
+      )}
+
       {tab === 'advanced' && (
         <div role="tabpanel">
           <div style={{ marginTop: '1rem' }}>
@@ -955,6 +981,16 @@ export function BotConfigTabs({
               </div>
             )}
           </div>
+          {onRunEvals && (
+            <EvalsPanel
+              runs={evalRuns || []}
+              onRun={onRunEvals}
+              onStop={onStopEvals}
+              onGenerateScenarios={value.system_prompt ? (count) => api.generateEvalScenarios(value.system_prompt!, count) : undefined}
+              running={!!evalsRunning}
+              disabled={!botId}
+            />
+          )}
         </div>
       )}
     </div>

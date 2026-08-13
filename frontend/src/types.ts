@@ -31,6 +31,24 @@ export type StoreVariable = {
   json_path: string;
 };
 
+/** Mirrors backend/models.py AnalysisFieldDef (Part 2: Post-Call Analysis Revamp) — a
+ * single PM-defined field the generic post-call extractor (backend/post_call_analysis.py)
+ * should pull out of the transcript, in addition to (or instead of, for Workflow bots with
+ * a configured schema) the legacy hardcoded lead-qualification classifier. `key` is the
+ * machine-readable JSON key the extractor writes into `analysis.custom_fields`; `label` is
+ * the PM-facing display name. `description` feeds the generated prompt so the extractor
+ * knows what the field means. `enum_options` is required and must be non-empty when
+ * `type === 'enum'` — validated both here (inline UX) and server-side (source of truth). */
+export type AnalysisFieldType = 'boolean' | 'text' | 'number' | 'enum';
+
+export type AnalysisFieldDef = {
+  key: string;
+  label: string;
+  type: AnalysisFieldType;
+  description: string;
+  enum_options?: string[];
+};
+
 export type FunctionTrigger = 'pre_call' | 'during_call' | 'post_call';
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -141,6 +159,12 @@ export type RuntimeConfig = {
    * emit the exact same JSON schema the callback worker parses — validated server-side on
    * save with the same rules as the global editor. */
   analysis_prompt?: string;
+  /** PM-defined structured fields for the generic post-call extractor (Part 2 of the
+   * Post-Call Analysis Revamp) — travels inside this same draft/version save payload, no
+   * separate endpoint. Only consumed by `_save_transcript_to_dashboard_db`'s new gate when
+   * this bot is a Workflow Builder bot; legacy/campaign bots without a configured schema
+   * keep going through the existing hardcoded `generate_call_analysis()` path unchanged. */
+  analysis_fields?: AnalysisFieldDef[];
   /** "How easily can a caller interrupt the bot" — see interruption_presets.py. */
   interruption_sensitivity?: '' | 'patient' | 'balanced' | 'responsive';
   /** Config-surface only — see backend/models.py BotConfig for pipeline-wiring status. */

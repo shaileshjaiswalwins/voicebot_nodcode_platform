@@ -10,6 +10,7 @@ from fastapi.responses import Response
 
 from ..analysis_prompts import CALL_ANALYSIS_KEY, validate_prompt_template
 from ..audit import log_audit
+from ..auth import bot_owner_filter as _owner_filter
 from ..auth import require_user
 from ..db import bot_versions, bots, transcripts
 from ..llm_chat import bot_reply, simulate_turn
@@ -20,6 +21,7 @@ from ..models import (
     CompileFlowPreviewRequest,
     FunctionTestRequest,
     GenerateAgentRequest,
+    GenerateEvalScenariosRequest,
     GenerateFunctionRequest,
     GenerateWorkflowRequest,
     GeneratePromptRequest,
@@ -30,6 +32,7 @@ from ..models import (
 )
 from ..prompt_assist import (
     generate_agent_from_description,
+    generate_eval_scenarios,
     generate_function_from_description,
     generate_prompt,
     generate_workflow_from_description,
@@ -76,6 +79,41 @@ def _validate_config_analysis_prompt(config: BotConfig) -> None:
         raise HTTPException(400, f"Invalid analysis_prompt: {e}")
 
 
+# Generic per-bot post-call analysis schema (Part 2 of the post-call-analysis revamp).
+# Mirrors the alerting feature's MAX_RULES_PER_USER=10 cap pattern — a guardrail against
+# an unbounded prompt (every field turns into a line in the extraction prompt, and a
+# Gemini call whose output schema keeps growing), not a hard product constraint. 20 is
+# double alerting's cap since a PM plausibly wants more analysis fields than alert rules
+# per bot; raise later if that proves too tight.
+MAX_ANALYSIS_FIELDS_PER_BOT = 20
+
+
+def _validate_config_analysis_fields(config: BotConfig) -> None:
+    """Validates the PM-defined analysis_fields schema at every save site, mirroring
+    _validate_config_analysis_prompt above: unique field keys within one bot version (the
+    generic extractor's output is a flat {key: value} dict, so a duplicate key would
+    silently overwrite an earlier field's result), enum_options required and non-empty
+    when type == "enum" (nothing else tells the extractor what values are valid), and a
+    field-count cap."""
+    fields = config.analysis_fields
+    if not fields:
+        return
+    if len(fields) > MAX_ANALYSIS_FIELDS_PER_BOT:
+        raise HTTPException(
+            400, f"Too many analysis_fields ({len(fields)}) — max {MAX_ANALYSIS_FIELDS_PER_BOT} per bot"
+        )
+    seen_keys: set[str] = set()
+    for f in fields:
+        key = (f.key or "").strip()
+        if not key:
+            raise HTTPException(400, "Each analysis_fields entry must have a non-empty key")
+        if key in seen_keys:
+            raise HTTPException(400, f"Duplicate analysis_fields key: {key!r}")
+        seen_keys.add(key)
+        if f.type == "enum" and not (f.enum_options and [o for o in f.enum_options if o.strip()]):
+            raise HTTPException(400, f"analysis_fields entry {key!r} has type 'enum' but no enum_options")
+
+
 def _oid(id_str: str) -> ObjectId:
     try:
         return ObjectId(id_str)
@@ -98,10 +136,10 @@ def _empty_summary() -> dict:
     return {"agent_name": "", "bot_type": "standard", "tags": []}
 
 
-def _list_bots_by_status(status_filter: dict) -> list[dict]:
+def _list_bots_by_status(status_filter: dict, user: dict) -> list[dict]:
     """Shared by the active list and the Recently Deleted panel — same version/call-count
     enrichment either way, just a different Mongo status filter."""
-    bot_docs = list(bots.find(status_filter).sort("updated_at", -1))
+    bot_docs = list(bots.find({**status_filter, **_owner_filter(user)}).sort("updated_at", -1))
 
     # Agent name + bot type live on the version doc, not the bot doc. Batch-fetch every
     # referenced version in one query instead of one find_one() per bot — with N bots that
@@ -185,21 +223,21 @@ def _list_bots_by_status(status_filter: dict) -> list[dict]:
 
 
 @router.get("")
-def list_bots(_: dict = Depends(require_user)) -> list[dict]:
-    return _list_bots_by_status({"status": {"$ne": "deleted"}})
+def list_bots(user: dict = Depends(require_user)) -> list[dict]:
+    return _list_bots_by_status({"status": {"$ne": "deleted"}}, user)
 
 
 @router.get("/deleted")
-def list_deleted_bots(_: dict = Depends(require_user)) -> list[dict]:
+def list_deleted_bots(user: dict = Depends(require_user)) -> list[dict]:
     """Recently Deleted panel — bots are soft-deleted (status='deleted', see delete_bot
     below), never actually removed, so this is just the mirror-image filter of list_bots."""
-    return _list_bots_by_status({"status": "deleted"})
+    return _list_bots_by_status({"status": "deleted"}, user)
 
 
 @router.post("/{bot_id}/restore")
 def restore_bot(bot_id: str, user: dict = Depends(require_user)) -> dict:
     result = bots.update_one(
-        {"_id": _oid(bot_id), "status": "deleted"},
+        {"_id": _oid(bot_id), "status": "deleted", **_owner_filter(user)},
         {"$set": {"status": "active"}, "$unset": {"deleted_at": ""}},
     )
     if result.matched_count == 0:
@@ -209,11 +247,11 @@ def restore_bot(bot_id: str, user: dict = Depends(require_user)) -> dict:
 
 
 @router.get("/export")
-def export_bots(_: dict = Depends(require_user)) -> Response:
+def export_bots(user: dict = Depends(require_user)) -> Response:
     """CSV export of every active (non-deleted) agent — name, type, lifecycle, tags, calls,
     last updated. Mirrors list_bots' own enrichment so the export always matches what the
     Agents page currently shows."""
-    rows = _list_bots_by_status({"status": {"$ne": "deleted"}})
+    rows = _list_bots_by_status({"status": {"$ne": "deleted"}}, user)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["Name", "Agent name", "Type", "Published", "Tags", "Calls (total)", "Calls (today)", "Avg duration (s)", "Last updated"])
@@ -242,6 +280,7 @@ def create_bot(payload: BotCreate, user: dict = Depends(require_user)) -> dict:
     if not name:
         raise HTTPException(400, "Name is required")
     _validate_config_analysis_prompt(payload.config)
+    _validate_config_analysis_fields(payload.config)
 
     now = datetime.now(timezone.utc).isoformat()
     bot_doc = {
@@ -330,6 +369,22 @@ def generate_function(payload: GenerateFunctionRequest, _: dict = Depends(requir
     return result
 
 
+@router.post("/generate-eval-scenarios")
+def generate_eval_scenarios_endpoint(payload: GenerateEvalScenariosRequest, _: dict = Depends(require_user)) -> dict:
+    """Pre-publish evals panel's "Generate with AI" button: derives scenario personas + pass/
+    fail checks tailored to the bot's own system_prompt, so the user gets a starting scenario
+    set specific to what this bot actually does instead of always the two generic defaults.
+    No bot_id needed — same free-standing shape as /generate-function, the prompt travels in
+    the request body."""
+    if not payload.system_prompt.strip():
+        raise HTTPException(400, "system_prompt is required")
+    try:
+        scenarios = generate_eval_scenarios(payload.system_prompt, payload.count)
+    except Exception as exc:
+        raise HTTPException(502, f"Scenario generation failed: {exc}") from exc
+    return {"scenarios": scenarios}
+
+
 @router.post("/summarize-version-diff")
 def summarize_version_diff_endpoint(payload: SummarizeVersionDiffRequest, _: dict = Depends(require_user)) -> dict:
     """VersionDiffModal AI summary: the caller has already computed the {field: {old, new}}
@@ -346,8 +401,8 @@ def summarize_version_diff_endpoint(payload: SummarizeVersionDiffRequest, _: dic
 
 
 @router.get("/{bot_id}")
-def get_bot(bot_id: str, _: dict = Depends(require_user)) -> dict:
-    bot = bots.find_one({"_id": _oid(bot_id)})
+def get_bot(bot_id: str, user: dict = Depends(require_user)) -> dict:
+    bot = bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)})
     if not bot:
         raise HTTPException(404, "Bot not found")
     versions = list(bot_versions.find({"bot_id": _oid(bot_id)}).sort("version", -1))
@@ -355,12 +410,12 @@ def get_bot(bot_id: str, _: dict = Depends(require_user)) -> dict:
 
 
 @router.post("/{bot_id}/generate-prompt")
-def generate_bot_prompt(bot_id: str, payload: GeneratePromptRequest, _: dict = Depends(require_user)) -> dict:
+def generate_bot_prompt(bot_id: str, payload: GeneratePromptRequest, user: dict = Depends(require_user)) -> dict:
     """AI-assist for the Prompt tab: mode='generate' writes a system_prompt from scratch off a
     free-text description; mode='refine' applies only the described change to the existing
     system_prompt, leaving the rest untouched. Bot lookup is just an existence/auth check —
     the actual prompt text lives in payload, not in a stored version."""
-    if not bots.find_one({"_id": _oid(bot_id)}):
+    if not bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)}):
         raise HTTPException(404, "Bot not found")
     # analysis_prompt has no from-scratch mode (see prompt_assist.generate_prompt's docstring)
     # — it always refines current_prompt (or the shared default template if that's blank), so
@@ -375,10 +430,10 @@ def generate_bot_prompt(bot_id: str, payload: GeneratePromptRequest, _: dict = D
 
 
 @router.post("/{bot_id}/llm-chat/reply")
-def llm_chat_reply(bot_id: str, payload: LlmChatReplyRequest, _: dict = Depends(require_user)) -> dict:
+def llm_chat_reply(bot_id: str, payload: LlmChatReplyRequest, user: dict = Depends(require_user)) -> dict:
     """Test LLM > Manual Chat: one text reply from the bot's LLM, no LiveKit/voice involved.
     Stateless — the tester's client resends the full history each call."""
-    if not bots.find_one({"_id": _oid(bot_id)}):
+    if not bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)}):
         raise HTTPException(404, "Bot not found")
     try:
         text = bot_reply(payload.system_prompt, payload.history, payload.dynamic_variables, payload.function_mocks)
@@ -388,11 +443,11 @@ def llm_chat_reply(bot_id: str, payload: LlmChatReplyRequest, _: dict = Depends(
 
 
 @router.post("/{bot_id}/llm-chat/simulate-turn")
-def llm_chat_simulate_turn(bot_id: str, payload: LlmChatSimulateRequest, _: dict = Depends(require_user)) -> dict:
+def llm_chat_simulate_turn(bot_id: str, payload: LlmChatSimulateRequest, user: dict = Depends(require_user)) -> dict:
     """Test LLM > AI Simulated Chat: advances the LLM-vs-LLM simulation by one caller-then-bot
     turn per call, so the frontend can render each pair live instead of waiting for a full
     transcript like evals.run_scenario does."""
-    if not bots.find_one({"_id": _oid(bot_id)}):
+    if not bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)}):
         raise HTTPException(404, "Bot not found")
     try:
         result = simulate_turn(
@@ -404,12 +459,12 @@ def llm_chat_simulate_turn(bot_id: str, payload: LlmChatSimulateRequest, _: dict
 
 
 @router.post("/{bot_id}/triage-test-call")
-def triage_test_call_endpoint(bot_id: str, payload: TriageTestCallRequest, _: dict = Depends(require_user)) -> dict:
+def triage_test_call_endpoint(bot_id: str, payload: TriageTestCallRequest, user: dict = Depends(require_user)) -> dict:
     """Test panel's "What went wrong?" button: looks up the just-ended test call's transcript
     by room name (its call_id — see testcall.py's start_test_call, which defaults call_id to
     room_name), pairs it with the bot's current live instructions, and asks Gemini for a
     plain-English diagnosis + concrete fix."""
-    bot = bots.find_one({"_id": _oid(bot_id)})
+    bot = bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)})
     if not bot:
         raise HTTPException(404, "Bot not found")
     if not payload.room_name.strip():
@@ -433,7 +488,7 @@ def triage_test_call_endpoint(bot_id: str, payload: TriageTestCallRequest, _: di
 
 
 @router.get("/{bot_id}/functions")
-def list_bot_functions(bot_id: str, version_id: str = "", _: dict = Depends(require_user)) -> dict:
+def list_bot_functions(bot_id: str, version_id: str = "", user: dict = Depends(require_user)) -> dict:
     """List the custom functions saved against a bot.
 
     Custom functions are stored inside a version's `config.functions` (versioned/published
@@ -442,7 +497,7 @@ def list_bot_functions(bot_id: str, version_id: str = "", _: dict = Depends(requ
     it reflects what the runtime would actually use. Pass ?version_id=... to inspect a
     specific version instead.
     """
-    bot = bots.find_one({"_id": _oid(bot_id)})
+    bot = bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)})
     if not bot:
         raise HTTPException(404, "Bot not found")
 
@@ -486,27 +541,31 @@ def _fork_new_draft(bot_id: str, config: dict, notes: str = "") -> str:
 
 
 @router.put("/{bot_id}/draft")
-def save_draft(bot_id: str, payload: BotUpdateConfig, _: dict = Depends(require_user)) -> dict:
+def save_draft(bot_id: str, payload: BotUpdateConfig, user: dict = Depends(require_user)) -> dict:
     """'New version' action — always forks a brand-new draft, even if one already exists.
     Distinct from PUT /versions/{version_id}, which edits an existing draft in place."""
-    bot = bots.find_one({"_id": _oid(bot_id)})
+    bot = bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)})
     if not bot:
         raise HTTPException(404, "Bot not found")
     _validate_config_analysis_prompt(payload.config)
+    _validate_config_analysis_fields(payload.config)
     version_id = _fork_new_draft(bot_id, payload.config.model_dump())
     return {"draft_version_id": version_id}
 
 
 @router.put("/{bot_id}/versions/{version_id}")
-def update_version(bot_id: str, version_id: str, payload: BotUpdateConfig, _: dict = Depends(require_user)) -> dict:
+def update_version(bot_id: str, version_id: str, payload: BotUpdateConfig, user: dict = Depends(require_user)) -> dict:
     """'Update version' action — edits a specific existing DRAFT version's config in place.
     Published versions are immutable and cannot be targeted here (audit item 1/16)."""
+    if not bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)}):
+        raise HTTPException(404, "Bot not found")
     version = bot_versions.find_one({"_id": _oid(version_id), "bot_id": _oid(bot_id)})
     if not version:
         raise HTTPException(404, "Version not found")
     if version["state"] != "draft":
         raise HTTPException(400, "Cannot edit a published version in place — use rollback to fork a new draft")
     _validate_config_analysis_prompt(payload.config)
+    _validate_config_analysis_fields(payload.config)
     now = datetime.now(timezone.utc).isoformat()
     bot_versions.update_one({"_id": _oid(version_id)}, {"$set": {"config": payload.config.model_dump(), "updated_at": now}})
     # Editing a draft's config is the most common "edit a bot" action but only touches the
@@ -522,7 +581,7 @@ def unpublish(bot_id: str, user: dict = Depends(require_user)) -> dict:
     """Moves the currently-published active version back to draft so it can be edited,
     per BuilderView's 'Edit published' action. Only valid when there is no separate draft
     already in progress."""
-    bot = bots.find_one({"_id": _oid(bot_id)})
+    bot = bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)})
     if not bot:
         raise HTTPException(404, "Bot not found")
     if bot.get("draft_version_id"):
@@ -542,13 +601,13 @@ def unpublish(bot_id: str, user: dict = Depends(require_user)) -> dict:
 
 
 @router.put("/{bot_id}")
-def rename_bot(bot_id: str, payload: dict, _: dict = Depends(require_user)) -> dict:
+def rename_bot(bot_id: str, payload: dict, user: dict = Depends(require_user)) -> dict:
     name = (payload.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "Name is required")
     now = datetime.now(timezone.utc).isoformat()
     result = bots.find_one_and_update(
-        {"_id": _oid(bot_id)},
+        {"_id": _oid(bot_id), **_owner_filter(user)},
         {"$set": {"name": name, "description": payload.get("description", ""), "updated_at": now}},
         return_document=True,
     )
@@ -559,7 +618,7 @@ def rename_bot(bot_id: str, payload: dict, _: dict = Depends(require_user)) -> d
 
 @router.post("/{bot_id}/publish")
 def publish_draft(bot_id: str, user: dict = Depends(require_user)) -> dict:
-    bot = bots.find_one({"_id": _oid(bot_id)})
+    bot = bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)})
     if not bot:
         raise HTTPException(404, "Bot not found")
     draft_id = bot.get("draft_version_id")
@@ -590,6 +649,8 @@ def publish_draft(bot_id: str, user: dict = Depends(require_user)) -> dict:
 def rollback(bot_id: str, version_id: str, user: dict = Depends(require_user)) -> dict:
     """Rollback creates a new draft seeded from a historical version's config, rather than
     mutating history in place — published versions stay immutable (audit item 1 / item 16)."""
+    if not bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)}):
+        raise HTTPException(404, "Bot not found")
     target = bot_versions.find_one({"_id": _oid(version_id), "bot_id": _oid(bot_id)})
     if not target:
         raise HTTPException(404, "Version not found")
@@ -642,7 +703,7 @@ async def _execute_test_request(call: dict, timeout: float) -> tuple[int, object
 
 @router.post("/{bot_id}/functions/test")
 async def test_custom_function(
-    bot_id: str, payload: FunctionTestRequest, _: dict = Depends(require_user)
+    bot_id: str, payload: FunctionTestRequest, user: dict = Depends(require_user)
 ) -> dict:
     """Dry-run a custom function server-side so the builder's 'Test' button can validate an
     endpoint without a live call. Returns the HTTP status, latency, decoded response, and any
@@ -652,7 +713,7 @@ async def test_custom_function(
 
     if build_http_call is None:
         raise HTTPException(501, "Function testing is unavailable on this deployment (custom_functions module not found)")
-    if not bots.find_one({"_id": _oid(bot_id)}):
+    if not bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)}):
         raise HTTPException(404, "Bot not found")
 
     fn = payload.function.model_dump()
@@ -683,7 +744,7 @@ async def test_custom_function(
 
 
 @router.get("/{bot_id}/metrics")
-def bot_metrics(bot_id: str, days: int = 7, _: dict = Depends(require_user)) -> dict:
+def bot_metrics(bot_id: str, days: int = 7, user: dict = Depends(require_user)) -> dict:
     """Per-bot metrics for the builder's Metrics tab.
 
     success_rate_pct definition: "% of calls where status == 'completed'" — there is no
@@ -694,7 +755,7 @@ def bot_metrics(bot_id: str, days: int = 7, _: dict = Depends(require_user)) -> 
     isn't consistently populated across bots. This is a first-pass definition, not a
     guaranteed business-accurate "success" metric.
     """
-    if not bots.find_one({"_id": _oid(bot_id)}):
+    if not bots.find_one({"_id": _oid(bot_id), **_owner_filter(user)}):
         raise HTTPException(404, "Bot not found")
     if days not in (7, 30):
         days = 7
@@ -798,7 +859,7 @@ def bot_metrics(bot_id: str, days: int = 7, _: dict = Depends(require_user)) -> 
 def delete_bot(bot_id: str, user: dict = Depends(require_user)) -> dict:
     """Soft delete only — never removes the bot or its transcripts (audit item 6/22)."""
     result = bots.update_one(
-        {"_id": _oid(bot_id)},
+        {"_id": _oid(bot_id), **_owner_filter(user)},
         {"$set": {
             "status": "deleted",
             "active_version_id": None,

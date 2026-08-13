@@ -332,25 +332,59 @@ async def _save_transcript_to_dashboard_db(
     if provider_config:
         _doc["provider_config"] = provider_config
 
-    try:
-        from callback_worker.analysis import fallback_analysis, generate_b2b_score, generate_call_analysis
+    # Gate between the two analysis systems (Part 2 of the post-call-analysis revamp):
+    # a Workflow Builder bot with a PM-configured `analysis_fields` schema gets the new
+    # generic schema-driven extractor instead of the legacy qualification-schema
+    # classifier — its output is written to a separate `analysis_fields_result` field so
+    # it never collides with the legacy `analysis` object. Any other bot (legacy/campaign,
+    # or a workflow bot with no schema configured) falls through to today's
+    # generate_call_analysis path completely unchanged.
+    _analysis_fields = (bot_config or {}).get("analysis_fields") or []
+    _is_workflow_bot = (bot_config or {}).get("bot_type") == "workflow"
 
-        analysis_prompt_override = (bot_config or {}).get("analysis_prompt", "")
-        schema = (mongo_doc.get("lead_record") or {}).get("qualification_schema", {}) or {}
-        analysis, b2b_score = await asyncio.gather(
-            generate_call_analysis(
-                mongo_doc.get("transcript") or [], mongo_doc.get("status", "completed"), schema,
+    if _is_workflow_bot and _analysis_fields:
+        from backend.post_call_analysis import generate_generic_analysis
+
+        try:
+            generic_result = await generate_generic_analysis(
+                mongo_doc.get("transcript") or [],
+                _analysis_fields,
                 _get_http_session(),
-                muted_transcript=mongo_doc.get("muted_transcript"),
-                duration_secs=mongo_doc.get("call_duration_sec"),
-                analysis_prompt_override=analysis_prompt_override,
-            ),
-            generate_b2b_score(mongo_doc.get("transcript") or [], _get_http_session()),
-        )
-    except Exception as e:
-        logger.warning(f"[ANALYSIS] Failed for dashboard call room={mongo_doc.get('room_name')!r}: {e}")
+                gemini_connect_failed=bool(mongo_doc.get("gemini_connect_failed")),
+            )
+        except Exception as e:
+            logger.warning(f"[ANALYSIS] Generic extraction failed for room={mongo_doc.get('room_name')!r}: {e}")
+            generic_result = {f.get("key"): None for f in _analysis_fields if f.get("key")}
+
+        _doc["analysis_fields_result"] = generic_result
+        # Still call the legacy classifier's cheap deterministic fallback so `analysis`
+        # is never entirely absent from the doc — Transcript Viewer/dashboard code that
+        # reads `analysis.call_outcome` etc. keeps working for a workflow bot too, just
+        # with the deterministic status-based value rather than a full LLM classification.
+        from callback_worker.analysis import fallback_analysis
+
         analysis = fallback_analysis(mongo_doc.get("status", "completed"))
         b2b_score = {"deal_value": "", "lead_intent_score": "", "urgency_flag": "no"}
+    else:
+        try:
+            from callback_worker.analysis import fallback_analysis, generate_b2b_score, generate_call_analysis
+
+            analysis_prompt_override = (bot_config or {}).get("analysis_prompt", "")
+            schema = (mongo_doc.get("lead_record") or {}).get("qualification_schema", {}) or {}
+            analysis, b2b_score = await asyncio.gather(
+                generate_call_analysis(
+                    mongo_doc.get("transcript") or [], mongo_doc.get("status", "completed"), schema,
+                    _get_http_session(),
+                    muted_transcript=mongo_doc.get("muted_transcript"),
+                    duration_secs=mongo_doc.get("call_duration_sec"),
+                    analysis_prompt_override=analysis_prompt_override,
+                ),
+                generate_b2b_score(mongo_doc.get("transcript") or [], _get_http_session()),
+            )
+        except Exception as e:
+            logger.warning(f"[ANALYSIS] Failed for dashboard call room={mongo_doc.get('room_name')!r}: {e}")
+            analysis = fallback_analysis(mongo_doc.get("status", "completed"))
+            b2b_score = {"deal_value": "", "lead_intent_score": "", "urgency_flag": "no"}
 
     _doc["analysis"] = {
         "call_outcome": analysis.get("call_outcome", ""),

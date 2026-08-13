@@ -234,6 +234,20 @@ class DynamicVariable(BaseModel):
     default_value: str = ""
 
 
+class AnalysisFieldDef(BaseModel):
+    """One PM-defined post-call analysis field for a Workflow Builder bot — the generic,
+    per-bot-configurable counterpart to the legacy classifier's hardcoded qualification
+    schema. See backend/post_call_analysis.py for the extractor that reads this list and
+    backend/routers/bots.py for save-time validation (unique keys, enum_options required
+    for type == "enum", field-count cap)."""
+
+    key: str
+    label: str
+    type: Literal["boolean", "text", "number", "enum"]
+    description: str = ""
+    enum_options: list[str] | None = None
+
+
 class BotConfig(BaseModel):
     """Mirrors RuntimeConfig in frontend/src/types.ts — the fields a PM can edit.
 
@@ -295,6 +309,14 @@ class BotConfig(BaseModel):
     # rules as the global editor at save time (backend/routers/bots.py's update_version) —
     # never validate this yourself elsewhere, call analysis_prompts.validate_prompt_template.
     analysis_prompt: str = ""
+
+    # PM-defined generic post-call analysis schema for Workflow Builder bots (bot_type ==
+    # "workflow"). When non-empty, bot.py::_save_transcript_to_dashboard_db runs the
+    # generic schema-driven extractor (backend/post_call_analysis.py) instead of the
+    # legacy qualification-schema classifier (callback_worker/analysis.py), and persists
+    # its output to a separate field so the two systems never collide. Empty (the default)
+    # means "use the legacy classifier" — zero behavior change for every existing bot.
+    analysis_fields: list[AnalysisFieldDef] = Field(default_factory=list)
 
     # Real bot_pipeline.py runtime knobs (backend/evals.py:307-323).
     temperature: float = 0.4
