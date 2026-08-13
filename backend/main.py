@@ -9,7 +9,7 @@ from pymongo.errors import PyMongoError
 from .analysis_prompts import seed_default_analysis_prompts
 from .auth import ensure_default_admin
 from .db import start_db_watchdog
-from .routers import analytics, audit, auth, bots, campaigns, custom_functions, dashboard, dialer_webhooks, diagnostics, evals, library, mock_appointment_data, number_mapping, phone_numbers, pricing, runtime, settings, testcall, transcripts
+from .routers import alerts, analytics, audit, auth, bots, campaigns, custom_functions, dashboard, dialer_webhooks, diagnostics, evals, library, mock_appointment_data, number_mapping, phone_numbers, pricing, runtime, settings, testcall, transcripts
 
 _log = logging.getLogger("voicebot_admin")
 
@@ -43,6 +43,7 @@ app.include_router(dialer_webhooks.router)
 app.include_router(mock_appointment_data.router)
 app.include_router(diagnostics.router)
 app.include_router(dashboard.router)
+app.include_router(alerts.router)
 
 
 @app.exception_handler(PyMongoError)

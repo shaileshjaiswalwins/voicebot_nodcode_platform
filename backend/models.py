@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 Environment = Literal["dev", "prod"]
 
@@ -14,6 +14,15 @@ class LoginRequest(BaseModel):
 class LoginResponse(BaseModel):
     token: str
     email: str
+
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str = Field(min_length=8)
+
+
+class UserRoleUpdate(BaseModel):
+    role: Literal["admin", "user"]
 
 
 class EnvironmentEndpoints(BaseModel):
@@ -653,6 +662,15 @@ class GenerateFunctionRequest(BaseModel):
     description: str
 
 
+class GenerateEvalScenariosRequest(BaseModel):
+    """Pre-publish evals panel's "Generate with AI" button: derives scenario personas + pass/
+    fail checks tailored to the bot's own system_prompt instead of the generic built-in
+    defaults."""
+
+    system_prompt: str
+    count: int = 3
+
+
 class SummarizeVersionDiffRequest(BaseModel):
     """VersionDiffModal's AI summary: the already-computed {field: {old, new}} diff, keyed by
     top-level config field, for the PM-friendly plain-English summary."""
@@ -772,6 +790,128 @@ class DialerCallStatusWebhook(BaseModel):
 
 class DialerWebhookSecretUpdate(BaseModel):
     secret: str
+
+
+AlertMetric = Literal[
+    "call_count",
+    "task_completion_rate_pct",
+    "session_error_count",
+    "concurrency_used",
+    "p95_turn_latency_ms",
+    "platform_error_rate_pct",
+]
+AlertComparator = Literal["gt", "lt", "ge", "le"]
+AlertWindow = Literal["5m", "30m", "1h", "12h", "24h"]
+AlertFrequency = Literal["1m", "5m", "30m", "1h", "12h"]
+
+# Single source of truth for window/frequency compatibility (mirrors Retell's own table —
+# see the alerting plan): a window can only pair with a frequency at least as coarse, so the
+# worker never re-evaluates a shorter window than it was actually validated against. Enforced
+# below as a model invariant (AlertRuleBase._check_window_frequency_compat) rather than only
+# in backend/routers/alerts.py, so any code path that constructs an AlertRule directly (a
+# script, a different endpoint, a migration) can't bypass the check.
+WINDOW_FREQUENCY_COMPAT: dict[str, list[str]] = {
+    "5m": ["1m", "5m"],
+    "30m": ["5m", "30m"],
+    "1h": ["5m", "30m", "1h"],
+    "12h": ["30m", "1h", "12h"],
+    "24h": ["1h", "12h"],
+}
+
+# Call-status values a transcript's `status` field actually takes (see
+# backend/metrics.py's NON_FAILURE_STATUSES, its "disconnected" usage, and the "abusive"
+# close status set by bot.py/bot_dev.py/bot_dev_param.py/bot_pipeline.py) — narrows
+# AlertRuleFilters.status from a free-form string so a typo can't silently create a rule
+# that never matches anything and never fires.
+AlertCallStatus = Literal["completed", "disconnected", "not_interested", "abusive"]
+
+# The fixed set of post-call dispositions a call_outcome can take (see
+# callback_worker/analysis.py's DISPOSITION_MAP) — same rationale as AlertCallStatus above.
+AlertCallOutcome = Literal[
+    "Short Hangup",
+    "Voicemail",
+    "Wrong Number",
+    "Approved",
+    "Enriched",
+    "Interested",
+    "Not Interested",
+    "Could Not Confirm",
+    "Alternate Number",
+    "Already Spoken",
+    "Will do it Myself",
+    "Call Rescheduled",
+    "Seller Intent",
+    "Job Seeker",
+    "Abusive Lead",
+    "DNC Client : Don't Call Further",
+    "Other Cases",
+    "Technical Issue - Call Connected",
+    "Language Issue",
+]
+
+
+class AlertRuleFilters(BaseModel):
+    """Scoping/filter fields on a rule, per the plan's V1 filter set. `bot_ids` empty means
+    all bots owned by the rule's creator (or literally every bot, for an admin) — evaluated
+    fresh at eval time via resolve_owned_bot_ids, not frozen at create time."""
+
+    bot_ids: list[str] = Field(default_factory=list)
+    status: AlertCallStatus | None = None
+    call_outcome: AlertCallOutcome | None = None
+
+
+class AlertRuleBase(BaseModel):
+    name: str
+    metric: AlertMetric
+    threshold_type: Literal["absolute"] = "absolute"
+    comparator: AlertComparator
+    threshold_value: float
+    window: AlertWindow
+    frequency: AlertFrequency
+    filters: AlertRuleFilters = Field(default_factory=AlertRuleFilters)
+    # V1 ships with exactly one notification channel; email/webhook are Phase 2.
+    notify_via: Literal["in_app"] = "in_app"
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _check_window_frequency_compat(self) -> "AlertRuleBase":
+        allowed = WINDOW_FREQUENCY_COMPAT.get(self.window)
+        if allowed is None or self.frequency not in allowed:
+            raise ValueError(f"frequency {self.frequency!r} is not compatible with window {self.window!r}")
+        return self
+
+
+class AlertRuleCreate(AlertRuleBase):
+    pass
+
+
+class AlertRuleUpdate(AlertRuleBase):
+    pass
+
+
+class AlertRule(AlertRuleBase):
+    id: str = Field(alias="_id")
+    created_by: str
+    next_eval_at: datetime
+    last_evaluated_at: datetime | None = None
+    created_at: datetime
+
+    model_config = {"populate_by_name": True}
+
+
+class AlertIncident(BaseModel):
+    id: str = Field(alias="_id")
+    rule_id: str
+    rule_name: str
+    bot_ids: list[str] = Field(default_factory=list)
+    metric: AlertMetric
+    current_value: float
+    threshold_value: float
+    status: Literal["open", "resolved"] = "open"
+    triggered_at: datetime
+    resolved_at: datetime | None = None
+
+    model_config = {"populate_by_name": True}
 
 
 class MapNumberToAgentRequest(BaseModel):

@@ -4,7 +4,7 @@
 // already destructures; extend fields here rather than casting in views.
 
 // Type-only import (erased at build) — safe despite types.ts importing from api.ts.
-import type { CustomFunction, FunctionTestResult } from './types';
+import type { AlertRule, AlertRuleInput, AlertIncident, CustomFunction, FunctionTestResult } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) || 'http://localhost:8000';
 
@@ -35,9 +35,21 @@ export class ApiError extends Error {
   }
 }
 
+// FastAPI error bodies are JSON like {"detail": "..."}; fall back to the raw text
+// (e.g. a plain-text 500 from a proxy) when the body isn't that shape.
+function parseErrorDetail(body: string): string {
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed && typeof parsed.detail === 'string') return parsed.detail;
+  } catch {
+    // not JSON — use the raw body as-is
+  }
+  return body;
+}
+
 const READ_TIMEOUT_MS = 8000;
 
-async function request<T>(path: string, options: RequestInit = {}, timeoutMs: number = READ_TIMEOUT_MS): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}, timeoutMs: number = READ_TIMEOUT_MS, externalSignal?: AbortSignal): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -47,23 +59,31 @@ async function request<T>(path: string, options: RequestInit = {}, timeoutMs: nu
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // externalSignal lets a caller cancel client-side waiting early (e.g. a "Stop" button) —
+  // separate from the timeout abort above so we can tell the two apart in the catch below.
+  const onExternalAbort = () => controller.abort();
+  externalSignal?.addEventListener('abort', onExternalAbort);
   let response: Response;
   try {
     response = await fetch(apiUrl(path), { ...options, headers, signal: controller.signal });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
+      if (externalSignal?.aborted) {
+        throw new ApiError(0, `Request cancelled: ${path}`);
+      }
       throw new ApiError(0, `Request timed out after ${timeoutMs}ms: ${path}`);
     }
     throw error;
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
   }
   if (response.status === 401) {
     clearToken();
   }
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    throw new ApiError(response.status, body || response.statusText);
+    throw new ApiError(response.status, parseErrorDetail(body) || response.statusText);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
@@ -82,7 +102,7 @@ async function requestForm<T>(path: string, formData: FormData): Promise<T> {
   }
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    throw new ApiError(response.status, body || response.statusText);
+    throw new ApiError(response.status, parseErrorDetail(body) || response.statusText);
   }
   return response.json() as Promise<T>;
 }
@@ -298,6 +318,17 @@ export type CallEvent = {
   created_at: string;
   severity?: 'info' | 'warning' | 'error';
   details?: Record<string, unknown>;
+};
+
+export type CurrentUser = {
+  email: string;
+  role: string;
+};
+
+export type AccountEntry = {
+  email: string;
+  role: string;
+  is_sso: boolean;
 };
 
 export type AuditLogEntry = {
@@ -659,8 +690,31 @@ export const api = {
     setToken(result.token);
     return result;
   },
+  async signup(email: string, password: string): Promise<{ token: string; email: string }> {
+    const result = await request<{ token: string; email: string }>('/api/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+    setToken(result.token);
+    return result;
+  },
   logout(): void {
     clearToken();
+  },
+  me(): Promise<CurrentUser> {
+    return request('/api/auth/me');
+  },
+  listUsers(): Promise<AccountEntry[]> {
+    return request('/api/auth/users');
+  },
+  updateUserRole(email: string, role: string): Promise<AccountEntry> {
+    return request(`/api/auth/users/${encodeURIComponent(email)}/role`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role }),
+    });
+  },
+  deleteUser(email: string): Promise<void> {
+    return request(`/api/auth/users/${encodeURIComponent(email)}`, { method: 'DELETE' });
   },
 
   // bots + version lifecycle
@@ -748,11 +802,26 @@ export const api = {
   },
 
   // pre-publish evals/simulations
-  runEvals(id: string, versionId?: string, scenarios?: EvalScenario[]): Promise<EvalRun> {
+  runEvals(id: string, versionId?: string, scenarios?: EvalScenario[], signal?: AbortSignal): Promise<EvalRun> {
+    // Longer timeout than the default 8s: this simulates each scenario as a multi-turn
+    // LLM-vs-LLM conversation (backend/evals.py's run_scenario), which easily takes tens
+    // of seconds across the default scenario set. `signal` lets the UI's Stop button cancel
+    // client-side waiting early — note the backend has no cancellation hook of its own, so
+    // the simulation keeps running server-side until it finishes; this only stops the wait.
     return request(`/api/bots/${id}/evals/run`, {
       method: 'POST',
       body: JSON.stringify({ version_id: versionId || '', scenarios: scenarios || [] }),
-    });
+    }, 120000, signal);
+  },
+  // Evals panel's "Generate with AI" button — derives scenarios tailored to the bot's own
+  // system_prompt instead of the two generic built-in defaults. No bot exists lookup needed,
+  // same free-standing shape as generateFunction.
+  generateEvalScenarios(systemPrompt: string, count = 3): Promise<EvalScenario[]> {
+    return request<{ scenarios: EvalScenario[] }>(
+      '/api/bots/generate-eval-scenarios',
+      { method: 'POST', body: JSON.stringify({ system_prompt: systemPrompt, count }) },
+      30000,
+    ).then((r) => r.scenarios);
   },
   listEvals(id: string): Promise<EvalRun[]> {
     return request(`/api/bots/${id}/evals`);
@@ -1115,6 +1184,23 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ prompt_template: promptTemplate }),
     });
+  },
+
+  // alerts — custom threshold rules + fired incidents (Part 1: Custom Alerting)
+  listAlertRules(): Promise<AlertRule[]> {
+    return request('/api/alerts/rules');
+  },
+  createAlertRule(payload: AlertRuleInput): Promise<AlertRule> {
+    return request('/api/alerts/rules', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  updateAlertRule(id: string, payload: AlertRuleInput): Promise<AlertRule> {
+    return request(`/api/alerts/rules/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+  },
+  deleteAlertRule(id: string): Promise<{ ok: boolean }> {
+    return request(`/api/alerts/rules/${id}`, { method: 'DELETE' });
+  },
+  listAlertIncidents(): Promise<AlertIncident[]> {
+    return request('/api/alerts/incidents');
   },
 
   // audit log

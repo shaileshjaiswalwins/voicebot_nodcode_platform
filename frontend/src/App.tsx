@@ -2,12 +2,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
 import {
   Activity, BarChart2, BookOpen, Bot as BotIcon, ChevronLeft, ChevronRight, ClipboardList, FileText, GitBranch,
-  IndianRupee, Keyboard, LayoutDashboard, Link2, Megaphone, Menu, Phone, PhoneCall, Settings as SettingsIcon, X
+  IndianRupee, Keyboard, LayoutDashboard, Link2, LogOut, Megaphone, Menu, Phone, PhoneCall, Settings as SettingsIcon, X
 } from 'lucide-react';
 
 import { api, ApiError, getToken, setToken, API_BASE } from './api';
 import type {
-  AnalysisPromptEntry, AnalysisPromptKey, Bot, BotVersion, Campaign, CallEvent, EvalRun, LanguageOption,
+  AnalysisPromptEntry, AnalysisPromptKey, Bot, BotVersion, Campaign, CallEvent, CurrentUser, EvalRun, LanguageOption,
   LanguageSettings, LibraryPhrase, NumberMapping, OutcomeEntry, PhoneNumber, PhoneNumberEnvironment,
   PlatformSettings, RuntimeSettings, Transcript, TestRecordingLookup, DialingStrategy, PricingConfig
 } from './api';
@@ -110,13 +110,18 @@ function LoginForm({ onLoggedIn, ssoError }: { onLoggedIn: () => void; ssoError?
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(ssoError || '');
+  const [mode, setMode] = useState<'login' | 'signup'>('login');
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError('');
     try {
-      await api.login(email.trim(), password);
+      if (mode === 'signup') {
+        await api.signup(email.trim(), password);
+      } else {
+        await api.login(email.trim(), password);
+      }
       onLoggedIn();
     } catch (err) {
       setError(friendlyApiError(err));
@@ -125,12 +130,21 @@ function LoginForm({ onLoggedIn, ssoError }: { onLoggedIn: () => void; ssoError?
     }
   }
 
+  function toggleMode() {
+    setMode((prev) => (prev === 'login' ? 'signup' : 'login'));
+    setError('');
+  }
+
   return (
     <div className="login-screen" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
       <form onSubmit={submit} className="panel" style={{ maxWidth: 360, width: '100%', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         <div>
           <h2>JustDial Voice AI Platform</h2>
-          <p>Sign in to manage voice agents, campaigns and transcripts.</p>
+          <p>
+            {mode === 'signup'
+              ? 'Create an account to manage voice agents, campaigns and transcripts.'
+              : 'Sign in to manage voice agents, campaigns and transcripts.'}
+          </p>
         </div>
         {error && <div className="notice error">{error}</div>}
         <label>
@@ -139,15 +153,28 @@ function LoginForm({ onLoggedIn, ssoError }: { onLoggedIn: () => void; ssoError?
         </label>
         <label>
           Password
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            minLength={mode === 'signup' ? 8 : undefined}
+            required
+          />
         </label>
         <button className="primary" type="submit" disabled={busy}>
-          {busy ? 'Signing in…' : 'Sign in'}
+          {busy ? (mode === 'signup' ? 'Creating account…' : 'Signing in…') : mode === 'signup' ? 'Create account' : 'Sign in'}
         </button>
-        <div className="sso-divider"><span>or</span></div>
-        <a className="sso-button" href={`${API_BASE}/api/auth/sso/login`}>
-          Sign in with Justdial SSO
-        </a>
+        <button type="button" className="link-button" onClick={toggleMode}>
+          {mode === 'signup' ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
+        </button>
+        {mode === 'login' && (
+          <>
+            <div className="sso-divider"><span>or</span></div>
+            <a className="sso-button" href={`${API_BASE}/api/auth/sso/login`}>
+              Sign in with Justdial SSO
+            </a>
+          </>
+        )}
       </form>
     </div>
   );
@@ -172,6 +199,20 @@ function AppShell() {
 
   const [authed, setAuthed] = useState<boolean>(Boolean(getToken()));
   const [ssoError, setSsoError] = useState<string>('');
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+
+  useEffect(() => {
+    if (!authed) {
+      setCurrentUser(null);
+      return;
+    }
+    api.me().then(setCurrentUser).catch(() => setCurrentUser(null));
+  }, [authed]);
+
+  function handleLogout() {
+    api.logout();
+    setAuthed(false);
+  }
 
   // Consume the token (or error) the backend's /api/auth/sso/callback redirected back with
   // (see backend/routers/auth.py sso_callback) and strip it from the URL immediately so it
@@ -289,6 +330,7 @@ function AppShell() {
   const [renameState, setRenameState] = useState<AsyncState>('idle');
   const [evalRuns, setEvalRuns] = useState<EvalRun[]>([]);
   const [evalsRunning, setEvalsRunning] = useState(false);
+  const evalsAbortRef = useRef<AbortController | null>(null);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
   const [diffPair, setDiffPair] = useState<{ a: BotVersion; b: BotVersion } | null>(null);
 
@@ -454,6 +496,12 @@ function AppShell() {
 
   const handleAudioReady = (ready: boolean) => {
     setRemoteAudioReady(ready);
+    if (ready) {
+      // Bot's audio is flowing — advance past "Waiting for bot to join…", which
+      // otherwise never changes on its own and ends up shown alongside the real,
+      // live agent state (e.g. "Speaking · Waiting for bot to join…").
+      setTestStatus((prev) => (prev === 'Waiting for bot to join…' ? 'In call' : prev));
+    }
     if (ready && testBotId && testBotId === firstAgentPendingTestId) {
       setFirstAgentPendingTestId('');
       setShowFirstCallConfetti(true);
@@ -629,11 +677,19 @@ function AppShell() {
     loadPhoneNumbers();
     loadNumberMappings();
     loadTranscripts();
-    loadSettings();
     loadLibrary();
-    loadPricingConfig();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed]);
+
+  // Admin-only settings/pricing config — the backend 403s a non-admin, so wait for
+  // currentUser to resolve rather than firing (and getting a diagnostic warning) for
+  // every regular user on every login.
+  useEffect(() => {
+    if (!authed || currentUser?.role !== 'admin') return;
+    loadSettings();
+    loadPricingConfig();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authed, currentUser]);
 
   // Reload transcripts on search change (debounced)
   useEffect(() => {
@@ -677,15 +733,28 @@ function AppShell() {
 
   async function handleRunEvals(scenarios?: import('./api').EvalScenario[]) {
     if (!selectedBot) return;
+    const controller = new AbortController();
+    evalsAbortRef.current = controller;
     setEvalsRunning(true);
     try {
-      const run = await api.runEvals(selectedBot._id, editingVersionId || undefined, scenarios);
+      const run = await api.runEvals(selectedBot._id, editingVersionId || undefined, scenarios, controller.signal);
       setEvalRuns((prev) => [run, ...prev]);
     } catch (err) {
-      pushDiagnostic('Run evals', err, 'Retry evals', 'error');
+      // A user-initiated Stop click also lands here (the aborted fetch rejects) — skip the
+      // diagnostic toast for that case since it's an expected outcome, not a failure.
+      if (!controller.signal.aborted) {
+        pushDiagnostic('Run evals', err, 'Retry evals', 'error');
+      }
     } finally {
+      evalsAbortRef.current = null;
       setEvalsRunning(false);
     }
+  }
+
+  // "Stop" in the evals panel: only cancels the frontend's wait — backend/evals.py has no
+  // cancellation hook, so the simulation keeps running server-side to completion regardless.
+  function handleStopEvals() {
+    evalsAbortRef.current?.abort();
   }
 
   // Load call events when a transcript is selected
@@ -1446,7 +1515,8 @@ function AppShell() {
     setDiagnostics((prev) => (scope ? prev.filter((d) => d.scope !== scope) : []));
   }
   function handleRetryDiagnostics() {
-    loadBots(); loadCampaigns(); loadPhoneNumbers(); loadNumberMappings(); loadTranscripts(); loadSettings(); loadLibrary();
+    loadBots(); loadCampaigns(); loadPhoneNumbers(); loadNumberMappings(); loadTranscripts(); loadLibrary();
+    if (currentUser?.role === 'admin') { loadSettings(); loadPricingConfig(); }
   }
   function handleUseCachedDiagnostics() {
     setDiagnostics([]);
@@ -1609,6 +1679,14 @@ function AppShell() {
         <button className="nav-item shortcuts-btn" onClick={() => setShowShortcuts(true)} title="Shortcuts">
           <Keyboard size={17} /><span>Shortcuts</span>
         </button>
+        {currentUser && !sidebarCollapsed && (
+          <div className="sidebar-current-user" title={currentUser.email}>
+            {currentUser.email}
+          </div>
+        )}
+        <button className="nav-item logout-btn" onClick={handleLogout} title="Sign out">
+          <LogOut size={17} /><span>Sign out</span>
+        </button>
         <button
           className="nav-item sidebar-collapse-btn"
           onClick={toggleSidebarCollapsed}
@@ -1692,6 +1770,10 @@ function AppShell() {
                   unpublishState={unpublishState}
                   onRename={handleRename}
                   renameState={renameState}
+                  evalRuns={evalRuns}
+                  onRunEvals={handleRunEvals}
+                  evalsRunning={evalsRunning}
+                  onStopEvals={handleStopEvals}
                 />
               )}
             </div>
@@ -1793,6 +1875,9 @@ function AppShell() {
               pricingConfig={pricingConfig}
               onUpdatePricingConfig={handleUpdatePricingConfig}
               initialTab={view === 'audit_log' ? 'audit_log' : view === 'admin' ? 'admin' : undefined}
+              isAdmin={currentUser?.role === 'admin'}
+              currentUserEmail={currentUser?.email}
+              bots={bots}
             />
           )}
         </ResilientPanel>

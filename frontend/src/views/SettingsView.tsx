@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { AlertTriangle, ClipboardList, IndianRupee, Save, Settings, SlidersHorizontal, Wrench } from 'lucide-react';
+import { AlertTriangle, Bell, ClipboardList, IndianRupee, Save, Settings, SlidersHorizontal, Users, Wrench } from 'lucide-react';
 import type { PlatformSettings, PricingConfig, RuntimeSettings } from '../api';
+import type { Bot } from '../api';
 import { StatusPill } from '../components/StatusPill';
 import { FallbackEventsPanel } from '../components/FallbackEventsPanel';
 import { WorkerHealthPanel } from '../components/WorkerHealthPanel';
 import { DispatchFailuresPanel } from '../components/DispatchFailuresPanel';
 import { AuditLogView } from './AuditLogView';
 import { AdminView } from './AdminView';
+import { AccountsView } from './AccountsView';
+import { AlertsPanel } from '../components/AlertsPanel';
 import { Spinner } from '../components/Spinner';
 import { isValidUrl } from '../utils/validation';
 import { FEEDBACK_TIMEOUT_MS } from '../constants/ui';
@@ -15,12 +18,14 @@ function Step({ title, text }: { title: string; text: string }) {
   return <div className="step"><strong>{title}</strong><p>{text}</p></div>;
 }
 
-type SettingsTab = 'general' | 'diagnostics' | 'audit_log' | 'admin';
+type SettingsTab = 'general' | 'diagnostics' | 'alerts' | 'audit_log' | 'admin' | 'accounts';
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; icon: React.ReactNode }> = [
   { id: 'general', label: 'General', icon: <Settings size={15} /> },
   { id: 'diagnostics', label: 'Diagnostics', icon: <Wrench size={15} /> },
+  { id: 'alerts', label: 'Alerts', icon: <Bell size={15} /> },
   { id: 'audit_log', label: 'Audit Log', icon: <ClipboardList size={15} /> },
   { id: 'admin', label: 'Admin', icon: <IndianRupee size={15} /> },
+  { id: 'accounts', label: 'Accounts', icon: <Users size={15} /> },
 ];
 
 export function SettingsView({
@@ -31,6 +36,9 @@ export function SettingsView({
   pricingConfig,
   onUpdatePricingConfig,
   initialTab,
+  isAdmin,
+  currentUserEmail,
+  bots,
 }: {
   runtimeSettings: RuntimeSettings | null;
   onUpdateRuntime: (payload: Partial<RuntimeSettings>) => void;
@@ -41,8 +49,18 @@ export function SettingsView({
   /** Lets a direct link (e.g. the old standalone /audit-log or /admin URL) land on the
    * right tab instead of always opening on General. */
   initialTab?: SettingsTab;
+  /** Accounts tab manages other users' roles/access — hidden entirely for non-admins,
+   * who'd just get a 403 from the backend anyway. */
+  isAdmin?: boolean;
+  currentUserEmail?: string;
+  /** Bots owned by the current user — feeds the alert rule dialog's bot multi-select filter
+   * (empty selection = "all owned bots"). Alerts tab itself is visible to any user. */
+  bots?: Bot[];
 }) {
+  const ADMIN_ONLY_TABS: SettingsTab[] = ['audit_log', 'admin', 'accounts'];
+  const tabs = isAdmin ? SETTINGS_TABS : SETTINGS_TABS.filter((t) => !ADMIN_ONLY_TABS.includes(t.id));
   const [tab, setTab] = useState<SettingsTab>(initialTab || 'general');
+  const [alertsUnreadCount, setAlertsUnreadCount] = useState(0);
   useEffect(() => {
     if (initialTab) setTab(initialTab);
   }, [initialTab]);
@@ -106,7 +124,7 @@ export function SettingsView({
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
       <div className="cf-tabbar" role="tablist" style={{ display: 'flex', gap: '0.25rem', borderBottom: '1px solid var(--border)', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
-        {SETTINGS_TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.id}
             role="tab"
@@ -122,12 +140,26 @@ export function SettingsView({
             }}
           >
             {t.icon} {t.label}
+            {t.id === 'alerts' && alertsUnreadCount > 0 && (
+              <span
+                style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  minWidth: '1.1rem', height: '1.1rem', padding: '0 0.3rem', borderRadius: '999px',
+                  background: 'var(--danger)', color: '#fff', fontSize: '0.65rem', fontWeight: 700,
+                  lineHeight: 1,
+                }}
+              >
+                {alertsUnreadCount > 9 ? '9+' : alertsUnreadCount}
+              </span>
+            )}
           </button>
         ))}
       </div>
 
-      {tab === 'audit_log' && <AuditLogView />}
-      {tab === 'admin' && <AdminView config={pricingConfig} onSave={onUpdatePricingConfig} />}
+      {tab === 'alerts' && <AlertsPanel bots={bots || []} onUnreadCountChange={setAlertsUnreadCount} />}
+      {tab === 'audit_log' && isAdmin && <AuditLogView />}
+      {tab === 'admin' && isAdmin && <AdminView config={pricingConfig} onSave={onUpdatePricingConfig} />}
+      {tab === 'accounts' && isAdmin && <AccountsView currentUserEmail={currentUserEmail} />}
       {tab === 'diagnostics' && (
         <>
           <WorkerHealthPanel />
@@ -226,6 +258,7 @@ export function SettingsView({
       </div>
 
       {/* ── Platform defaults ── */}
+      {isAdmin && (
       <div className="panel">
         <div className="panel-header">
           <div>
@@ -307,6 +340,7 @@ export function SettingsView({
           </p>
         )}
       </div>
+      )}
       </>
       )}
     </section>

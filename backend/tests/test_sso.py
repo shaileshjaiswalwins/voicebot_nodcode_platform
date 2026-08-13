@@ -66,19 +66,35 @@ def test_exchange_code_for_profile_raises_on_token_exchange_failure(client):
             sso_module.exchange_code_for_profile("code456", "s2")
 
 
-def test_issue_token_for_sso_profile_upserts_user_and_mints_admin_token():
+def test_issue_token_for_sso_profile_upserts_user_and_mints_user_token():
     token = auth_module.issue_token_for_sso_profile({"empcode": "E2", "empname": "Ravi", "email": "ravi@justdial.com"})
     decoded = auth_module.jwt.decode(token, auth_module.JWT_SECRET, algorithms=[auth_module.JWT_ALGO])
     assert decoded["sub"] == "ravi@justdial.com"
-    assert decoded["role"] == "admin"
+    assert decoded["role"] == "user"
     user = users.find_one({"email": "ravi@justdial.com"})
     assert user["sso_empcode"] == "E2"
+    assert user["role"] == "user"
+
+
+def test_issue_token_for_sso_profile_grants_admin_only_to_default_admin_email():
+    token = auth_module.issue_token_for_sso_profile({"empcode": "E9", "email": auth_module.DEFAULT_ADMIN_EMAIL})
+    decoded = auth_module.jwt.decode(token, auth_module.JWT_SECRET, algorithms=[auth_module.JWT_ALGO])
+    assert decoded["role"] == "admin"
+
+
+def test_issue_token_for_sso_profile_does_not_reset_a_promoted_users_role():
+    auth_module.issue_token_for_sso_profile({"empcode": "E5", "email": "promoted@justdial.com"})
+    users.update_one({"email": "promoted@justdial.com"}, {"$set": {"role": "admin"}})
+
+    token = auth_module.issue_token_for_sso_profile({"empcode": "E5", "email": "promoted@justdial.com"})
+    decoded = auth_module.jwt.decode(token, auth_module.JWT_SECRET, algorithms=[auth_module.JWT_ALGO])
+    assert decoded["role"] == "admin"
 
 
 def test_issue_token_for_sso_profile_falls_back_to_empcode_when_no_email():
     token = auth_module.issue_token_for_sso_profile({"empcode": "E3", "empname": "No Email"})
     decoded = auth_module.jwt.decode(token, auth_module.JWT_SECRET, algorithms=[auth_module.JWT_ALGO])
-    assert decoded["sub"] == "E3@justdial.com"
+    assert decoded["sub"] == "e3@justdial.com"
 
 
 def test_sso_login_endpoint_redirects_to_idp(client, monkeypatch):

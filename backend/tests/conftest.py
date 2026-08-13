@@ -31,6 +31,8 @@ def _clean_db():
         db_module.dialer_webhook_secrets,
         db_module.custom_functions,
         db_module.transcripts,
+        db_module.alert_rules,
+        db_module.alert_incidents,
     ):
         coll.delete_many({})
     analysis_prompts_module._cache.clear()

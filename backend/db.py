@@ -74,6 +74,14 @@ dialer_webhook_secrets = db["tbl_ai_vb_dialer_webhook_secrets"]
 # Per-bot user-configured API calls (pre-call data fetches + in-call LLM tools). Read at
 # call time by the runtime (agent_resolver.py) directly from this collection.
 custom_functions = db["tbl_ai_vb_custom_functions"]
+alert_rules = db["tbl_ai_vb_alert_rules"]
+# for the Rules list view.
+alert_rules.create_index([("created_by", 1)])
+# for the alert-evaluation worker's due-rule query.
+alert_rules.create_index([("enabled", 1), ("next_eval_at", 1)])
+alert_incidents = db["tbl_ai_vb_alert_incidents"]
+# for "is there already an open incident for this rule" + the History list.
+alert_incidents.create_index([("rule_id", 1), ("status", 1)])
 
 
 def _watchdog_loop(interval_s: float) -> None:

@@ -149,7 +149,7 @@ export type RuntimeConfig = {
   [key: string]: unknown;
 };
 
-export type TestCallStatus = 'Idle' | 'Creating room…' | 'Connecting to LiveKit…' | 'Waiting for bot to join…' | 'Failed';
+export type TestCallStatus = 'Idle' | 'Creating room…' | 'Connecting to LiveKit…' | 'Waiting for bot to join…' | 'In call' | 'Failed';
 
 export type TestForm = {
   campaign_id: string;
@@ -201,3 +201,80 @@ export type CmdKResult =
 export type CmdKExtra = { botId?: string; transcriptId?: string; campaignKey?: string };
 
 export type AgentUiState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking';
+
+// ---------------------------------------------------------------------------
+// Custom Alerting (Part 1) — mirrors backend/models.py AlertRule / AlertIncident.
+// ---------------------------------------------------------------------------
+
+/** V1 metric set (6, all real today, zero new instrumentation) — grouped in the UI as
+ * Call / Latency / System. See plan doc "Part 1: Custom Alerting". */
+export type AlertMetric =
+  | 'call_count'
+  | 'task_completion_rate_pct'
+  | 'session_error_count'
+  | 'concurrency_used'
+  | 'p95_turn_latency_ms'
+  | 'platform_error_rate_pct';
+
+export type AlertComparator = 'gt' | 'lt' | 'ge' | 'le';
+
+/** V1 only supports 'absolute' — 'relative' (compare to last cycle) is specced for Phase 2. */
+export type AlertThresholdType = 'absolute';
+
+export type AlertWindow = '5m' | '30m' | '1h' | '12h' | '24h';
+export type AlertFrequency = '1m' | '5m' | '30m' | '1h' | '12h';
+
+export type AlertRuleFilters = {
+  bot_ids: string[];
+  status?: string;
+  call_outcome?: string;
+};
+
+/** V1 ships with exactly one delivery channel; email/webhook are Phase 2 (disabled
+ * "Coming soon" rows in the Create Alert dialog). */
+export type AlertNotifyVia = 'in_app';
+
+export type AlertRule = {
+  id: string;
+  name: string;
+  metric: AlertMetric;
+  threshold_type: AlertThresholdType;
+  comparator: AlertComparator;
+  threshold_value: number;
+  window: AlertWindow;
+  frequency: AlertFrequency;
+  filters: AlertRuleFilters;
+  notify_via: AlertNotifyVia;
+  enabled: boolean;
+  created_by: string;
+  next_eval_at?: string | null;
+  last_evaluated_at?: string | null;
+  created_at: string;
+};
+
+/** Payload shape for POST/PUT — no server-assigned fields. */
+export type AlertRuleInput = {
+  name: string;
+  metric: AlertMetric;
+  comparator: AlertComparator;
+  threshold_value: number;
+  window: AlertWindow;
+  frequency: AlertFrequency;
+  filters: AlertRuleFilters;
+  enabled: boolean;
+};
+
+export type AlertIncidentStatus = 'open' | 'resolved';
+
+export type AlertIncident = {
+  id: string;
+  rule_id: string;
+  rule_name: string;
+  bot_ids: string[];
+  metric: AlertMetric;
+  current_value: number;
+  threshold_value: number;
+  status: AlertIncidentStatus;
+  triggered_at: string;
+  resolved_at?: string | null;
+};

@@ -1,11 +1,13 @@
 import os
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 
 from .. import auth as auth_module
 from .. import sso as sso_module
-from ..models import LoginRequest, LoginResponse
+from ..auth import _normalize_email, require_admin, require_user
+from ..db import users
+from ..models import LoginRequest, LoginResponse, SignupRequest, UserRoleUpdate
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -18,6 +20,14 @@ def login(payload: LoginRequest) -> LoginResponse:
     token = auth_module.authenticate(payload.email, payload.password)
     if not token:
         raise HTTPException(401, "Invalid email or password")
+    return LoginResponse(token=token, email=payload.email)
+
+
+@router.post("/signup", response_model=LoginResponse)
+def signup(payload: SignupRequest) -> LoginResponse:
+    token = auth_module.create_user(payload.email, payload.password)
+    if not token:
+        raise HTTPException(409, "An account with that email already exists")
     return LoginResponse(token=token, email=payload.email)
 
 
@@ -50,3 +60,45 @@ def sso_logout_url() -> dict:
     """Doc section 3, step 14 — frontend hits this to know where to send the browser to
     also end the IdP-side session on logout, not just clear the local JWT."""
     return {"url": sso_module.logout_redirect_url()}
+
+
+@router.get("/me")
+def me(user: dict = Depends(require_user)) -> dict:
+    """Lets the frontend know who's logged in and what role they have, without decoding
+    the JWT client-side — used to gate admin-only UI like the Accounts tab."""
+    return {"email": user["sub"], "role": user.get("role", "user")}
+
+
+@router.get("/users")
+def list_users(_: dict = Depends(require_admin)) -> list[dict]:
+    """Accounts tab: every local/SSO account, minus password hashes."""
+    return [
+        {
+            "email": u["email"],
+            "role": u.get("role", "user"),
+            "is_sso": bool(u.get("sso_empcode")),
+        }
+        for u in users.find({}, {"password_hash": 0}).sort("email", 1)
+    ]
+
+
+@router.patch("/users/{email}/role")
+def update_user_role(email: str, payload: UserRoleUpdate, admin: dict = Depends(require_admin)) -> dict:
+    email = _normalize_email(email)
+    if email == admin["sub"] and payload.role != "admin":
+        raise HTTPException(400, "You can't remove your own admin access")
+    result = users.update_one({"email": email}, {"$set": {"role": payload.role}})
+    if result.matched_count == 0:
+        raise HTTPException(404, "No account with that email")
+    return {"email": email, "role": payload.role}
+
+
+@router.delete("/users/{email}")
+def delete_user(email: str, admin: dict = Depends(require_admin)) -> dict:
+    email = _normalize_email(email)
+    if email == admin["sub"]:
+        raise HTTPException(400, "You can't delete the account you're logged in as")
+    result = users.delete_one({"email": email})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "No account with that email")
+    return {"ok": True}
