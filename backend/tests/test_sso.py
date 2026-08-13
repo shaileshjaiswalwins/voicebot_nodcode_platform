@@ -91,6 +91,34 @@ def test_issue_token_for_sso_profile_does_not_reset_a_promoted_users_role():
     assert decoded["role"] == "admin"
 
 
+def test_update_user_role_rejects_demoting_default_admin_even_by_another_admin(client, auth_headers):
+    # A second admin (not the default admin) tries to demote admin@justdial.com.
+    users.insert_one({"email": "second-admin@justdial.com", "password_hash": auth_module.hash_password("password"), "role": "admin"})
+    resp = client.post("/api/auth/login", json={"email": "second-admin@justdial.com", "password": "password"})
+    assert resp.status_code == 200, resp.text
+    second_admin_headers = {"Authorization": f"Bearer {resp.json()['token']}"}
+
+    resp = client.patch(
+        f"/api/auth/users/{auth_module.DEFAULT_ADMIN_EMAIL}/role",
+        json={"role": "user"},
+        headers=second_admin_headers,
+    )
+    assert resp.status_code == 400
+    assert users.find_one({"email": auth_module.DEFAULT_ADMIN_EMAIL})["role"] == "admin"
+
+
+def test_update_user_role_allows_demoting_a_non_default_admin(client, auth_headers):
+    users.insert_one({"email": "other-admin@justdial.com", "password_hash": auth_module.hash_password("password"), "role": "admin"})
+
+    resp = client.patch(
+        "/api/auth/users/other-admin@justdial.com/role",
+        json={"role": "user"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert users.find_one({"email": "other-admin@justdial.com"})["role"] == "user"
+
+
 def test_issue_token_for_sso_profile_falls_back_to_empcode_when_no_email():
     token = auth_module.issue_token_for_sso_profile({"empcode": "E3", "empname": "No Email"})
     decoded = auth_module.jwt.decode(token, auth_module.JWT_SECRET, algorithms=[auth_module.JWT_ALGO])

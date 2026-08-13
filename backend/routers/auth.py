@@ -5,7 +5,7 @@ from fastapi.responses import RedirectResponse
 
 from .. import auth as auth_module
 from .. import sso as sso_module
-from ..auth import _normalize_email, require_admin, require_user
+from ..auth import DEFAULT_ADMIN_EMAIL, _normalize_email, require_admin, require_user
 from ..db import users
 from ..models import LoginRequest, LoginResponse, SignupRequest, UserRoleUpdate
 
@@ -87,6 +87,8 @@ def update_user_role(email: str, payload: UserRoleUpdate, admin: dict = Depends(
     email = _normalize_email(email)
     if email == admin["sub"] and payload.role != "admin":
         raise HTTPException(400, "You can't remove your own admin access")
+    if email == DEFAULT_ADMIN_EMAIL and payload.role != "admin":
+        raise HTTPException(400, "The default admin account must always keep admin access")
     result = users.update_one({"email": email}, {"$set": {"role": payload.role}})
     if result.matched_count == 0:
         raise HTTPException(404, "No account with that email")

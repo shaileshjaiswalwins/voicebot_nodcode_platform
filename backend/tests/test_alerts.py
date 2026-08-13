@@ -625,3 +625,63 @@ def test_incident_created_by_worker_has_rule_name_stored_on_the_document(client,
     # a defensive fallback for legacy incidents).
     api_incidents = client.get("/api/alerts/incidents", headers=auth_headers).json()
     assert any(i["rule_id"] == rule_id and i["rule_name"] == "Stored rule name" for i in api_incidents)
+
+
+# --------------------------------------------------------------------------------------
+# _evaluate_rule — read-side schema validation. Write-side validation (AlertRuleCreate/
+# Update, including the window/frequency compat model_validator) only guarantees a
+# document was valid AT WRITE TIME. A document written by an older code version, hand-
+# edited, or corrupted, would previously be treated as valid by the worker's raw-dict
+# field access (rule["metric"], etc.) and could raise a KeyError/ValueError deep inside
+# evaluation instead of failing cleanly. This locks in that _evaluate_rule now parses
+# every claimed rule through AlertRule.model_validate first and skips (without raising)
+# on failure — same "one bad rule doesn't take down the tick" principle as the malformed-
+# frequency starvation fix in _claim_due_rules above, just at the evaluation step instead
+# of the claim step.
+# --------------------------------------------------------------------------------------
+
+
+def test_evaluate_rule_with_invalid_schema_skips_without_raising_and_does_not_block_others(client, auth_headers):
+    now = datetime.now(timezone.utc)
+
+    # Insert a corrupted/legacy rule document directly (bypassing Pydantic entirely) with
+    # a metric value that isn't a valid AlertMetric per the current model — simulating a
+    # document that predates a metric being renamed/removed, or was hand-edited in Mongo.
+    bad_rule_id = db_module.alert_rules.insert_one({
+        "name": "Corrupted rule",
+        "metric": "not_a_real_metric",  # invalid per AlertMetric Literal
+        "threshold_type": "absolute",
+        "comparator": "gt",
+        "threshold_value": 0,
+        "window": "1h",
+        "frequency": "5m",
+        "filters": {"bot_ids": [], "status": None, "call_outcome": None},
+        "notify_via": "in_app",
+        "enabled": True,
+        "created_by": "admin@justdial.com",
+        "next_eval_at": now,
+        "last_evaluated_at": None,
+        "created_at": now,
+    }).inserted_id
+    bad_rule_doc = db_module.alert_rules.find_one({"_id": bad_rule_id})
+
+    # A second, valid, due rule in the same tick — must still evaluate normally.
+    create_resp = client.post(
+        "/api/alerts/rules",
+        json={**VALID_RULE_PAYLOAD, "metric": "call_count", "comparator": "gt", "threshold_value": 0},
+        headers=auth_headers,
+    )
+    good_rule_id = create_resp.json()["_id"]
+    good_rule_doc = db_module.alert_rules.find_one({"_id": ObjectId(good_rule_id)})
+    _seed_transcript(bot_id="any-bot", created_at=now - timedelta(seconds=1))
+
+    # Evaluating the corrupted rule must not raise.
+    _evaluate_rule(bad_rule_doc, now)
+    assert db_module.alert_incidents.find_one({"rule_id": str(bad_rule_id)}) is None
+
+    # The valid rule, evaluated in the same tick, still opens its incident normally —
+    # the corrupted rule's failure doesn't degrade or block evaluation of a sibling rule.
+    _evaluate_rule(good_rule_doc, now)
+    incident = db_module.alert_incidents.find_one({"rule_id": good_rule_id})
+    assert incident is not None
+    assert incident["status"] == "open"

@@ -22,9 +22,12 @@ from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
+from pydantic import ValidationError
+
 from backend.auth import resolve_owned_bot_ids
 from backend.db import alert_incidents, alert_rules, users
 from backend.metrics import compute_metric
+from backend.models import AlertRule
 
 from .config import LOG_DIR, POLL_INTERVAL_SEC
 
@@ -148,6 +151,24 @@ _COMPARATORS = {
 
 def _evaluate_rule(rule: dict, now: datetime) -> None:
     rule_id = str(rule["_id"])
+
+    # The write side (CRUD router) validates every rule through AlertRuleCreate/Update
+    # before it's persisted, but nothing guarantees a document read back here still
+    # conforms — it may have been written by an older version of the code, hand-edited,
+    # or corrupted. Re-validate through the same AlertRule model here, at the point where
+    # we move from "I have a claimed rule dict" to "I'm about to actually evaluate it," so
+    # a malformed document produces one clear log line and a skipped tick instead of a
+    # KeyError/TypeError surfacing deep inside metric computation. _id is an ObjectId on
+    # the raw Mongo doc, so it's stringified before parsing to satisfy AlertRule.id: str.
+    try:
+        AlertRule.model_validate({**rule, "_id": str(rule["_id"])})
+    except ValidationError as e:
+        logger.error(
+            f"[ALERT-WORKER] rule={rule_id} failed schema validation — skipping evaluation "
+            f"this tick (document does not conform to the current AlertRule model): {e}"
+        )
+        return
+
     bot_ids = _resolve_rule_bot_ids(rule)
     if bot_ids is not None and not bot_ids:
         # Non-admin creator who currently owns no matching bots (e.g. bots reassigned

@@ -138,7 +138,20 @@ function CreateAlertDialog({
 
         <label className="full">
           Metric
-          <select value={draft.metric} onChange={(e) => setDraft({ ...draft, metric: e.target.value as AlertMetric })}>
+          <select
+            value={draft.metric}
+            onChange={(e) => {
+              const metric = e.target.value as AlertMetric;
+              const stillSupportsOutcomeFilter = metric === 'task_completion_rate_pct';
+              setDraft((d) => ({
+                ...d,
+                metric,
+                filters: stillSupportsOutcomeFilter
+                  ? d.filters
+                  : { ...d.filters, call_outcome: undefined },
+              }));
+            }}
+          >
             {ALERT_METRIC_GROUPS.map((g) => (
               <optgroup key={g.group} label={g.group}>
                 {g.metrics.map((m) => (
