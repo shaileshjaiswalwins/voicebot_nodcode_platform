@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Bell, BellRing, Plus, Trash2 } from 'lucide-react';
 import { api } from '../api';
 import type { Bot } from '../api';
-import type { AlertComparator, AlertFrequency, AlertIncident, AlertMetric, AlertRule, AlertRuleInput, AlertWindow } from '../types';
+import type { AlertCallOutcome, AlertComparator, AlertFrequency, AlertIncident, AlertMetric, AlertRule, AlertRuleInput, AlertWindow } from '../types';
 import {
   ALERT_COMPARATOR_LABELS,
   ALERT_FREQUENCY_OPTIONS,
@@ -232,7 +232,7 @@ function CreateAlertDialog({
             Call outcome filter (optional)
             <input
               value={draft.filters.call_outcome || ''}
-              onChange={(e) => setDraft({ ...draft, filters: { ...draft.filters, call_outcome: e.target.value || undefined } })}
+              onChange={(e) => setDraft({ ...draft, filters: { ...draft.filters, call_outcome: (e.target.value || undefined) as AlertCallOutcome | undefined } })}
               placeholder="e.g. Approved — leave blank for all outcomes"
             />
           </label>

@@ -6,7 +6,7 @@ from fastapi.responses import RedirectResponse
 from .. import auth as auth_module
 from .. import sso as sso_module
 from ..auth import DEFAULT_ADMIN_EMAIL, _normalize_email, require_admin, require_user
-from ..db import users
+from ..db import alert_incidents, alert_rules, users
 from ..models import LoginRequest, LoginResponse, SignupRequest, UserRoleUpdate
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -100,7 +100,19 @@ def delete_user(email: str, admin: dict = Depends(require_admin)) -> dict:
     email = _normalize_email(email)
     if email == admin["sub"]:
         raise HTTPException(400, "You can't delete the account you're logged in as")
+    if email == DEFAULT_ADMIN_EMAIL:
+        raise HTTPException(400, "The default admin account can't be deleted")
     result = users.delete_one({"email": email})
     if result.deleted_count == 0:
         raise HTTPException(404, "No account with that email")
+
+    # A deleted user's alert rules would otherwise keep evaluating forever with no owner
+    # able to manage/disable them through the UI (alert_worker's _resolve_rule_bot_ids
+    # tolerates a missing user and just re-resolves bots by the stale owner email) — so
+    # remove the rules, and any incidents tied to them, along with the account.
+    orphaned_rule_ids = [str(r["_id"]) for r in alert_rules.find({"created_by": email}, {"_id": 1})]
+    if orphaned_rule_ids:
+        alert_rules.delete_many({"created_by": email})
+        alert_incidents.delete_many({"rule_id": {"$in": orphaned_rule_ids}})
+
     return {"ok": True}

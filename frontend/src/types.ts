@@ -224,10 +224,37 @@ export type AlertThresholdType = 'absolute';
 export type AlertWindow = '5m' | '30m' | '1h' | '12h' | '24h';
 export type AlertFrequency = '1m' | '5m' | '30m' | '1h' | '12h';
 
+/** Call-status values a transcript's `status` field actually takes — mirrors
+ * backend/models.py AlertCallStatus. */
+export type AlertCallStatus = 'completed' | 'disconnected' | 'not_interested' | 'abusive';
+
+/** The fixed set of post-call dispositions a call_outcome can take — mirrors
+ * backend/models.py AlertCallOutcome. */
+export type AlertCallOutcome =
+  | 'Short Hangup'
+  | 'Voicemail'
+  | 'Wrong Number'
+  | 'Approved'
+  | 'Enriched'
+  | 'Interested'
+  | 'Not Interested'
+  | 'Could Not Confirm'
+  | 'Alternate Number'
+  | 'Already Spoken'
+  | 'Will do it Myself'
+  | 'Call Rescheduled'
+  | 'Seller Intent'
+  | 'Job Seeker'
+  | 'Abusive Lead'
+  | "DNC Client : Don't Call Further"
+  | 'Other Cases'
+  | 'Technical Issue - Call Connected'
+  | 'Language Issue';
+
 export type AlertRuleFilters = {
   bot_ids: string[];
-  status?: string;
-  call_outcome?: string;
+  status?: AlertCallStatus;
+  call_outcome?: AlertCallOutcome;
 };
 
 /** V1 ships with exactly one delivery channel; email/webhook are Phase 2 (disabled

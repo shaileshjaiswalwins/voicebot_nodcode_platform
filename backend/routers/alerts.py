@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from bson import ObjectId
+from bson.errors import InvalidId
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ValidationError
 
@@ -50,7 +51,7 @@ def _validate_bot_ids(bot_ids: list[str], user: dict) -> None:
 def _get_owned_rule(rule_id: str, user: dict) -> dict:
     try:
         oid = ObjectId(rule_id)
-    except Exception:
+    except (InvalidId, TypeError):
         raise HTTPException(404, "Alert rule not found")
     rule = alert_rules.find_one({"_id": oid, **_owner_filter(user)})
     if not rule:

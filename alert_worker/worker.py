@@ -7,7 +7,7 @@ graceful shutdown) — per the plan, this is the exact template to follow, adapt
 Each tick (~60s):
   1. Atomically claim every enabled rule whose next_eval_at has arrived, stamping a fresh
      next_eval_at = now + frequency in the same find_one_and_update — the same atomic-claim
-     idiom campaign_dialer_worker/backend/campaign_execution.py and bots.py's publish
+     idiom backend/campaign_execution.py and bots.py's publish
      endpoint use, so two overlapping worker instances (e.g. mid-deploy) can never both
      claim and double-evaluate the same rule.
   2. For each claimed rule: re-resolve the creator's bot scope fresh (never trust a stored

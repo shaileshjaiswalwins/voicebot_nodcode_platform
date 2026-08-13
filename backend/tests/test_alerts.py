@@ -6,10 +6,8 @@ from backend import auth as auth_module
 from backend import db as db_module
 from backend.metrics import compute_metric
 
-# alert_worker was being built concurrently with this test file per the plan — it landed,
-# so _evaluate_rule is importable and exercised directly below (see the incident-lifecycle
-# tests). If this import ever breaks again, fall back to driving alert_incidents/alert_rules
-# directly with the same open/resolve semantics the plan describes, rather than blocking.
+# _evaluate_rule is exercised directly below (see the incident-lifecycle tests) since
+# incident open/resolve logic lives in the worker, not the router.
 from alert_worker.worker import _claim_due_rules, _evaluate_rule
 
 

@@ -913,6 +913,12 @@ class AlertIncident(BaseModel):
 
     model_config = {"populate_by_name": True}
 
+    @model_validator(mode="after")
+    def _check_status_resolved_at_pairing(self) -> "AlertIncident":
+        if (self.status == "resolved") != (self.resolved_at is not None):
+            raise ValueError("resolved_at must be set if and only if status is 'resolved'")
+        return self
+
 
 class MapNumberToAgentRequest(BaseModel):
     """Maps one agent to one inbound number. phone_number=None clears the agent's mapping.
