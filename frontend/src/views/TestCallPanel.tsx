@@ -283,7 +283,14 @@ export function TestCallPanel({
 
   useEffect(() => {
     loadVersions();
-  }, [selectedBot?._id]);
+    // preferredVersionId is intentionally included: switching versions inside an
+    // already-open Builder session (e.g. clicking a different row in Version history)
+    // must re-sync which version Test Agent defaults to. Without this, the panel kept
+    // testing whatever version was selected when it first mounted for this bot —
+    // switching to a draft afterward silently kept testing the old (often published)
+    // version, with no visible indication the panel hadn't followed along.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBot?._id, preferredVersionId]);
 
   function updateField(key: keyof TestForm, value: string) {
     setForm((current) => ({ ...current, [key]: value }));
