@@ -51,6 +51,86 @@ const baseProps = {
   builderMode: 'advanced' as const,
 };
 
+describe('BuilderView — version history switch guards unsaved changes', () => {
+  function openVersionHistory() {
+    fireEvent.click(screen.getByRole('button', { name: /version history/i }));
+  }
+
+  // BuilderView tracks "dirty" by diffing the current `configText` prop against the value
+  // it captured at mount for the current `editingVersionId` (see its own isDirtyConfig).
+  // Passing an already-edited configText straight into the initial render doesn't exercise
+  // that — it looks identical to "just loaded this version". A real edit has to arrive via
+  // a prop update (rerender) after the initial mount, same as it would from App.tsx after
+  // the PM types into a field.
+  function renderAndEdit(onSelectVersion: (v: BotVersion) => void, versions: BotVersion[]) {
+    const utils = render(
+      <BuilderView
+        {...baseProps}
+        versions={versions}
+        editingVersionId="v1"
+        configText={JSON.stringify(defaultConfig, null, 2)}
+        onSelectVersion={onSelectVersion}
+      />
+    );
+    utils.rerender(
+      <BuilderView
+        {...baseProps}
+        versions={versions}
+        editingVersionId="v1"
+        configText={JSON.stringify({ ...defaultConfig, agent_name: 'Edited' }, null, 2)}
+        onSelectVersion={onSelectVersion}
+      />
+    );
+    return utils;
+  }
+
+  it('confirms before discarding unsaved edits when a version row is clicked', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const onSelectVersion = vi.fn();
+    const v1 = makeVersion({ _id: 'v1', version: 1 });
+    const v2 = makeVersion({ _id: 'v2', version: 2 });
+    renderAndEdit(onSelectVersion, [v1, v2]);
+    openVersionHistory();
+    fireEvent.click(screen.getByText('v2'));
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(onSelectVersion).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('switches versions without prompting when there are no unsaved edits', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const onSelectVersion = vi.fn();
+    const v1 = makeVersion({ _id: 'v1', version: 1 });
+    const v2 = makeVersion({ _id: 'v2', version: 2 });
+    render(
+      <BuilderView
+        {...baseProps}
+        versions={[v1, v2]}
+        editingVersionId="v1"
+        configText={JSON.stringify(defaultConfig, null, 2)}
+        onSelectVersion={onSelectVersion}
+      />
+    );
+    openVersionHistory();
+    fireEvent.click(screen.getByText('v2'));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(onSelectVersion).toHaveBeenCalledWith(v2);
+    confirmSpy.mockRestore();
+  });
+
+  it('proceeds with the switch when the user confirms discarding unsaved edits', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const onSelectVersion = vi.fn();
+    const v1 = makeVersion({ _id: 'v1', version: 1 });
+    const v2 = makeVersion({ _id: 'v2', version: 2 });
+    renderAndEdit(onSelectVersion, [v1, v2]);
+    openVersionHistory();
+    fireEvent.click(screen.getByText('v2'));
+    expect(onSelectVersion).toHaveBeenCalledWith(v2);
+    confirmSpy.mockRestore();
+  });
+});
+
 describe('BuilderView — speech-to-speech field cleanup', () => {
   it('does not show the dead Gemini-Live-only fields (Voice, Model, Silence/Prefix padding)', () => {
     render(<BuilderView {...baseProps} />);

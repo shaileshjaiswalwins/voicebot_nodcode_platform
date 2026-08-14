@@ -3,7 +3,7 @@ import {
   AlertTriangle, ChevronLeft, Database, GitBranch, History, Info, Pencil, PhoneCall, Plus,
   Rocket, Save, ShieldCheck, X
 } from 'lucide-react';
-import type { Bot as BotType, BotVersion, LanguageOption, PricingConfig } from '../api';
+import type { Bot as BotType, BotVersion, LanguageOption, PricingConfig, EvalRun, EvalScenario } from '../api';
 import type { RuntimeConfig, BuilderMode } from '../types';
 import { defaultConfig, SARVAM_TTS_VOICES, SARVAM_TTS_LANGUAGES } from '../constants/ui';
 import { StatusPill } from '../components/StatusPill';
@@ -52,7 +52,11 @@ export function BuilderView({
   liveCallsByVersion,
   builderMode,
   onToggleMode,
-  testPanelSlot
+  testPanelSlot,
+  evalRuns,
+  onRunEvals,
+  evalsRunning,
+  onStopEvals,
 }: {
   selectedBot?: BotType;
   versions: BotVersion[];
@@ -89,6 +93,10 @@ export function BuilderView({
    * rather than lifting that state up here, so the drawer can host it without duplicating
    * where that state lives. */
   testPanelSlot?: React.ReactNode;
+  evalRuns?: EvalRun[];
+  onRunEvals?: (scenarios?: EvalScenario[]) => void;
+  evalsRunning?: boolean;
+  onStopEvals?: () => void;
 }) {
   const value = config.ok ? config.value : defaultConfig;
   const isAdvanced = builderMode === 'advanced';
@@ -236,6 +244,19 @@ export function BuilderView({
 
   const editingVer = versions.find(v => v._id === editingVersionId);
   const isPublishedVer = editingVer?.state === 'published';
+
+  // Clicking a version row in the history panel swaps `configText` for that version's
+  // saved config with no save of its own — previously this silently discarded any
+  // unsaved edits (the PM would edit Post-Call Analysis fields, open Version history to
+  // check something, and lose the edits with no warning at all, indistinguishable from
+  // "my save didn't work"). Guard it the same way `window.confirm` already guards
+  // destructive actions elsewhere (see AlertsPanel.tsx's delete-rule confirm).
+  function handleVersionRowClick(version: BotVersion) {
+    if (isDirtyConfig && !window.confirm('You have unsaved changes that will be lost if you switch versions. Continue without saving?')) {
+      return;
+    }
+    onSelectVersion?.(version);
+  }
 
   // On a deep-link reload (e.g. a hard refresh on /bots/:id) this view can mount before
   // App.tsx's loadBots() resolves, so selectedBot is briefly undefined even though
@@ -423,6 +444,10 @@ export function BuilderView({
               onRefineWorkflow={(instruction, currentWorkflow, currentFunctions, currentGlobalPrompt) =>
                 api.refineWorkflow(instruction, currentWorkflow || { nodes: [], edges: [] }, currentFunctions, currentGlobalPrompt)
               }
+              evalRuns={evalRuns}
+              onRunEvals={onRunEvals}
+              evalsRunning={evalsRunning}
+              onStopEvals={onStopEvals}
             />
           </div>
         </div>
@@ -453,7 +478,7 @@ export function BuilderView({
                   <div
                     className={`version-row${version._id === editingVersionId ? ' active' : ''}`}
                     key={version._id}
-                    onClick={() => onSelectVersion?.(version)}
+                    onClick={() => handleVersionRowClick(version)}
                     style={{ cursor: 'pointer' }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
