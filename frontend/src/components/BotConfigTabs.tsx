@@ -953,21 +953,12 @@ export function BotConfigTabs({
 
       {tab === 'analysis' && (
         <div role="tabpanel">
-          {!isWorkflow && Array.isArray(value.analysis_fields) && value.analysis_fields.length > 0 ? (
-            <InertNotice>
-              This bot's type is "{value.bot_type || 'standard'}", not Workflow Builder — the {value.analysis_fields.length}{' '}
-              field{value.analysis_fields.length === 1 ? '' : 's'} below are saved but a test/live call will never run them.
-              Calls fall through to the legacy lead-qualification classifier instead. Switch this bot to a Workflow Builder
-              bot (Basic tab) to actually use them.
-            </InertNotice>
-          ) : (
-            <div className="notice" style={{ marginBottom: '0.75rem' }}>
-              Runs through a separate generic extractor (unrelated to the "Analysis prompt override" on
-              the Prompt tab, which only applies to the legacy lead-qualification classifier). If this
-              bot is a Workflow Builder bot and has at least one field below, calls use this schema
-              instead of the legacy classifier; otherwise the legacy path runs unchanged.
-            </div>
-          )}
+          <div className="notice" style={{ marginBottom: '0.75rem' }}>
+            Runs through a separate generic extractor (unrelated to the "Analysis prompt override" on
+            the Prompt tab, which only applies to the legacy lead-qualification classifier). If this
+            bot has at least one field below, calls use this schema instead of the legacy classifier;
+            otherwise the legacy path runs unchanged.
+          </div>
           <AnalysisFieldsEditor
             fields={Array.isArray(value.analysis_fields) ? (value.analysis_fields as AnalysisFieldDef[]) : []}
             onChange={(next) => onUpdateConfig('analysis_fields', next)}

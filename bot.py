@@ -333,16 +333,24 @@ async def _save_transcript_to_dashboard_db(
         _doc["provider_config"] = provider_config
 
     # Gate between the two analysis systems (Part 2 of the post-call-analysis revamp):
-    # a Workflow Builder bot with a PM-configured `analysis_fields` schema gets the new
-    # generic schema-driven extractor instead of the legacy qualification-schema
-    # classifier — its output is written to a separate `analysis_fields_result` field so
-    # it never collides with the legacy `analysis` object. Any other bot (legacy/campaign,
-    # or a workflow bot with no schema configured) falls through to today's
-    # generate_call_analysis path completely unchanged.
+    # any bot with a PM-configured `analysis_fields` schema gets the new generic
+    # schema-driven extractor instead of the legacy qualification-schema classifier — its
+    # output is written to a separate `analysis_fields_result` field so it never collides
+    # with the legacy `analysis` object. A bot with no schema configured falls through to
+    # today's generate_call_analysis path completely unchanged.
+    #
+    # This used to also require bot_type == "workflow", on the assumption that "standard"
+    # bots are all outbound lead-qualification/campaign bots the legacy classifier is
+    # tuned for. That assumption doesn't hold — "standard" is also used for plenty of
+    # bots (support, HR, appointment) with no qualification_schema at all, which is
+    # exactly the "legacy classifier's output degenerates into near-meaninglessness"
+    # problem this revamp was written to fix, just as much as it applies to workflow
+    # bots. The presence of a configured schema is a strictly better signal of intent
+    # than bot_type: a PM who bothered to define fields wants them used, whatever the
+    # bot's structural type.
     _analysis_fields = (bot_config or {}).get("analysis_fields") or []
-    _is_workflow_bot = (bot_config or {}).get("bot_type") == "workflow"
 
-    if _is_workflow_bot and _analysis_fields:
+    if _analysis_fields:
         from backend.post_call_analysis import empty_analysis_result, generate_generic_analysis
 
         try:
@@ -363,13 +371,13 @@ async def _save_transcript_to_dashboard_db(
         # lets a PM viewing the dashboard tell "the model said no/0/empty" apart from
         # "this call was skipped or Gemini errored, nothing was ever really analyzed".
         _doc["analysis_fields_status"] = generic_status
-        # No legacy `analysis` object for this bot — a Workflow bot with its own
-        # PM-defined schema has nothing meaningful to put in the legacy lead-qualification
-        # shape (call_outcome would always be a fabricated 2-value guess via
-        # fallback_analysis/status_to_outcome; see backend/models.py's AlertCallOutcome
-        # docstring for the same gap on the alerting side). Leaving `analysis` unset here
-        # is more honest than writing a value that looks real but isn't — Transcript
-        # Viewer only renders the "Call analysis" card when `analysis` is present.
+        # No legacy `analysis` object for this bot — a bot with its own PM-defined schema
+        # has nothing meaningful to put in the legacy lead-qualification shape (call_outcome
+        # would always be a fabricated 2-value guess via fallback_analysis/status_to_outcome;
+        # see backend/models.py's AlertCallOutcome docstring for the same gap on the
+        # alerting side). Leaving `analysis` unset here is more honest than writing a value
+        # that looks real but isn't — Transcript Viewer only renders the "Call analysis"
+        # card when `analysis` is present.
         analysis = None
         b2b_score = None
     else:

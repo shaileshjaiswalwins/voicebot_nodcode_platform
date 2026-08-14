@@ -235,8 +235,8 @@ class DynamicVariable(BaseModel):
 
 
 class AnalysisFieldDef(BaseModel):
-    """One PM-defined post-call analysis field for a Workflow Builder bot — the generic,
-    per-bot-configurable counterpart to the legacy classifier's hardcoded qualification
+    """One PM-defined post-call analysis field for a bot — the generic, per-bot-configurable
+    counterpart to the legacy classifier's hardcoded qualification
     schema. See backend/post_call_analysis.py for the extractor that reads this list and
     backend/routers/bots.py for the list-level save-time validation it can't own itself
     (unique keys, field-count cap); the enum_options-required-for-type=="enum" invariant
@@ -317,12 +317,15 @@ class BotConfig(BaseModel):
     # never validate this yourself elsewhere, call analysis_prompts.validate_prompt_template.
     analysis_prompt: str = ""
 
-    # PM-defined generic post-call analysis schema for Workflow Builder bots (bot_type ==
-    # "workflow"). When non-empty, bot.py::_save_transcript_to_dashboard_db runs the
-    # generic schema-driven extractor (backend/post_call_analysis.py) instead of the
-    # legacy qualification-schema classifier (callback_worker/analysis.py), and persists
-    # its output to a separate field so the two systems never collide. Empty (the default)
-    # means "use the legacy classifier" — zero behavior change for every existing bot.
+    # PM-defined generic post-call analysis schema, for any bot type. When non-empty,
+    # bot.py::_save_transcript_to_dashboard_db runs the generic schema-driven extractor
+    # (backend/post_call_analysis.py) instead of the legacy qualification-schema classifier
+    # (callback_worker/analysis.py), and persists its output to a separate field so the two
+    # systems never collide. Empty (the default) means "use the legacy classifier" — zero
+    # behavior change for every existing bot. Not gated on bot_type=="workflow": that was
+    # tried first, but "standard" bot_type is also used for plenty of non-qualification
+    # bots (support, HR, appointment) with no qualification_schema — presence of a
+    # configured schema is a better signal than the bot's structural type.
     analysis_fields: list[AnalysisFieldDef] = Field(default_factory=list)
 
     # Real bot_pipeline.py runtime knobs (backend/evals.py:307-323).

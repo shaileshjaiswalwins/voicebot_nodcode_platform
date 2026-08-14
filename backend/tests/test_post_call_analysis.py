@@ -696,7 +696,14 @@ def test_workflow_bot_without_analysis_fields_falls_through_to_legacy_path(bot_m
 
 
 @pytest.mark.parametrize("bot_type", ["standard", "campaign"])
-def test_non_workflow_bot_always_takes_legacy_path_regardless_of_analysis_fields(bot_module, monkeypatch, bot_type):
+def test_non_workflow_bot_with_analysis_fields_still_uses_generic_extractor(bot_module, monkeypatch, bot_type):
+    """The gate used to also require bot_type == "workflow", on the assumption that
+    "standard" bots are all outbound lead-qualification/campaign bots the legacy
+    classifier is tuned for. That assumption didn't hold — "standard" is also used for
+    non-qualification bots (support, HR, appointment) with no qualification_schema at
+    all, which is exactly the "legacy classifier degenerates into meaninglessness"
+    problem this feature was built to fix. Presence of a configured schema is now the
+    only signal that matters, regardless of bot_type."""
     import backend.post_call_analysis as post_call_analysis_module
     import callback_worker.analysis as legacy_analysis_module
 
@@ -718,9 +725,6 @@ def test_non_workflow_bot_always_takes_legacy_path_regardless_of_analysis_fields
     monkeypatch.setattr(legacy_analysis_module, "generate_call_analysis", _fake_legacy_call_analysis)
     monkeypatch.setattr(legacy_analysis_module, "generate_b2b_score", _fake_b2b_score)
 
-    # Even with analysis_fields configured, a non-workflow bot_type must never route
-    # into the generic extractor — bot_type is a Literal["standard", "workflow"], so
-    # "campaign" exercises the "any bot_type other than workflow" branch defensively.
     bot_config = {
         "bot_type": bot_type,
         "analysis_fields": [{"key": "resolved", "label": "Resolved", "type": "boolean"}],
@@ -729,6 +733,45 @@ def test_non_workflow_bot_always_takes_legacy_path_regardless_of_analysis_fields
     asyncio.run(
         bot_module._save_transcript_to_dashboard_db(
             _base_mongo_doc(), bot_id="bot-3", bot_config=bot_config,
+        )
+    )
+
+    assert generic_called["count"] == 1
+    assert legacy_called["count"] == 0
+    saved = bot_module._test_saved_docs[0]
+    assert saved["analysis_fields_result"] == {"resolved": True}
+    assert saved["analysis_fields_status"] == "ok"
+    assert "analysis" not in saved
+
+
+@pytest.mark.parametrize("bot_type", ["standard", "campaign", "workflow"])
+def test_bot_without_analysis_fields_always_takes_legacy_path_regardless_of_bot_type(bot_module, monkeypatch, bot_type):
+    import backend.post_call_analysis as post_call_analysis_module
+    import callback_worker.analysis as legacy_analysis_module
+
+    generic_called = {"count": 0}
+    legacy_called = {"count": 0}
+
+    async def _fake_generic(*args, **kwargs):
+        generic_called["count"] += 1
+        return "ok", {"resolved": True}
+
+    async def _fake_legacy_call_analysis(*args, **kwargs):
+        legacy_called["count"] += 1
+        return {"call_outcome": "Approved"}
+
+    async def _fake_b2b_score(*args, **kwargs):
+        return {"deal_value": "100"}
+
+    monkeypatch.setattr(post_call_analysis_module, "generate_generic_analysis", _fake_generic)
+    monkeypatch.setattr(legacy_analysis_module, "generate_call_analysis", _fake_legacy_call_analysis)
+    monkeypatch.setattr(legacy_analysis_module, "generate_b2b_score", _fake_b2b_score)
+
+    bot_config = {"bot_type": bot_type, "analysis_fields": []}
+
+    asyncio.run(
+        bot_module._save_transcript_to_dashboard_db(
+            _base_mongo_doc(), bot_id="bot-4", bot_config=bot_config,
         )
     )
 

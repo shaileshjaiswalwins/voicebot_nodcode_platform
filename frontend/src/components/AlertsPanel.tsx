@@ -236,8 +236,9 @@ function CreateAlertDialog({
               placeholder="e.g. Approved — leave blank for all outcomes"
             />
             <small style={{ color: 'var(--muted)' }}>
-              Applies to legacy/campaign bot calls only. Workflow Builder bots always record either
-              "Abusive Lead" or "Could Not Confirm" here, so other values will never match those bots' calls.
+              Applies to calls from bots using the legacy classifier only. A bot with Post-Call Analysis
+              fields configured (Builder → Post-Call Analysis tab) records no call_outcome at all, so this
+              filter will never match its calls — check that bot's "PM analysis fields" instead.
             </small>
           </label>
         )}

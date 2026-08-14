@@ -94,7 +94,7 @@ describe('AlertsPanel create-alert dialog', () => {
     expect(payload.filters.call_outcome).toBeUndefined();
   });
 
-  it('warns that the call_outcome filter is unreachable for Workflow Builder bots', async () => {
+  it('warns that the call_outcome filter is unreachable for bots using Post-Call Analysis fields', async () => {
     render(<AlertsPanel bots={[]} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /create alert/i }));
@@ -103,7 +103,7 @@ describe('AlertsPanel create-alert dialog', () => {
     fireEvent.change(metricSelect, { target: { value: 'task_completion_rate_pct' } });
 
     await screen.findByPlaceholderText(/leave blank for all outcomes/i);
-    expect(screen.getByText(/workflow builder bots always record either/i)).toBeInTheDocument();
+    expect(screen.getByText(/records no call_outcome at all/i)).toBeInTheDocument();
   });
 });
 
