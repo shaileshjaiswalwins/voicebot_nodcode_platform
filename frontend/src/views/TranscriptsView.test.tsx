@@ -136,6 +136,42 @@ describe('TranscriptsView PM analysis fields', () => {
     );
     expect(screen.queryByText('PM analysis fields')).not.toBeInTheDocument();
   });
+
+  it('hides the empty "Call analysis" placeholder when PM analysis fields already cover this call', () => {
+    // A Workflow bot with a configured schema has no legacy `analysis` object at all
+    // (bot.py no longer fabricates one via fallback_analysis) — showing an empty "Call
+    // analysis" card next to a populated "PM analysis fields" card would read as broken.
+    const transcript = makeTranscript({
+      analysis: undefined,
+      analysis_fields_status: 'ok',
+      analysis_fields_result: { wants_callback: false },
+    });
+    render(
+      <TranscriptsView
+        {...baseProps}
+        transcripts={[transcript]}
+        selectedTranscript={transcript}
+        bots={[]}
+      />
+    );
+    expect(screen.queryByText('Call analysis')).not.toBeInTheDocument();
+    expect(screen.queryByText(/no analysis available/i)).not.toBeInTheDocument();
+    expect(screen.getByText('PM analysis fields')).toBeInTheDocument();
+  });
+
+  it('still shows the empty "Call analysis" placeholder when there are no PM fields either', () => {
+    const transcript = makeTranscript({ analysis: undefined, analysis_fields_result: {} });
+    render(
+      <TranscriptsView
+        {...baseProps}
+        transcripts={[transcript]}
+        selectedTranscript={transcript}
+        bots={[]}
+      />
+    );
+    expect(screen.getByText('Call analysis')).toBeInTheDocument();
+    expect(screen.getByText(/no analysis available/i)).toBeInTheDocument();
+  });
 });
 
 describe('TranscriptsView date range validation', () => {

@@ -363,14 +363,15 @@ async def _save_transcript_to_dashboard_db(
         # lets a PM viewing the dashboard tell "the model said no/0/empty" apart from
         # "this call was skipped or Gemini errored, nothing was ever really analyzed".
         _doc["analysis_fields_status"] = generic_status
-        # Still call the legacy classifier's cheap deterministic fallback so `analysis`
-        # is never entirely absent from the doc — Transcript Viewer/dashboard code that
-        # reads `analysis.call_outcome` etc. keeps working for a workflow bot too, just
-        # with the deterministic status-based value rather than a full LLM classification.
-        from callback_worker.analysis import fallback_analysis
-
-        analysis = fallback_analysis(mongo_doc.get("status", "completed"))
-        b2b_score = {"deal_value": "", "lead_intent_score": "", "urgency_flag": "no"}
+        # No legacy `analysis` object for this bot — a Workflow bot with its own
+        # PM-defined schema has nothing meaningful to put in the legacy lead-qualification
+        # shape (call_outcome would always be a fabricated 2-value guess via
+        # fallback_analysis/status_to_outcome; see backend/models.py's AlertCallOutcome
+        # docstring for the same gap on the alerting side). Leaving `analysis` unset here
+        # is more honest than writing a value that looks real but isn't — Transcript
+        # Viewer only renders the "Call analysis" card when `analysis` is present.
+        analysis = None
+        b2b_score = None
     else:
         try:
             from callback_worker.analysis import fallback_analysis, generate_b2b_score, generate_call_analysis
@@ -392,19 +393,20 @@ async def _save_transcript_to_dashboard_db(
             analysis = fallback_analysis(mongo_doc.get("status", "completed"))
             b2b_score = {"deal_value": "", "lead_intent_score": "", "urgency_flag": "no"}
 
-    _doc["analysis"] = {
-        "call_outcome": analysis.get("call_outcome", ""),
-        "call_outcome_description": analysis.get("call_outcome_description", ""),
-        "call_summary": analysis.get("call_summary", ""),
-        "is_business": analysis.get("is_business", ""),
-        "business_name": analysis.get("business_name", ""),
-        "business_city": analysis.get("business_city", ""),
-        "qna": analysis.get("qna") or [],
-        "product_change": analysis.get("product_change") or {},
-        "deal_value": b2b_score.get("deal_value", ""),
-        "lead_intent_score": b2b_score.get("lead_intent_score", ""),
-        "urgency_flag": b2b_score.get("urgency_flag", "no"),
-    }
+    if analysis is not None:
+        _doc["analysis"] = {
+            "call_outcome": analysis.get("call_outcome", ""),
+            "call_outcome_description": analysis.get("call_outcome_description", ""),
+            "call_summary": analysis.get("call_summary", ""),
+            "is_business": analysis.get("is_business", ""),
+            "business_name": analysis.get("business_name", ""),
+            "business_city": analysis.get("business_city", ""),
+            "qna": analysis.get("qna") or [],
+            "product_change": analysis.get("product_change") or {},
+            "deal_value": b2b_score.get("deal_value", ""),
+            "lead_intent_score": b2b_score.get("lead_intent_score", ""),
+            "urgency_flag": b2b_score.get("urgency_flag", "no"),
+        }
 
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, lambda: _get_platform_transcripts_collection().insert_one(_doc))

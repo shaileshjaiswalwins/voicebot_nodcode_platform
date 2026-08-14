@@ -429,14 +429,19 @@ export function TranscriptsView({
                   </div>
                 )}
               </div>
-            ) : (
+            ) : !(selectedTranscript.analysis_fields_result && Object.keys(selectedTranscript.analysis_fields_result).length > 0) ? (
+              // Skip the empty-state placeholder when "PM analysis fields" below already
+              // covers this call — a Workflow bot with a configured schema has no legacy
+              // `analysis` object at all (bot.py no longer fabricates one), and showing an
+              // empty "Call analysis" card next to a populated "PM analysis fields" card
+              // reads as broken rather than as "nothing to show here".
               <div className="analysis-section">
                 <div className="section-heading">
                   <h3>Call analysis</h3>
                 </div>
                 <p className="muted">No analysis available for this call yet.</p>
               </div>
-            )}
+            ) : null}
             {selectedTranscript.analysis_fields_result && Object.keys(selectedTranscript.analysis_fields_result).length > 0 && (
               <div className="analysis-section">
                 <div className="section-heading">

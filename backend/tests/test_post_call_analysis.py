@@ -600,10 +600,11 @@ def test_workflow_bot_with_analysis_fields_writes_result_and_skips_legacy_classi
     saved = bot_module._test_saved_docs[0]
     assert saved["analysis_fields_result"] == {"resolved": True}
     assert saved["analysis_fields_status"] == "ok"
-    # Legacy `analysis` object is still populated via the cheap deterministic
-    # fallback (not the real Gemini classifier), so old dashboard code keeps working.
-    assert "analysis" in saved
-    assert saved["analysis"]["call_outcome"] != "Approved"
+    # No legacy `analysis` object at all for a schema-driven Workflow bot — writing a
+    # fabricated fallback value (via status_to_outcome's 2-value guess) would be worse
+    # than omitting the field, since it looks real but isn't (see AlertCallOutcome's
+    # docstring in backend/models.py for the same gap on the alerting side).
+    assert "analysis" not in saved
 
 
 def test_workflow_bot_generic_extraction_exception_falls_back_to_typed_empty_result(bot_module, monkeypatch):
