@@ -235,6 +235,10 @@ function CreateAlertDialog({
               onChange={(e) => setDraft({ ...draft, filters: { ...draft.filters, call_outcome: (e.target.value || undefined) as AlertCallOutcome | undefined } })}
               placeholder="e.g. Approved — leave blank for all outcomes"
             />
+            <small style={{ color: 'var(--muted)' }}>
+              Applies to legacy/campaign bot calls only. Workflow Builder bots always record either
+              "Abusive Lead" or "Could Not Confirm" here, so other values will never match those bots' calls.
+            </small>
           </label>
         )}
 

@@ -93,6 +93,18 @@ describe('AlertsPanel create-alert dialog', () => {
     const payload = vi.mocked(api.createAlertRule).mock.calls[0][0];
     expect(payload.filters.call_outcome).toBeUndefined();
   });
+
+  it('warns that the call_outcome filter is unreachable for Workflow Builder bots', async () => {
+    render(<AlertsPanel bots={[]} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /create alert/i }));
+
+    const metricSelect = await screen.findByLabelText(/metric/i);
+    fireEvent.change(metricSelect, { target: { value: 'task_completion_rate_pct' } });
+
+    await screen.findByPlaceholderText(/leave blank for all outcomes/i);
+    expect(screen.getByText(/workflow builder bots always record either/i)).toBeInTheDocument();
+  });
 });
 
 describe('AlertsPanel rules list', () => {

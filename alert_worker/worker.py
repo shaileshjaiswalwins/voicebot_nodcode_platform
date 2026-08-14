@@ -27,7 +27,7 @@ from pydantic import ValidationError
 from backend.auth import resolve_owned_bot_ids
 from backend.db import alert_incidents, alert_rules, users
 from backend.metrics import compute_metric
-from backend.models import AlertRule
+from backend.models import AlertIncident, AlertRule
 
 from .config import LOG_DIR, POLL_INTERVAL_SEC
 
@@ -194,7 +194,7 @@ def _evaluate_rule(rule: dict, now: datetime) -> None:
     open_incident = alert_incidents.find_one({"rule_id": rule_id, "status": "open"})
 
     if breached and not open_incident:
-        alert_incidents.insert_one({
+        new_incident = {
             "rule_id": rule_id,
             "rule_name": rule.get("name", ""),
             "bot_ids": bot_ids or [],
@@ -204,16 +204,31 @@ def _evaluate_rule(rule: dict, now: datetime) -> None:
             "status": "open",
             "triggered_at": now,
             "resolved_at": None,
-        })
+        }
+        # Actually construct + validate the model before writing — a placeholder _id is
+        # substituted purely to satisfy AlertIncident.id (Mongo assigns the real one on
+        # insert), so this exercises _check_status_resolved_at_pairing for real instead of
+        # only declaring the invariant. model_dump(by_alias=True) is then stripped of the
+        # placeholder id so insert_one still lets Mongo generate the real _id.
+        validated = AlertIncident.model_validate({**new_incident, "_id": "pending"})
+        to_insert = validated.model_dump(by_alias=True, exclude={"id"})
+        alert_incidents.insert_one(to_insert)
         logger.info(
             f"[ALERT-WORKER] rule={rule_id} name={rule.get('name')!r} BREACH opened | "
             f"metric={rule['metric']} value={current_value} comparator={rule['comparator']} "
             f"threshold={rule['threshold_value']}"
         )
     elif not breached and open_incident:
+        resolve_set = {"status": "resolved", "resolved_at": now, "current_value": current_value}
+        # Validate the document as it will look POST-update — triggers
+        # _check_status_resolved_at_pairing against the real resulting shape without
+        # changing the atomicity of the actual write (we still issue the same
+        # optimistic-filter update_one below, keyed on {"_id": ..., "status": "open"},
+        # as before).
+        AlertIncident.model_validate({**open_incident, **resolve_set, "_id": str(open_incident["_id"])})
         alert_incidents.update_one(
             {"_id": open_incident["_id"], "status": "open"},
-            {"$set": {"status": "resolved", "resolved_at": now, "current_value": current_value}},
+            {"$set": resolve_set},
         )
         logger.info(f"[ALERT-WORKER] rule={rule_id} name={rule.get('name')!r} incident RESOLVED | value={current_value}")
     elif breached and open_incident:

@@ -238,8 +238,9 @@ class AnalysisFieldDef(BaseModel):
     """One PM-defined post-call analysis field for a Workflow Builder bot — the generic,
     per-bot-configurable counterpart to the legacy classifier's hardcoded qualification
     schema. See backend/post_call_analysis.py for the extractor that reads this list and
-    backend/routers/bots.py for save-time validation (unique keys, enum_options required
-    for type == "enum", field-count cap)."""
+    backend/routers/bots.py for the list-level save-time validation it can't own itself
+    (unique keys, field-count cap); the enum_options-required-for-type=="enum" invariant
+    is enforced right here via `_check_enum_options_present`."""
 
     key: str
     label: str

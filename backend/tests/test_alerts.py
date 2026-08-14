@@ -227,6 +227,28 @@ def test_compute_metric_task_completion_rate_pct_with_no_calls_is_zero():
     assert compute_metric("task_completion_rate_pct", ["bot-1"], window_start, window_end) == 0.0
 
 
+def test_compute_metric_call_outcome_filter_unreachable_for_workflow_bot_transcripts():
+    # Locks in a known cross-feature gap: bot.py's workflow-bot gate means a Workflow
+    # Builder bot's transcript can only ever have analysis.call_outcome of "Abusive Lead"
+    # or "Could Not Confirm" (see callback_worker/analysis.py::status_to_outcome and
+    # backend/tests/test_post_call_analysis.py's `!= "Approved"` assertion). Any of the
+    # other AlertCallOutcome values (e.g. "Not Interested") can never match a workflow
+    # bot's calls, so an alert rule filtered on one of those values silently never fires.
+    window_start = datetime.now(timezone.utc) - timedelta(hours=1)
+    window_end = datetime.now(timezone.utc) + timedelta(minutes=1)
+    _seed_transcript(analysis={"call_outcome": "Could Not Confirm"})
+
+    # Positive control: the value the workflow gate can actually produce does match.
+    assert compute_metric(
+        "task_completion_rate_pct", ["bot-1"], window_start, window_end, call_outcome="Could Not Confirm"
+    ) == 100.0
+
+    # One of the other 17 legacy AlertCallOutcome values is unreachable for this bot type.
+    assert compute_metric(
+        "task_completion_rate_pct", ["bot-1"], window_start, window_end, call_outcome="Not Interested"
+    ) == 0.0
+
+
 def test_compute_metric_session_error_count():
     window_start = datetime.now(timezone.utc) - timedelta(hours=1)
     window_end = datetime.now(timezone.utc) + timedelta(minutes=1)

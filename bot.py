@@ -353,7 +353,7 @@ async def _save_transcript_to_dashboard_db(
                 gemini_connect_failed=bool(mongo_doc.get("gemini_connect_failed")),
             )
         except Exception as e:
-            logger.warning(f"[ANALYSIS] Generic extraction failed for room={mongo_doc.get('room_name')!r}: {e}")
+            logger.exception(f"[ANALYSIS] Generic extraction failed for room={mongo_doc.get('room_name')!r}: {e}")
             generic_status = "failed"
             generic_result = empty_analysis_result(_analysis_fields)
 
