@@ -706,14 +706,21 @@ function AppShell() {
     return JSON.stringify(withIds, null, 2);
   }
 
-  // Load bot versions when a bot is selected / edited
-  const loadBotVersions = useCallback(async (botId: string) => {
+  // Load bot versions when a bot is selected / edited. `preferredVersionId`, when given
+  // and still present in the refreshed list, wins over the draft/active/first heuristic —
+  // a bot can have several draft versions at once (each "New version" click forks another
+  // one rather than replacing the current draft), so after e.g. updating v3 in place, the
+  // heuristic could easily land on a DIFFERENT draft (v4, v1, whichever the fetch returns
+  // first) and silently swap the editor to show its config instead — reading exactly like
+  // "the field I just added vanished", when really the save succeeded but the UI moved on.
+  const loadBotVersions = useCallback(async (botId: string, preferredVersionId?: string) => {
     try {
       const bundle = await api.bot(botId);
       setVersions(bundle.versions);
+      const preferred = preferredVersionId && bundle.versions.find((v) => v._id === preferredVersionId);
       const active = bundle.versions.find((v) => v._id === bundle.bot.active_version_id);
       const draft = bundle.versions.find((v) => v.state === 'draft');
-      const initial = draft || active || bundle.versions[0];
+      const initial = preferred || draft || active || bundle.versions[0];
       if (initial) {
         setEditingVersionId(initial._id);
         setConfigText(normalizedConfigText(initial.config));
@@ -1071,8 +1078,7 @@ function AppShell() {
     try {
       const result = await api.saveDraft(selectedBot._id, parsedConfig.value);
       await loadBots();
-      await loadBotVersions(selectedBot._id);
-      setEditingVersionId(result.draft_version_id);
+      await loadBotVersions(selectedBot._id, result.draft_version_id);
       setSaveState('idle');
       showToast('Draft saved');
     } catch (err) {
@@ -1089,9 +1095,9 @@ function AppShell() {
     if (!selectedBot) return;
     setPublishState('running');
     try {
-      await api.publish(selectedBot._id);
+      const result = await api.publish(selectedBot._id);
       await loadBots();
-      await loadBotVersions(selectedBot._id);
+      await loadBotVersions(selectedBot._id, result.active_version_id);
       setPublishState('idle');
       setShowPublishConfirm(false);
       showToast('Agent published');
@@ -1108,8 +1114,7 @@ function AppShell() {
     try {
       const result = await api.rollback(selectedBot._id, versionId);
       await loadBots();
-      await loadBotVersions(selectedBot._id);
-      setEditingVersionId(result.draft_version_id);
+      await loadBotVersions(selectedBot._id, result.draft_version_id);
       setRollbackState((prev) => ({ ...prev, [key]: 'idle' }));
       showToast('Rolled back to a new draft');
     } catch (err) {
@@ -1139,7 +1144,7 @@ function AppShell() {
     setUpdateVersionState('running');
     try {
       await api.updateVersion(selectedBot._id, versionId, parsedConfig.value);
-      await loadBotVersions(selectedBot._id);
+      await loadBotVersions(selectedBot._id, versionId);
       setUpdateVersionState('idle');
       showToast('Version updated');
     } catch (err) {
@@ -1154,8 +1159,11 @@ function AppShell() {
     try {
       const result = await api.unpublish(selectedBot._id);
       await loadBots();
-      await loadBotVersions(selectedBot._id);
-      setEditingVersionId(result.draft_version_id);
+      // loadBotVersions already lands on result.draft_version_id (and its matching
+      // configText) via `preferredVersionId` — no separate setEditingVersionId needed,
+      // which previously left editingVersionId and configText pointing at different
+      // versions whenever another draft also existed.
+      await loadBotVersions(selectedBot._id, result.draft_version_id);
       setUnpublishState('idle');
       showToast('Moved back to draft');
     } catch (err) {

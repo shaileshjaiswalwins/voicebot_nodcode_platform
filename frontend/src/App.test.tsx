@@ -12,6 +12,7 @@ vi.mock('./api', async () => {
     api: {
       login: vi.fn(),
       logout: vi.fn(),
+      me: vi.fn().mockResolvedValue({ email: 'user@justdial.com', role: 'admin' }),
       bots: vi.fn(),
       createBot: vi.fn(),
       bot: vi.fn(),
@@ -271,13 +272,13 @@ describe('Error handling surfaced via DiagnosticsBar', () => {
 });
 
 describe('Bot select -> builder -> EvalsPanel microinteractions', () => {
-  async function loginAndOpenBuilder(user: ReturnType<typeof userEvent.setup>, bot: Bot) {
+  async function loginAndOpenBuilder(user: ReturnType<typeof userEvent.setup>, bot: Bot, versions?: any[]) {
     mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@justdial.com' });
     mockAuthedDataLoads();
     mockedApi.bots.mockResolvedValue([bot]);
     mockedApi.bot.mockResolvedValue({
       bot,
-      versions: [
+      versions: versions || [
         { _id: 'v1', bot_id: bot._id, version: 1, state: 'draft', config: { system_prompt: 'hi' }, created_at: new Date().toISOString() },
       ],
     });
@@ -408,6 +409,40 @@ describe('Bot select -> builder -> EvalsPanel microinteractions', () => {
     await user.click(screen.getByRole('button', { name: /new version/i }));
 
     expect(await screen.findByText('Draft saved')).toBeInTheDocument();
+  });
+
+  it('keeps editing the version just updated, even if another draft exists and would otherwise be picked first', async () => {
+    // A bot can have several draft versions at once ("New version" always forks a new one
+    // rather than replacing the current draft), so the post-update refresh can return the
+    // OTHER draft ahead of the one just edited. Before the fix, loadBotVersions blindly
+    // picked "the first draft in the list" after every update — silently swapping the
+    // editor to a different version's config, which read as "the field I just added
+    // vanished" even though the save itself succeeded.
+    const user = userEvent.setup();
+    const bot = makeBot();
+    await loginAndOpenBuilder(user, bot, [
+      { _id: 'v3', bot_id: bot._id, version: 3, state: 'draft', config: { agent_name: 'V3 original' }, created_at: new Date().toISOString() },
+    ]);
+
+    const updateButton = await screen.findByRole('button', { name: /update v3/i });
+
+    mockedApi.updateVersion.mockResolvedValue({ draft_version_id: 'v3' });
+    // Simulate another draft (v9) existing and sorting ahead of v3 in the refreshed list —
+    // exactly what the old "first draft found" heuristic would latch onto instead of v3.
+    mockedApi.bot.mockResolvedValueOnce({
+      bot,
+      versions: [
+        { _id: 'v9', bot_id: bot._id, version: 9, state: 'draft', config: { agent_name: 'Some other draft' }, created_at: new Date().toISOString() },
+        { _id: 'v3', bot_id: bot._id, version: 3, state: 'draft', config: { agent_name: 'V3 updated' }, created_at: new Date().toISOString() },
+      ],
+    });
+
+    await user.click(updateButton);
+
+    expect(await screen.findByText('Version updated')).toBeInTheDocument();
+    // Still editing v3 (with its freshly-updated config), not silently swapped to v9.
+    expect(await screen.findByRole('button', { name: /update v3/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /update v9/i })).not.toBeInTheDocument();
   });
 
   it('shows an inline JSON error and disables save when the Developer JSON is invalid', async () => {
