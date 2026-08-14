@@ -4,15 +4,11 @@ import type { Bot as BotType, BotVersion, RuntimeSettings } from '../api';
 import { api } from '../api';
 import type { CustomFunction, TestCallStatus, TestForm } from '../types';
 import { deriveAgentState } from '../utils/config';
-import { shortId, titleCase } from '../utils/formatting';
+import { titleCase } from '../utils/formatting';
 import { LiveKitTestSession } from '../components/LiveKitTestSession';
 
 function Step({ title, text }: { title: string; text: string }) {
   return <div className="step"><strong>{title}</strong><p>{text}</p></div>;
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
 export function titleFor(view: import('../types').View) {
@@ -214,6 +210,7 @@ export function TestCallPanel({
   onMicChange,
   onAudioReady,
   onTriage,
+  preferredVersionId,
   variant = 'page'
 }: {
   bots: BotType[];
@@ -244,6 +241,12 @@ export function TestCallPanel({
    * the backend, which pairs it with the transcript and current bot instructions for a
    * plain-English diagnosis. Optional — omitted where there's no bot_id yet to scope it to. */
   onTriage?: (roomName: string, status: TestCallStatus, error: string, closeNote: string) => Promise<{ diagnosis: string; transcript_found: boolean }>;
+  /** The version currently open in the Builder ('rail' variant only) — when set and still
+   * present after `loadVersions` refetches, it wins over the active/draft/first heuristic.
+   * Without this, "Test Agent" silently tested the published version even while editing an
+   * unpublished draft, so a field/prompt change just made in the editor appeared to have no
+   * effect on the test call — it was actually testing a different, unrelated version. */
+  preferredVersionId?: string;
   /**
    * 'page'  — the standalone two-column /test screen (legacy).
    * 'rail'  — a single-column panel docked beside the agent builder. The agent is the one
@@ -262,9 +265,12 @@ export function TestCallPanel({
       .then((bundle) => {
         const sorted = bundle.versions; // already sorted desc by version
         setBotVersions(sorted);
-        // Auto-select active published version; fall back to latest draft
+        // Prefer whatever version the Builder is currently editing (e.g. an unpublished
+        // draft the PM just added a field to); otherwise auto-select the active published
+        // version, falling back to the latest draft.
+        const preferred = preferredVersionId && sorted.find((v) => v._id === preferredVersionId);
         const active = sorted.find((v) => v._id === bundle.bot.active_version_id);
-        const defaultV = active || sorted.find((v) => v.state === 'draft') || sorted[0];
+        const defaultV = preferred || active || sorted.find((v) => v.state === 'draft') || sorted[0];
         if (defaultV) {
           setForm((prev) => ({ ...prev, test_bot_version_id: defaultV._id }));
         }
@@ -297,8 +303,14 @@ export function TestCallPanel({
   // another, and a call that reached nobody looked correctly configured on screen.
   const defaultWorker = 'voice-bot-justdial-dashboard-test';
   const effectiveWorker = form.test_worker_agent_name || defaultWorker;
-  const agentState = deriveAgentState(status, remoteAudioReady, Boolean(roomName));
+  // Once LiveKit reports its own real AgentState (liveAgentState), prefer it over the
+  // heuristic below — deriveAgentState only approximates from the status string and
+  // remoteAudioReady, and the two can disagree (caption said "Speaking" while the
+  // orb correctly showed "thinking", since the orb already used the real state).
+  const [liveAgentState, setLiveAgentState] = useState<string | null>(null);
+  const agentState = liveAgentState ?? deriveAgentState(status, remoteAudioReady, Boolean(roomName));
   const connected = Boolean(roomName) && status !== 'Idle' && status !== 'Failed';
+  useEffect(() => { if (!connected) setLiveAgentState(null); }, [connected]);
 
   const selectedVersion = botVersions.find((v) => v._id === form.test_bot_version_id);
   const starting = status === 'Creating room…' || status === 'Connecting to LiveKit…';
@@ -334,7 +346,7 @@ export function TestCallPanel({
           <select
             value={form.test_bot_version_id}
             onChange={(e) => updateField('test_bot_version_id', e.target.value)}
-            disabled={botVersions.length === 0}
+            disabled={botVersions.length === 0 || starting || connected}
           >
             {botVersions.length === 0 && (
               <option value="">{versionsError ? 'Failed to load' : !selectedBot ? 'Select an agent first' : 'Loading…'}</option>
@@ -346,27 +358,34 @@ export function TestCallPanel({
             ))}
           </select>
           <small>
-            {versionsError
-              ? versionsError
-              : selectedVersion
-                ? selectedVersion.state === 'published' ? 'Active published version' : 'Draft — not yet live in production'
-                : 'No versions found'}
+            {starting || connected
+              ? 'Locked during the call — end it to switch versions.'
+              : versionsError
+                ? versionsError
+                : selectedVersion
+                  ? selectedVersion.state === 'published' ? 'Active published version' : 'Draft — not yet live in production'
+                  : 'No versions found'}
           </small>
-          {versionsError && <button className="fallback-button" style={{ marginTop: '0.35rem' }} onClick={loadVersions}>Retry</button>}
+          {versionsError && !(starting || connected) && <button className="fallback-button" style={{ marginTop: '0.35rem' }} onClick={loadVersions}>Retry</button>}
         </label>
 
         <PreCallFunctionFields functions={functions || []} values={form.pre_call_params} onChange={updatePreCallParam} />
         <DynamicVariableFields variables={dynamicVariables || []} values={form.dynamic_variables} onChange={updateDynamicVariable} />
 
         <div className="button-row test-rail-actions">
-          <button
-            className={error ? 'fallback-button' : 'primary'}
-            onClick={onStart}
-            disabled={!selectedBot || starting}
-          >
-            <Play size={16} /> {error ? 'Retry' : starting ? 'Starting…' : 'Talk to it'}
-          </button>
-          <button onClick={onStop} disabled={!roomName && !starting}><Square size={16} /> End</button>
+          {error ? (
+            <button className="fallback-button" onClick={onStart} disabled={starting}>
+              <Play size={16} /> Retry
+            </button>
+          ) : starting || connected ? (
+            <button className="danger-button" onClick={onStop}>
+              <Square size={16} /> End call
+            </button>
+          ) : (
+            <button className="primary" onClick={onStart} disabled={!selectedBot}>
+              <Play size={16} /> Talk to it
+            </button>
+          )}
         </div>
 
         {(connected || roomName || closeNote) && (
@@ -389,13 +408,10 @@ export function TestCallPanel({
               onDisconnectRequested={onStop}
               onMicChange={onMicChange}
               onAudioReady={onAudioReady}
+              onAgentStateChange={setLiveAgentState}
+              botName={selectedBot?.name}
               roomName={roomName}
             />
-            <div className="session-meta-grid">
-              <Metric label="Room" value={roomName ? shortId(roomName) : 'not created'} />
-              <Metric label="Mic" value={micEnabled ? 'live' : 'muted'} />
-              <Metric label="Bot audio" value={remoteAudioReady ? 'connected' : 'waiting'} />
-            </div>
             {closeNote && <p className="session-close-note">{closeNote}</p>}
             {onTriage && roomName && (status === 'Failed' || Boolean(closeNote) || Boolean(error)) && (
               <TriageButton roomName={roomName} status={status} error={error} closeNote={closeNote} onTriage={onTriage} />
@@ -421,10 +437,10 @@ export function TestCallPanel({
         <div className="test-context">
           <div>
             <span>Agent</span>
-            <select value={selectedBotId} onChange={(event) => onSelectBot(event.target.value)}>
+            <select value={selectedBotId} onChange={(event) => onSelectBot(event.target.value)} disabled={starting || connected}>
               {bots.map((bot) => <option key={bot._id} value={bot._id}>{bot.name}</option>)}
             </select>
-            <small>{selectedBot?.assistant_id || 'Select an agent to test'}</small>
+            <small>{starting || connected ? 'Locked during the call — end it to switch agents.' : selectedBot?.assistant_id || 'Select an agent to test'}</small>
           </div>
           <ChevronRight size={18} />
           <div>
@@ -432,7 +448,7 @@ export function TestCallPanel({
             <select
               value={form.test_bot_version_id}
               onChange={(e) => updateField('test_bot_version_id', e.target.value)}
-              disabled={botVersions.length === 0}
+              disabled={botVersions.length === 0 || starting || connected}
             >
               {botVersions.length === 0 && (
                 <option value="">{versionsError ? 'Failed to load' : !selectedBot ? 'Select an agent first' : 'Loading…'}</option>
@@ -444,15 +460,17 @@ export function TestCallPanel({
               ))}
             </select>
             <small>
-              {versionsError
-                ? versionsError
-                : selectedVersion
-                  ? selectedVersion.state === 'published'
-                    ? `Active published version`
-                    : `Draft — not yet live in production`
-                  : 'No versions found'}
+              {starting || connected
+                ? 'Locked during the call — end it to switch versions.'
+                : versionsError
+                  ? versionsError
+                  : selectedVersion
+                    ? selectedVersion.state === 'published'
+                      ? `Active published version`
+                      : `Draft — not yet live in production`
+                    : 'No versions found'}
             </small>
-            {versionsError && <button className="fallback-button" style={{ marginTop: '0.35rem' }} onClick={loadVersions}>Retry</button>}
+            {versionsError && !(starting || connected) && <button className="fallback-button" style={{ marginTop: '0.35rem' }} onClick={loadVersions}>Retry</button>}
           </div>
           <ChevronRight size={18} />
           <div>
@@ -464,10 +482,19 @@ export function TestCallPanel({
         <DynamicVariableFields variables={dynamicVariables || []} values={form.dynamic_variables} onChange={updateDynamicVariable} />
 
         <div className="button-row">
-          <button className={error ? 'fallback-button' : 'primary'} onClick={onStart} disabled={!selectedBot || starting}>
-            <Play size={16} /> {error ? 'Fallback: retry setup' : starting ? 'Starting...' : 'Start WebRTC test'}
-          </button>
-          <button onClick={onStop}><Square size={16} /> End test</button>
+          {error ? (
+            <button className="fallback-button" onClick={onStart} disabled={starting}>
+              <Play size={16} /> Fallback: retry setup
+            </button>
+          ) : starting || connected ? (
+            <button className="danger-button" onClick={onStop}>
+              <Square size={16} /> End call
+            </button>
+          ) : (
+            <button className="primary" onClick={onStart} disabled={!selectedBot}>
+              <Play size={16} /> Start WebRTC test
+            </button>
+          )}
         </div>
       </div>
       <div className="panel status-panel">
@@ -490,14 +517,10 @@ export function TestCallPanel({
             onDisconnectRequested={onStop}
             onMicChange={onMicChange}
             onAudioReady={onAudioReady}
+            onAgentStateChange={setLiveAgentState}
+            botName={selectedBot?.name}
             roomName={roomName}
           />
-          <div className="session-meta-grid">
-            <Metric label="Room" value={roomName ? shortId(roomName) : 'not created'} />
-            <Metric label="Worker" value={effectiveWorker} />
-            <Metric label="Mic" value={micEnabled ? 'live' : 'muted'} />
-            <Metric label="Bot audio" value={remoteAudioReady ? 'connected' : 'waiting'} />
-          </div>
           {closeNote && <p className="session-close-note">{closeNote}</p>}
           {onTriage && roomName && (status === 'Failed' || Boolean(closeNote) || Boolean(error)) && (
             <TriageButton roomName={roomName} status={status} error={error} closeNote={closeNote} onTriage={onTriage} />

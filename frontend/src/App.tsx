@@ -1602,6 +1602,7 @@ function AppShell() {
               ? (rn, status, error, closeNote) => api.triageTestCall(selectedBot!._id, rn, status, error, closeNote)
               : undefined
           }
+          preferredVersionId={editingVersionId}
         />
       )}
 
