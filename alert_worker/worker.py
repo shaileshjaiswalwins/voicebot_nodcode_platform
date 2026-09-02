@@ -188,6 +188,8 @@ def _evaluate_rule(rule: dict, now: datetime) -> None:
         now,
         status=filters.get("status"),
         call_outcome=filters.get("call_outcome"),
+        analysis_field_key=filters.get("analysis_field_key"),
+        analysis_field_value=filters.get("analysis_field_value"),
     )
 
     breached = _COMPARATORS[rule["comparator"]](current_value, rule["threshold_value"])

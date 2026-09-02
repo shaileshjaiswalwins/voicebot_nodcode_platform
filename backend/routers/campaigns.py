@@ -10,7 +10,7 @@ from fastapi.responses import PlainTextResponse
 
 from .. import campaign_execution
 from ..audit import log_audit
-from ..auth import require_user
+from ..auth import bot_owner_filter, owned_bot_ids, require_user
 from ..db import bots, campaign_leads, campaigns, phone_numbers
 from ..models import (
     AssignBotRequest,
@@ -91,14 +91,69 @@ def _serialize(doc: dict) -> dict:
     return doc
 
 
+def _owns(campaign: dict, user: dict, owned_ids: list[str] | None) -> bool:
+    """A campaign is "yours" if its assigned bot is one you own, or — before any bot is
+    assigned — you're the one who created it (BatchCallModal saves the strategy, which is
+    what first creates the campaign doc, before it assigns a bot; without created_by that
+    setup-in-progress window would make the campaign look ownerless, i.e. nobody's)."""
+    bot_id = campaign.get("bot_id")
+    if bot_id:
+        return bot_id in owned_ids
+    return campaign.get("created_by") == user.get("sub")
+
+
+def _visible(campaign: dict | None, user: dict, owned_ids: list[str] | None) -> bool:
+    if owned_ids is None:
+        return True
+    return bool(campaign) and _owns(campaign, user, owned_ids)
+
+
+def _writable(campaign: dict | None, user: dict, owned_ids: list[str] | None) -> bool:
+    """Same as _visible, except a campaign that doesn't exist yet is always writable —
+    that's how one gets created in the first place."""
+    if owned_ids is None or not campaign:
+        return True
+    return _owns(campaign, user, owned_ids)
+
+
+def _require_writable_campaign(campaign_key: str, user: dict) -> dict | None:
+    """For endpoints that upsert (the campaign may not exist yet) — a missing campaign is
+    fine (nothing to own yet), an existing one must be owned."""
+    existing = campaigns.find_one({"campaign_key": campaign_key})
+    if not _writable(existing, user, owned_bot_ids(user)):
+        raise HTTPException(404, "Campaign not found")
+    return existing
+
+
+def _require_existing_writable_campaign(campaign_key: str, user: dict) -> dict:
+    """For endpoints that require the campaign to already exist (start/schedule/status)."""
+    existing = campaigns.find_one({"campaign_key": campaign_key})
+    if not existing or not _writable(existing, user, owned_bot_ids(user)):
+        raise HTTPException(404, "Campaign not found")
+    return existing
+
+
+def _require_visible_campaign(campaign_key: str, user: dict) -> dict:
+    existing = campaigns.find_one({"campaign_key": campaign_key})
+    if not _visible(existing, user, owned_bot_ids(user)):
+        raise HTTPException(404, "Campaign not found")
+    return existing
+
+
 @router.get("")
-def list_campaigns(_: dict = Depends(require_user)) -> list[dict]:
-    return [_serialize(c) for c in campaigns.find({})]
+def list_campaigns(user: dict = Depends(require_user)) -> list[dict]:
+    owned = owned_bot_ids(user)
+    query = {} if owned is None else {"$or": [
+        {"bot_id": {"$in": owned}},
+        {"bot_id": {"$exists": False}, "created_by": user.get("sub")},
+    ]}
+    return [_serialize(c) for c in campaigns.find(query)]
 
 
 @router.put("/{campaign_key}/strategy")
 def save_strategy(campaign_key: str, payload: dict, user: dict = Depends(require_user)) -> dict:
     body = SaveStrategyRequest(**payload)
+    _require_writable_campaign(campaign_key, user)
     campaigns.update_one(
         {"campaign_key": campaign_key},
         {
@@ -106,7 +161,8 @@ def save_strategy(campaign_key: str, payload: dict, user: dict = Depends(require
                 "campaign_key": campaign_key,
                 "name": body.name,
                 "dialing_strategy": body.strategy.model_dump(),
-            }
+            },
+            "$setOnInsert": {"created_by": user.get("sub")},
         },
         upsert=True,
     )
@@ -118,6 +174,7 @@ def save_strategy(campaign_key: str, payload: dict, user: dict = Depends(require
 @router.put("/{campaign_key}/dialer-config")
 def save_dialer_config(campaign_key: str, payload: dict, user: dict = Depends(require_user)) -> dict:
     body = SaveDialerConfigRequest(**payload)
+    _require_writable_campaign(campaign_key, user)
     cfg = body.dialer_config
 
     missing = [f for f in REQUIRED_DIALER_FIELDS if getattr(cfg, f) in (None, "")]
@@ -132,7 +189,10 @@ def save_dialer_config(campaign_key: str, payload: dict, user: dict = Depends(re
 
     campaigns.update_one(
         {"campaign_key": campaign_key},
-        {"$set": {"campaign_key": campaign_key, "dialer_config": cfg.model_dump()}},
+        {
+            "$set": {"campaign_key": campaign_key, "dialer_config": cfg.model_dump()},
+            "$setOnInsert": {"created_by": user.get("sub")},
+        },
         upsert=True,
     )
     log_audit(user, "update_dialer_config", "campaign", campaign_key)
@@ -142,14 +202,19 @@ def save_dialer_config(campaign_key: str, payload: dict, user: dict = Depends(re
 @router.put("/{campaign_key}/bot")
 def assign_bot(campaign_key: str, payload: dict, user: dict = Depends(require_user)) -> dict:
     body = AssignBotRequest(**payload)
+    _require_writable_campaign(campaign_key, user)
     try:
         bot_oid = ObjectId(body.bot_id)
     except Exception as exc:
         raise HTTPException(404, "Bot not found") from exc
-    if not bots.find_one({"_id": bot_oid}):
+    if not bots.find_one({"_id": bot_oid, **bot_owner_filter(user)}):
         raise HTTPException(404, "Bot not found")
 
-    campaigns.update_one({"campaign_key": campaign_key}, {"$set": {"bot_id": body.bot_id}}, upsert=True)
+    campaigns.update_one(
+        {"campaign_key": campaign_key},
+        {"$set": {"bot_id": body.bot_id}, "$setOnInsert": {"created_by": user.get("sub")}},
+        upsert=True,
+    )
     log_audit(user, "assign_bot", "campaign", campaign_key, {"bot_id": body.bot_id})
     return _serialize(campaigns.find_one({"campaign_key": campaign_key}))
 
@@ -157,9 +222,8 @@ def assign_bot(campaign_key: str, payload: dict, user: dict = Depends(require_us
 @router.put("/{campaign_key}/status")
 def set_status(campaign_key: str, payload: dict, user: dict = Depends(require_user)) -> dict:
     body = SetStatusRequest(**payload)
-    result = campaigns.update_one({"campaign_key": campaign_key}, {"$set": {"status": body.status}})
-    if result.matched_count == 0:
-        raise HTTPException(404, "Campaign not found")
+    _require_existing_writable_campaign(campaign_key, user)
+    campaigns.update_one({"campaign_key": campaign_key}, {"$set": {"status": body.status}})
     log_audit(user, "set_status", "campaign", campaign_key, {"status": body.status})
     return _serialize(campaigns.find_one({"campaign_key": campaign_key}))
 
@@ -185,6 +249,7 @@ def download_leads_template(_: dict = Depends(require_user)) -> PlainTextRespons
 async def upload_leads(
     campaign_key: str, file: UploadFile = File(...), user: dict = Depends(require_user)
 ) -> CampaignLeadUploadResult:
+    _require_writable_campaign(campaign_key, user)
     raw = (await file.read()).decode("utf-8-sig", errors="replace")
     reader = csv.DictReader(io.StringIO(raw))
     fieldnames = reader.fieldnames or []
@@ -237,8 +302,9 @@ async def upload_leads(
 
 @router.get("/{campaign_key}/leads")
 def list_leads(
-    campaign_key: str, status: str | None = None, _: dict = Depends(require_user)
+    campaign_key: str, status: str | None = None, user: dict = Depends(require_user)
 ) -> list[dict]:
+    _require_visible_campaign(campaign_key, user)
     query: dict = {"campaign_id": campaign_key}
     if status:
         query["status"] = status
@@ -250,9 +316,13 @@ def save_prompt_template(
     campaign_key: str, payload: dict, user: dict = Depends(require_user)
 ) -> dict:
     body = PromptTemplateRequest(**payload)
+    _require_writable_campaign(campaign_key, user)
     campaigns.update_one(
         {"campaign_key": campaign_key},
-        {"$set": {"campaign_key": campaign_key, "prompt_template": body.prompt_template}},
+        {
+            "$set": {"campaign_key": campaign_key, "prompt_template": body.prompt_template},
+            "$setOnInsert": {"created_by": user.get("sub")},
+        },
         upsert=True,
     )
     log_audit(user, "update_prompt_template", "campaign", campaign_key)
@@ -261,8 +331,9 @@ def save_prompt_template(
 
 @router.post("/{campaign_key}/prompt/validate")
 def validate_prompt_template(
-    campaign_key: str, payload: dict, _: dict = Depends(require_user)
+    campaign_key: str, payload: dict, user: dict = Depends(require_user)
 ) -> PromptValidationResult:
+    _require_writable_campaign(campaign_key, user)
     body = PromptTemplateRequest(**payload)
     used = set(VAR_TOKEN_RE.findall(body.prompt_template))
     known = _known_vars_for_campaign(campaign_key)
@@ -273,8 +344,7 @@ def validate_prompt_template(
 def start_campaign(campaign_key: str, user: dict = Depends(require_user)) -> dict:
     """Enqueue call_jobs for any pending leads and mark the campaign active. Idempotent —
     calling this again after uploading more leads just enqueues the new ones."""
-    if not campaigns.find_one({"campaign_key": campaign_key}):
-        raise HTTPException(404, "Campaign not found")
+    _require_existing_writable_campaign(campaign_key, user)
     enqueued = campaign_execution.enqueue_pending_leads(campaign_key)
     status = campaign_execution.derive_campaign_status(campaign_key, "active")
     campaigns.update_one({"campaign_key": campaign_key}, {"$set": {"status": status}})
@@ -290,8 +360,7 @@ def schedule_campaign(campaign_key: str, payload: dict, user: dict = Depends(req
     campaign_dialer_worker's _tick promotes it to "active" once scheduled_at arrives, and
     claim_next_job already refuses to hand out jobs for any non-active status implicitly via
     campaigns not being queried until they're "active" (see worker.py)."""
-    if not campaigns.find_one({"campaign_key": campaign_key}):
-        raise HTTPException(404, "Campaign not found")
+    _require_existing_writable_campaign(campaign_key, user)
     body = ScheduleCampaignRequest(**payload)
 
     enqueued = campaign_execution.enqueue_pending_leads(campaign_key)
@@ -320,7 +389,8 @@ def schedule_campaign(campaign_key: str, payload: dict, user: dict = Depends(req
 
 
 @router.get("/{campaign_key}/progress")
-def get_progress(campaign_key: str, _: dict = Depends(require_user)) -> dict:
+def get_progress(campaign_key: str, user: dict = Depends(require_user)) -> dict:
+    _require_visible_campaign(campaign_key, user)
     counts = campaign_execution.progress_counts(campaign_key)
     campaign = campaigns.find_one({"campaign_key": campaign_key})
     if campaign:
@@ -362,7 +432,8 @@ def complete_job(campaign_key: str, job_id: str, payload: dict, user: dict = Dep
 
 
 @router.get("/{campaign_key}/calls/{call_id}")
-def get_call_detail(campaign_key: str, call_id: str, _: dict = Depends(require_user)) -> dict:
+def get_call_detail(campaign_key: str, call_id: str, user: dict = Depends(require_user)) -> dict:
+    _require_visible_campaign(campaign_key, user)
     detail = campaign_execution.get_call_detail(call_id)
     if not detail:
         raise HTTPException(404, "Call not found")
@@ -370,7 +441,8 @@ def get_call_detail(campaign_key: str, call_id: str, _: dict = Depends(require_u
 
 
 @router.get("/{campaign_key}/outcomes")
-def get_campaign_outcomes(campaign_key: str, _: dict = Depends(require_user)) -> dict:
+def get_campaign_outcomes(campaign_key: str, user: dict = Depends(require_user)) -> dict:
+    _require_visible_campaign(campaign_key, user)
     return campaign_execution.get_campaign_outcomes(campaign_key)
 
 
@@ -387,13 +459,14 @@ _STAGE_BY_STATUS = {
 
 
 @router.get("/{campaign_key}/leads.csv")
-def download_campaign_results(campaign_key: str, _: dict = Depends(require_user)) -> PlainTextResponse:
+def download_campaign_results(campaign_key: str, user: dict = Depends(require_user)) -> PlainTextResponse:
     """One combined results export: every lead in this campaign with which stage it reached
     and why, so a PM doesn't have to click through leads one at a time to find out what
     happened to a batch. Covers all three failure classes: upload-time rejects
     (failure_reason from upload_leads), TSPL push failures (failure_reason from
     revert_to_queued_or_fail), and completed-call outcomes (call_outcome from the same
     transcripts join get_campaign_outcomes uses)."""
+    _require_visible_campaign(campaign_key, user)
     leads = list(campaign_leads.find({"campaign_id": campaign_key}))
     call_ids = [lead["call_id"] for lead in leads if lead.get("call_id")]
     outcome_by_call_id = campaign_execution.get_lead_outcome_map(call_ids)
@@ -428,6 +501,7 @@ def download_campaign_results(campaign_key: str, _: dict = Depends(require_user)
 
 @router.delete("/{campaign_key}")
 def delete_campaign(campaign_key: str, user: dict = Depends(require_user)) -> dict:
+    _require_existing_writable_campaign(campaign_key, user)
     result = campaigns.delete_one({"campaign_key": campaign_key})
     if result.deleted_count == 0:
         raise HTTPException(404, "Campaign not found")

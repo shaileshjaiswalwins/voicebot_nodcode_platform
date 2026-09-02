@@ -5,11 +5,12 @@ import os
 import uuid
 from datetime import datetime, timezone
 
+from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 from livekit import api as lkapi
 
-from ..auth import require_user
-from ..db import db
+from ..auth import bot_owner_filter, require_user
+from ..db import bots, db
 from ..models import TestCallStartRequest, TestCallStopRequest
 
 router = APIRouter(prefix="/api/testcall", tags=["testcall"])
@@ -80,6 +81,13 @@ async def start_test_call(payload: TestCallStartRequest, user: dict = Depends(re
     'version-aware test call' mechanism carried forward from the ai_voice_bot_management
     audit: test_bot_version_id lets you test any draft/historical version without publishing.
     """
+    try:
+        bot_oid = ObjectId(payload.bot_id)
+    except Exception as exc:
+        raise HTTPException(404, "Bot not found") from exc
+    if not bots.find_one({"_id": bot_oid, **bot_owner_filter(user)}):
+        raise HTTPException(404, "Bot not found")
+
     room_name = f"test-{uuid.uuid4().hex[:12]}"
     agent_name = payload.test_worker_agent_name or TESTCALL_AGENT_NAME
 
@@ -118,6 +126,14 @@ async def start_test_call(payload: TestCallStartRequest, user: dict = Depends(re
         lkapi.AccessToken(os.getenv("LIVEKIT_API_KEY", ""), os.getenv("LIVEKIT_API_SECRET", ""))
         .with_identity(f"pm-tester-{user.get('sub', 'admin')}")
         .with_grants(lkapi.VideoGrants(room_join=True, room=room_name))
+        .with_attributes(
+            {
+                "bot_id": str(payload.bot_id or ""),
+                "campaign_id": str(payload.campaign_id or ""),
+                "city": str(payload.city or ""),
+                "test_mode": "true",
+            }
+        )
         .to_jwt()
     )
 

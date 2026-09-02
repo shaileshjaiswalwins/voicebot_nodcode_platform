@@ -633,3 +633,62 @@ def refine_workflow_from_instruction(
         "workflow": {"nodes": nodes, "edges": edges},
         "functions": parsed.get("functions") or [],
     }
+
+
+_GENERATE_EVAL_SCENARIOS_INSTRUCTIONS = """\
+You are designing pre-publish regression test scenarios for a voice call center bot, given its
+system prompt below. Each scenario scripts a simulated CALLER persona that will be played by
+another LLM against this bot's real prompt — no live call, just an LLM-vs-LLM text simulation —
+then auto-scored pass/fail against phrase checks you also define.
+
+Read the system prompt and infer: what is this bot actually for, what are the realistic caller
+intents/personas someone would bring to it, and what would a broken response look like for this
+specific bot (not a generic bot). Favor scenarios that exercise the SPECIFIC things this prompt
+promises — its stated flow, constraints, escalation rules, required questions — over generic
+"happy path" / "angry caller" filler that would apply to any bot.
+
+For each scenario produce:
+- "name" — a short label (e.g. "Wants human escalation mid-call").
+- "caller_persona" — one paragraph of instructions for the LLM playing the caller: their
+  situation, what they say/ask, how they react. Written in second person ("You are..."),
+  matching the language/tone the system prompt implies the bot's callers would use.
+- "max_turns" — integer 2-6, however many turns this scenario realistically needs to play out.
+- "must_contain" — phrases/substrings (lowercase-insensitive match) the bot's replies across the
+  conversation SHOULD include if it's behaving correctly per its own prompt (e.g. a required
+  disclosure, a specific question it must ask). Empty list if nothing specific applies — do not
+  invent a requirement the prompt doesn't actually state.
+- "must_not_contain" — phrases that would indicate a broken response (leaked placeholders like
+  "{agent_name}", the literal word "error"/"undefined", or something the prompt explicitly says
+  never to do/say). Always include "error" and "undefined" plus anything specific to this prompt.
+
+Respond with ONLY a raw JSON object: {"scenarios": [...]}, no markdown fences, no commentary.
+Produce exactly the requested number of scenarios.
+"""
+
+
+def generate_eval_scenarios(system_prompt: str, count: int = 3) -> list[dict]:
+    """Pre-publish evals panel's "Generate with AI" button: derives scenario personas + pass/fail
+    checks tailored to this bot's actual system_prompt, rather than the two generic built-in
+    defaults (backend/evals.py's DEFAULT_SCENARIOS) — same one-shot-JSON pattern as
+    generate_function_from_description. The user reviews/edits the result before running it,
+    same as every other AI-assist button in this module."""
+    prompt = (
+        f"{_GENERATE_EVAL_SCENARIOS_INSTRUCTIONS}\n\n"
+        f"Number of scenarios to produce: {count}\n\n"
+        f"Bot's system prompt:\n{system_prompt}"
+    )
+    client = _client()
+    raw = client.models.generate_content(model=_GEMINI_MODEL, contents=prompt).text
+    parsed = _extract_json_object(raw)  # let JSONDecodeError propagate — no half-built scenario list to fall back to
+    scenarios = parsed.get("scenarios") or []
+    return [
+        {
+            "name": str(s.get("name", "")).strip(),
+            "caller_persona": str(s.get("caller_persona", "")).strip(),
+            "max_turns": max(1, min(20, int(s.get("max_turns", 4) or 4))),
+            "must_contain": [str(p).strip() for p in (s.get("must_contain") or []) if str(p).strip()],
+            "must_not_contain": [str(p).strip() for p in (s.get("must_not_contain") or []) if str(p).strip()],
+        }
+        for s in scenarios
+        if str(s.get("name", "")).strip() and str(s.get("caller_persona", "")).strip()
+    ]

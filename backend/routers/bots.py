@@ -167,7 +167,7 @@ def _serialize_version(doc: dict) -> dict:
 
 
 def _empty_summary() -> dict:
-    return {"agent_name": "", "bot_type": "standard", "tags": []}
+    return {"agent_name": "", "bot_type": "standard", "tags": [], "analysis_fields": []}
 
 
 def _list_bots_by_status(status_filter: dict, user: dict) -> list[dict]:
@@ -190,13 +190,18 @@ def _list_bots_by_status(status_filter: dict, user: dict) -> list[dict]:
     summary_by_version_id = {}
     if version_ids:
         for v in bot_versions.find(
-            {"_id": {"$in": version_ids}}, {"config.agent_name": 1, "config.bot_type": 1, "config.tags": 1}
+            {"_id": {"$in": version_ids}},
+            {"config.agent_name": 1, "config.bot_type": 1, "config.tags": 1, "config.analysis_fields": 1},
         ):
             config = v.get("config") or {}
             summary_by_version_id[str(v["_id"])] = {
                 "agent_name": config.get("agent_name", ""),
                 "bot_type": config.get("bot_type") or "standard",
                 "tags": config.get("tags") or [],
+                # Alert rules' analysis_field_rate_pct metric needs to know which fields a
+                # bot actually has configured, to populate the field-key picker in
+                # AlertsPanel.tsx — resolved off the same active/draft version as bot_type.
+                "analysis_fields": config.get("analysis_fields") or [],
             }
 
     bot_ids = [str(b["_id"]) for b in bot_docs]
@@ -248,6 +253,7 @@ def _list_bots_by_status(status_filter: dict, user: dict) -> list[dict]:
         b["agent_name"] = summary["agent_name"]  # spoken persona, distinct from the display name above
         b["bot_type"] = summary["bot_type"]
         b["tags"] = summary["tags"]
+        b["analysis_fields"] = summary["analysis_fields"]
         b["published"] = bool(b.get("active_version_id"))
         b["call_count"] = call_counts.get(bot_id, 0)
         b["calls_today"] = calls_today.get(bot_id, 0)

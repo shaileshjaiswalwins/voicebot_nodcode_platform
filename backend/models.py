@@ -831,6 +831,7 @@ AlertMetric = Literal[
     "concurrency_used",
     "p95_turn_latency_ms",
     "platform_error_rate_pct",
+    "analysis_field_rate_pct",
 ]
 AlertComparator = Literal["gt", "lt", "ge", "le"]
 AlertWindow = Literal["5m", "30m", "1h", "12h", "24h"]
@@ -890,6 +891,15 @@ class AlertRuleFilters(BaseModel):
     bot_ids: list[str] = Field(default_factory=list)
     status: AlertCallStatus | None = None
     call_outcome: AlertCallOutcome | None = None
+    # Only meaningful for metric == "analysis_field_rate_pct" — which PM-defined
+    # analysis_fields key to check, and which value (stringified; a boolean field's value
+    # is "true"/"false") counts as a match. Both required together — enforced below,
+    # alongside the "exactly one bot" requirement, since a field's schema is per-bot(-version)
+    # and there's no cross-bot notion of "the same field" to alert on across several bots at
+    # once the way call_outcome/status can. See backend/metrics.py's analysis_field_rate_pct
+    # branch for how the match is actually computed.
+    analysis_field_key: str | None = None
+    analysis_field_value: str | None = None
 
 
 class AlertRuleBase(BaseModel):
@@ -910,6 +920,19 @@ class AlertRuleBase(BaseModel):
         allowed = WINDOW_FREQUENCY_COMPAT.get(self.window)
         if allowed is None or self.frequency not in allowed:
             raise ValueError(f"frequency {self.frequency!r} is not compatible with window {self.window!r}")
+        return self
+
+    @model_validator(mode="after")
+    def _check_analysis_field_rate_requirements(self) -> "AlertRuleBase":
+        if self.metric != "analysis_field_rate_pct":
+            return self
+        if len(self.filters.bot_ids) != 1:
+            raise ValueError(
+                "analysis_field_rate_pct requires exactly one bot in filters.bot_ids — a PM-defined "
+                "field's schema is per-bot, there's no cross-bot notion of 'the same field' to alert on"
+            )
+        if not self.filters.analysis_field_key or not self.filters.analysis_field_value:
+            raise ValueError("analysis_field_rate_pct requires both filters.analysis_field_key and filters.analysis_field_value")
         return self
 
 

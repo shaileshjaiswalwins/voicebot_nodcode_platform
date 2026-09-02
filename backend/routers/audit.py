@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 
-from ..auth import require_user
+from ..auth import require_admin
 from ..db import audit_log
 
 router = APIRouter(prefix="/api/audit-log", tags=["audit-log"])
@@ -21,7 +21,7 @@ def list_audit_log(
     actor: str = Query(""),
     limit: int = Query(50, le=200),
     offset: int = Query(0, ge=0),
-    _: dict = Depends(require_user),
+    _: dict = Depends(require_admin),
 ) -> dict:
     query: dict = {}
     if resource_type:

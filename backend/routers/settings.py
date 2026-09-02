@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from ..audit import log_audit
-from ..auth import require_user
+from ..auth import require_admin
 from ..db import platform_settings
 from ..models import PlatformSettings
 
@@ -19,12 +19,12 @@ def _load() -> PlatformSettings:
 
 
 @router.get("/platform", response_model=PlatformSettings)
-def get_platform_settings(_: dict = Depends(require_user)) -> PlatformSettings:
+def get_platform_settings(_: dict = Depends(require_admin)) -> PlatformSettings:
     return _load()
 
 
 @router.put("/platform", response_model=PlatformSettings)
-def update_platform_settings(payload: PlatformSettings, user: dict = Depends(require_user)) -> PlatformSettings:
+def update_platform_settings(payload: PlatformSettings, user: dict = Depends(require_admin)) -> PlatformSettings:
     platform_settings.update_one({"_id": _DOC_ID}, {"$set": payload.model_dump()}, upsert=True)
     log_audit(user, "update", "platform_settings", _DOC_ID)
     return payload

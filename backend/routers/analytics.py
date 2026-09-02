@@ -2,16 +2,24 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 
-from ..auth import require_user
+from ..auth import owned_bot_ids, require_user
 from ..db import transcripts
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 
-def _date_filter(bot_id: str, campaign_id: str, hours: float, start_date: str, end_date: str) -> dict:
+def _date_filter(
+    bot_id: str, campaign_id: str, hours: float, start_date: str, end_date: str,
+    owned_ids: list[str] | None = None,
+) -> dict:
     query: dict = {}
-    if bot_id:
-        query["bot_id"] = bot_id
+    if owned_ids is None:
+        if bot_id:
+            query["bot_id"] = bot_id
+    elif bot_id:
+        query["bot_id"] = bot_id if bot_id in owned_ids else {"$in": []}
+    else:
+        query["bot_id"] = {"$in": owned_ids}
     if campaign_id:
         query["campaign_id"] = campaign_id
     if hours:
@@ -33,9 +41,9 @@ def outcome_analytics(
     hours: float = Query(0),
     start_date: str = Query(""),
     end_date: str = Query(""),
-    _: dict = Depends(require_user),
+    user: dict = Depends(require_user),
 ) -> dict:
-    query = _date_filter(bot_id, campaign_id, hours, start_date, end_date)
+    query = _date_filter(bot_id, campaign_id, hours, start_date, end_date, owned_bot_ids(user))
     # Project only the fields this endpoint actually reads — the full transcript/call_events
     # arrays on each doc are the bulk of a call record and aren't needed for these aggregates.
     docs = list(
@@ -76,11 +84,15 @@ def outcome_analytics(
 
 
 @router.get("/quality-alerts")
-def quality_alerts(hours: float = Query(1), threshold_pct: float = Query(30), _: dict = Depends(require_user)) -> dict:
+def quality_alerts(hours: float = Query(1), threshold_pct: float = Query(30), user: dict = Depends(require_user)) -> dict:
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    query: dict = {"created_at": {"$gte": since}}
+    owned = owned_bot_ids(user)
+    if owned is not None:
+        query["bot_id"] = {"$in": owned}
     docs = list(
         transcripts.find(
-            {"created_at": {"$gte": since}},
+            query,
             {"transcript_quality_flags": 1, "status": 1},
         )
     )

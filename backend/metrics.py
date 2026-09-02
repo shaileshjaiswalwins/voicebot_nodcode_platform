@@ -44,6 +44,8 @@ def compute_metric(
     error_type: str | None = None,
     status: str | None = None,
     call_outcome: str | None = None,
+    analysis_field_key: str | None = None,
+    analysis_field_value: str | None = None,
 ) -> float:
     """Computes one alertable metric over [window_start, window_end) for the given bots
     (None = no bot restriction, i.e. admin/platform-wide). This is the shared aggregation
@@ -64,6 +66,35 @@ def compute_metric(
             return 0.0
         completed = transcripts.count_documents({**match, "status": {"$in": list(NON_FAILURE_STATUSES)}})
         return round(completed / total * 100, 1)
+
+    if metric == "analysis_field_rate_pct":
+        # Denominator is calls that actually got analyzed (analysis_fields_status == "ok"),
+        # not every call in the window — a bad-connectivity spell that spikes
+        # skipped/failed extractions would otherwise silently dilute the rate even though
+        # nothing about the FIELD's real occurrence changed. Calls where this bot's
+        # analysis never ran at all (no analysis_fields_status key — wrong bot, or the
+        # field wasn't configured yet at call time) are excluded from both sides, same as
+        # they're excluded from task_completion_rate_pct's "did the call complete" framing.
+        analyzed_match = {**match, "analysis_fields_status": "ok"}
+        total = transcripts.count_documents(analyzed_match)
+        if not total:
+            return 0.0
+        if not analysis_field_key:
+            raise ValueError("analysis_field_rate_pct requires analysis_field_key")
+        # A field's declared type (boolean/text/number/enum) isn't visible here — rules are
+        # decoupled from the bot's live schema, same as call_outcome is today. A boolean
+        # field's value is stored as a real bool in analysis_fields_result, but the rule's
+        # analysis_field_value is always a string (form input) — "true"/"false" is matched
+        # against both the string and the coerced bool so either storage shape works
+        # without this function needing to know which type the field actually is.
+        field_path = f"analysis_fields_result.{analysis_field_key}"
+        if analysis_field_value.lower() in ("true", "false"):
+            bool_val = analysis_field_value.lower() == "true"
+            value_match = {"$in": [analysis_field_value, bool_val]}
+        else:
+            value_match = analysis_field_value
+        matching = transcripts.count_documents({**analyzed_match, field_path: value_match})
+        return round(matching / total * 100, 1)
 
     if metric == "platform_error_rate_pct":
         total = transcripts.count_documents(match)

@@ -15,7 +15,7 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..audit import log_audit
-from ..auth import require_user
+from ..auth import bot_owner_filter, require_user
 from ..db import bots, custom_functions
 from ..models import (
     CustomFunctionCreate,
@@ -35,8 +35,8 @@ def _oid(id_str: str) -> ObjectId:
         raise HTTPException(404, "Not found") from exc
 
 
-def _require_bot(bot_id: str) -> dict:
-    bot = bots.find_one({"_id": _oid(bot_id)})
+def _require_bot(bot_id: str, user: dict) -> dict:
+    bot = bots.find_one({"_id": _oid(bot_id), **bot_owner_filter(user)})
     if not bot or bot.get("status") == "deleted":
         raise HTTPException(404, "Bot not found")
     return bot
@@ -121,8 +121,8 @@ async def _perform_request(
 
 
 @router.get("/{bot_id}/custom-functions")
-def list_custom_functions(bot_id: str, _: dict = Depends(require_user)) -> list[dict]:
-    _require_bot(bot_id)
+def list_custom_functions(bot_id: str, user: dict = Depends(require_user)) -> list[dict]:
+    _require_bot(bot_id, user)
     return [_serialize(f) for f in custom_functions.find({"bot_id": bot_id})]
 
 
@@ -130,7 +130,7 @@ def list_custom_functions(bot_id: str, _: dict = Depends(require_user)) -> list[
 def create_custom_function(
     bot_id: str, payload: CustomFunctionCreate, user: dict = Depends(require_user)
 ) -> dict:
-    _require_bot(bot_id)
+    _require_bot(bot_id, user)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     doc = {
         **payload.model_dump(),
@@ -146,7 +146,8 @@ def create_custom_function(
 
 
 @router.get("/{bot_id}/custom-functions/{fn_id}")
-def get_custom_function(bot_id: str, fn_id: str, _: dict = Depends(require_user)) -> dict:
+def get_custom_function(bot_id: str, fn_id: str, user: dict = Depends(require_user)) -> dict:
+    _require_bot(bot_id, user)
     fn = custom_functions.find_one({"_id": _oid(fn_id), "bot_id": bot_id})
     if not fn:
         raise HTTPException(404, "Custom function not found")
@@ -157,6 +158,7 @@ def get_custom_function(bot_id: str, fn_id: str, _: dict = Depends(require_user)
 def update_custom_function(
     bot_id: str, fn_id: str, payload: CustomFunctionUpdate, user: dict = Depends(require_user)
 ) -> dict:
+    _require_bot(bot_id, user)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     result = custom_functions.find_one_and_update(
         {"_id": _oid(fn_id), "bot_id": bot_id},
@@ -171,6 +173,7 @@ def update_custom_function(
 
 @router.delete("/{bot_id}/custom-functions/{fn_id}")
 def delete_custom_function(bot_id: str, fn_id: str, user: dict = Depends(require_user)) -> dict:
+    _require_bot(bot_id, user)
     result = custom_functions.delete_one({"_id": _oid(fn_id), "bot_id": bot_id})
     if result.deleted_count == 0:
         raise HTTPException(404, "Custom function not found")
@@ -180,11 +183,11 @@ def delete_custom_function(bot_id: str, fn_id: str, user: dict = Depends(require
 
 @router.post("/{bot_id}/custom-functions/test")
 async def test_custom_function(
-    bot_id: str, payload: CustomFunctionTestRequest, _: dict = Depends(require_user)
+    bot_id: str, payload: CustomFunctionTestRequest, user: dict = Depends(require_user)
 ) -> dict:
     """Execute the function's request server-side with sample_context filled in, and report
     the raw response alongside which {{variables}} its response_mappings resolved to."""
-    _require_bot(bot_id)
+    _require_bot(bot_id, user)
     ctx = payload.sample_context or {}
     url = _substitute(payload.url, ctx) or ""
     headers = {k: _substitute(v, ctx) for k, v in payload.headers.items()}

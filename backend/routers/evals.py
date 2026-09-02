@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..auth import require_user
+from ..auth import bot_owner_filter, require_user
 from ..db import bot_versions, bots, db
 from ..evals import DEFAULT_SCENARIOS, run_evals
 from ..models import EvalRunRequest
@@ -22,7 +22,7 @@ def _oid(id_str: str) -> ObjectId:
 
 @router.post("/{bot_id}/evals/run")
 def run_bot_evals(bot_id: str, payload: EvalRunRequest, user: dict = Depends(require_user)) -> dict:
-    bot = bots.find_one({"_id": _oid(bot_id)})
+    bot = bots.find_one({"_id": _oid(bot_id), **bot_owner_filter(user)})
     if not bot:
         raise HTTPException(404, "Bot not found")
 
@@ -58,7 +58,9 @@ def run_bot_evals(bot_id: str, payload: EvalRunRequest, user: dict = Depends(req
 
 
 @router.get("/{bot_id}/evals")
-def list_bot_evals(bot_id: str, _: dict = Depends(require_user)) -> list[dict]:
+def list_bot_evals(bot_id: str, user: dict = Depends(require_user)) -> list[dict]:
+    if not bots.find_one({"_id": _oid(bot_id), **bot_owner_filter(user)}):
+        raise HTTPException(404, "Bot not found")
     docs = list(eval_runs.find({"bot_id": _oid(bot_id)}).sort("created_at", -1).limit(20))
     for d in docs:
         d["_id"] = str(d["_id"])

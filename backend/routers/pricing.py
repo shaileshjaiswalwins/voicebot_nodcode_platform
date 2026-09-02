@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends
 from .. import pricing
 from .. import pricing_config as pricing_config_module
 from ..audit import log_audit
-from ..auth import require_user
+from ..auth import require_admin, require_user
 from ..models import PricingConfig
 from ..pricing import ProviderStack
 
@@ -40,12 +40,12 @@ def get_budget_route(max_inr_per_min: float, _: dict = Depends(require_user)) ->
 
 
 @router.get("/admin-config", response_model=PricingConfig)
-def get_admin_config(_: dict = Depends(require_user)) -> PricingConfig:
+def get_admin_config(_: dict = Depends(require_admin)) -> PricingConfig:
     return pricing_config_module.get_config()
 
 
 @router.put("/admin-config", response_model=PricingConfig)
-def update_admin_config(payload: PricingConfig, user: dict = Depends(require_user)) -> PricingConfig:
+def update_admin_config(payload: PricingConfig, user: dict = Depends(require_admin)) -> PricingConfig:
     result = pricing_config_module.update_config(payload)
     log_audit(user, "update", "pricing_config", "pricing_config")
     return result
