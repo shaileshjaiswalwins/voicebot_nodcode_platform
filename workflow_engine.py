@@ -6,7 +6,7 @@ resolver `bot.py`'s `fetch_bot_config` now calls), bot_dev.py hands off to
 `run_workflow_call()` here instead of running its normal fixed-assistant flow.
 
 --- How this maps onto the graph schema (backend/schemas.py: Workflow,
-    WorkflowNodeData; JD-Dashboard/src/types/workflow.ts is the ground truth
+    WorkflowNodeData; Acme-Dashboard/src/types/workflow.ts is the ground truth
     for what the frontend actually persists) ---
 
 - Exactly one ``start`` node. Its ``first_message`` seeds the very first
@@ -27,7 +27,7 @@ resolver `bot.py`'s `fetch_bot_config` now calls), bot_dev.py hands off to
   "Handoff stub" — this file is that pattern made real and generic.
 - An outgoing edge's ``sourceHandle`` equals the transition's (or condition
   branch's) ``id`` — confirmed directly against
-  JD-Dashboard/src/components/workflow-bots/builder/workflow-canvas.tsx
+  Acme-Dashboard/src/components/workflow-bots/builder/workflow-canvas.tsx
   (`onConnect`) and .../nodes/condition-node.tsx (`<Handle id={branch.id}>`).
   So resolving "where does branch X lead" means matching
   `edge.source == node.id and edge.sourceHandle == branch.id`, NOT reading
@@ -88,7 +88,7 @@ livekit-agents source rather than assumed from the (never-executed) example:
      of the conversation to empty on every transition.
 
 Not modeled (kept intentionally out of scope for this pass, unlike the
-Justdial-specific bots): muted-window noise filtering, per-call Mongo
+Acmecorp-specific bots): muted-window noise filtering, per-call Mongo
 transcript schema, keyboard/ambience background audio, abusive-language
 detection. A generic engine has no per-bot business logic to hang those on.
 """
@@ -116,7 +116,7 @@ from call_metrics import CallMetricsCollector
 from livekit_indic5_tts import IndicF5TTS
 from interruption_presets import resolve_interruption_preset
 
-INDIC_TTS_WS_URL = os.getenv("INDIC_TTS_WS_URL", "ws://10.10.0.14:8404/ws")
+INDIC_TTS_WS_URL = os.getenv("INDIC_TTS_WS_URL", "ws://tts.internal:8404/ws")
 
 # ---------------------------------------------------------------------------
 # Small utilities
@@ -220,17 +220,17 @@ class WorkflowState:
 class WorkflowGraph:
     _MAX_HOPS = 25  # guard against a malformed graph looping forever
 
-    def __init__(self, workflow: dict, global_prompt: str = "", tts_provider: str = "justdial"):
+    def __init__(self, workflow: dict, global_prompt: str = "", tts_provider: str = "acmecorp"):
         nodes = workflow.get("nodes") or []
         self.nodes_by_id: dict[str, dict] = {n["id"]: n for n in nodes}
         self.edges: list[dict] = workflow.get("edges") or []
         self.global_prompt = global_prompt or ""
-        # "justdial" (our own IndicF5) can only pronounce Devanagari — see the
+        # "acmecorp" (our own IndicF5) can only pronounce Devanagari — see the
         # transliteration hint appended in compile_instructions() below.
         # "sarvam" (bulbul:v3) is a hosted TTS that pronounces Latin/Hinglish
         # natively, so it skips the hint (mirrors bot_dev.py's identical
         # tts_provider != "sarvam" gate).
-        self.tts_provider = tts_provider or "justdial"
+        self.tts_provider = tts_provider or "acmecorp"
         self.global_nodes = [n for n in nodes if (n.get("data") or {}).get("kind") == "global"]
         starts = [n for n in nodes if (n.get("data") or {}).get("kind") == "start"]
         self.start_node: dict | None = starts[0] if starts else None
@@ -614,11 +614,11 @@ async def run_workflow_call(
     max_call_duration = int(bot_config.get("max_call_duration") or 300)
     post_speech_hold_ms = int(bot_config.get("post_speech_hold_ms") or 300)
 
-    # TTS provider/voice — "justdial" (our own IndicF5) or "sarvam" (bulbul:v3),
+    # TTS provider/voice — "acmecorp" (our own IndicF5) or "sarvam" (bulbul:v3),
     # resolved server-side from voice_id via backend/voice_catalog.py (see
     # backend/routers/workflow_bots.py's get_workflow_bot_config). Same
     # selection bot_dev.py makes for regular assistants.
-    tts_provider = bot_config.get("tts_provider") or "justdial"
+    tts_provider = bot_config.get("tts_provider") or "acmecorp"
     tts_voice = bot_config.get("tts_voice") or "simran"
     # How easily a caller can interrupt this bot — see interruption_presets.py.
     interruption_preset = resolve_interruption_preset(bot_config.get("interruption_sensitivity"))

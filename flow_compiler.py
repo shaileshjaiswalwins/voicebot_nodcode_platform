@@ -1,7 +1,7 @@
 """Compiles a BotConfig.flow graph (backend/models.py Flow/FlowNode/FlowEdge) into a
 structured text block appended to the LLM system prompt.
 
-Phase A of the flow-builder wiring (JD Vani PRD gap-analysis plan): the visual flow graph
+Phase A of the flow-builder wiring (Acme Vani PRD gap-analysis plan): the visual flow graph
 previously had zero runtime effect — nothing in bot.py/bot_pipeline.py/bot_dev.py ever read
 it. This makes the graph *do something* by turning it into step-by-step guidance the LLM is
 told to follow. It is intentionally NOT a deterministic interpreter — the model can still

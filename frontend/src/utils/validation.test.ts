@@ -6,7 +6,7 @@ describe('isValidUrl', () => {
   });
 
   it('accepts a well-formed http/https URL', () => {
-    expect(isValidUrl('http://192.168.8.67:8000', ['http:', 'https:'])).toBe(true);
+    expect(isValidUrl('http://mis.internal:8000', ['http:', 'https:'])).toBe(true);
     expect(isValidUrl('https://example.com/path', ['http:', 'https:'])).toBe(true);
   });
 

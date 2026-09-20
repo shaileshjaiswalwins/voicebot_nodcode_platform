@@ -43,7 +43,7 @@ def test_exchange_code_for_profile_happy_path(client, monkeypatch):
     token_resp = MagicMock(ok=True)
     token_resp.json.return_value = {"access_token": "tok123"}
     validate_resp = MagicMock(ok=True)
-    validate_resp.json.return_value = {"data": {"user": {"empcode": "E1", "empname": "Asha", "email": "asha@justdial.com"}}}
+    validate_resp.json.return_value = {"data": {"user": {"empcode": "E1", "empname": "Asha", "email": "asha@acmecorp.com"}}}
 
     with patch.object(sso_module.requests, "post", return_value=token_resp) as mock_post, \
          patch.object(sso_module.requests, "get", return_value=validate_resp) as mock_get:
@@ -67,11 +67,11 @@ def test_exchange_code_for_profile_raises_on_token_exchange_failure(client):
 
 
 def test_issue_token_for_sso_profile_upserts_user_and_mints_user_token():
-    token = auth_module.issue_token_for_sso_profile({"empcode": "E2", "empname": "Ravi", "email": "ravi@justdial.com"})
+    token = auth_module.issue_token_for_sso_profile({"empcode": "E2", "empname": "Ravi", "email": "ravi@acmecorp.com"})
     decoded = auth_module.jwt.decode(token, auth_module.JWT_SECRET, algorithms=[auth_module.JWT_ALGO])
-    assert decoded["sub"] == "ravi@justdial.com"
+    assert decoded["sub"] == "ravi@acmecorp.com"
     assert decoded["role"] == "user"
-    user = users.find_one({"email": "ravi@justdial.com"})
+    user = users.find_one({"email": "ravi@acmecorp.com"})
     assert user["sso_empcode"] == "E2"
     assert user["role"] == "user"
 
@@ -83,18 +83,18 @@ def test_issue_token_for_sso_profile_grants_admin_only_to_default_admin_email():
 
 
 def test_issue_token_for_sso_profile_does_not_reset_a_promoted_users_role():
-    auth_module.issue_token_for_sso_profile({"empcode": "E5", "email": "promoted@justdial.com"})
-    users.update_one({"email": "promoted@justdial.com"}, {"$set": {"role": "admin"}})
+    auth_module.issue_token_for_sso_profile({"empcode": "E5", "email": "promoted@acmecorp.com"})
+    users.update_one({"email": "promoted@acmecorp.com"}, {"$set": {"role": "admin"}})
 
-    token = auth_module.issue_token_for_sso_profile({"empcode": "E5", "email": "promoted@justdial.com"})
+    token = auth_module.issue_token_for_sso_profile({"empcode": "E5", "email": "promoted@acmecorp.com"})
     decoded = auth_module.jwt.decode(token, auth_module.JWT_SECRET, algorithms=[auth_module.JWT_ALGO])
     assert decoded["role"] == "admin"
 
 
 def test_update_user_role_rejects_demoting_default_admin_even_by_another_admin(client, auth_headers):
-    # A second admin (not the default admin) tries to demote admin@justdial.com.
-    users.insert_one({"email": "second-admin@justdial.com", "password_hash": auth_module.hash_password("password"), "role": "admin"})
-    resp = client.post("/api/auth/login", json={"email": "second-admin@justdial.com", "password": "password"})
+    # A second admin (not the default admin) tries to demote admin@acmecorp.com.
+    users.insert_one({"email": "second-admin@acmecorp.com", "password_hash": auth_module.hash_password("password"), "role": "admin"})
+    resp = client.post("/api/auth/login", json={"email": "second-admin@acmecorp.com", "password": "password"})
     assert resp.status_code == 200, resp.text
     second_admin_headers = {"Authorization": f"Bearer {resp.json()['token']}"}
 
@@ -108,21 +108,21 @@ def test_update_user_role_rejects_demoting_default_admin_even_by_another_admin(c
 
 
 def test_update_user_role_allows_demoting_a_non_default_admin(client, auth_headers):
-    users.insert_one({"email": "other-admin@justdial.com", "password_hash": auth_module.hash_password("password"), "role": "admin"})
+    users.insert_one({"email": "other-admin@acmecorp.com", "password_hash": auth_module.hash_password("password"), "role": "admin"})
 
     resp = client.patch(
-        "/api/auth/users/other-admin@justdial.com/role",
+        "/api/auth/users/other-admin@acmecorp.com/role",
         json={"role": "user"},
         headers=auth_headers,
     )
     assert resp.status_code == 200, resp.text
-    assert users.find_one({"email": "other-admin@justdial.com"})["role"] == "user"
+    assert users.find_one({"email": "other-admin@acmecorp.com"})["role"] == "user"
 
 
 def test_issue_token_for_sso_profile_falls_back_to_empcode_when_no_email():
     token = auth_module.issue_token_for_sso_profile({"empcode": "E3", "empname": "No Email"})
     decoded = auth_module.jwt.decode(token, auth_module.JWT_SECRET, algorithms=[auth_module.JWT_ALGO])
-    assert decoded["sub"] == "e3@justdial.com"
+    assert decoded["sub"] == "e3@acmecorp.com"
 
 
 def test_sso_login_endpoint_redirects_to_idp(client, monkeypatch):
@@ -130,7 +130,7 @@ def test_sso_login_endpoint_redirects_to_idp(client, monkeypatch):
     monkeypatch.setattr(sso_module, "SSO_REDIRECT_URL", "http://example.com/callback")
     resp = client.get("/api/auth/sso/login", follow_redirects=False)
     assert resp.status_code in (302, 307)
-    assert "accounts.justdial.com" in resp.headers["location"]
+    assert "accounts.acmecorp.com" in resp.headers["location"]
 
 
 def test_sso_login_endpoint_500_when_unconfigured(client, monkeypatch):
@@ -144,7 +144,7 @@ def test_sso_callback_endpoint_redirects_to_frontend_with_token(client, monkeypa
     token_resp = MagicMock(ok=True)
     token_resp.json.return_value = {"access_token": "tok"}
     validate_resp = MagicMock(ok=True)
-    validate_resp.json.return_value = {"data": {"user": {"empcode": "E4", "email": "e4@justdial.com"}}}
+    validate_resp.json.return_value = {"data": {"user": {"empcode": "E4", "email": "e4@acmecorp.com"}}}
 
     with patch.object(sso_module.requests, "post", return_value=token_resp), \
          patch.object(sso_module.requests, "get", return_value=validate_resp):
@@ -161,9 +161,9 @@ def test_sso_callback_endpoint_redirects_to_frontend_with_error_on_bad_state(cli
 
 
 def test_delete_user_rejects_deleting_default_admin_even_by_another_admin(client, auth_headers):
-    # A second admin (not the default admin) tries to delete admin@justdial.com.
-    users.insert_one({"email": "third-admin@justdial.com", "password_hash": auth_module.hash_password("password"), "role": "admin"})
-    resp = client.post("/api/auth/login", json={"email": "third-admin@justdial.com", "password": "password"})
+    # A second admin (not the default admin) tries to delete admin@acmecorp.com.
+    users.insert_one({"email": "third-admin@acmecorp.com", "password_hash": auth_module.hash_password("password"), "role": "admin"})
+    resp = client.post("/api/auth/login", json={"email": "third-admin@acmecorp.com", "password": "password"})
     assert resp.status_code == 200, resp.text
     third_admin_headers = {"Authorization": f"Bearer {resp.json()['token']}"}
 
@@ -176,18 +176,18 @@ def test_delete_user_rejects_deleting_default_admin_even_by_another_admin(client
 
 
 def test_delete_user_removes_their_alert_rules_and_incidents(client, auth_headers):
-    users.insert_one({"email": "rule-owner@justdial.com", "password_hash": auth_module.hash_password("password"), "role": "user"})
+    users.insert_one({"email": "rule-owner@acmecorp.com", "password_hash": auth_module.hash_password("password"), "role": "user"})
     rule_id = alert_rules.insert_one({
-        "created_by": "rule-owner@justdial.com",
+        "created_by": "rule-owner@acmecorp.com",
         "name": "test rule",
         "enabled": True,
     }).inserted_id
     alert_incidents.insert_one({"rule_id": str(rule_id), "status": "open"})
 
-    resp = client.delete("/api/auth/users/rule-owner@justdial.com", headers=auth_headers)
+    resp = client.delete("/api/auth/users/rule-owner@acmecorp.com", headers=auth_headers)
     assert resp.status_code == 200, resp.text
 
-    assert users.find_one({"email": "rule-owner@justdial.com"}) is None
+    assert users.find_one({"email": "rule-owner@acmecorp.com"}) is None
     assert alert_rules.find_one({"_id": rule_id}) is None
     assert alert_incidents.find_one({"rule_id": str(rule_id)}) is None
 
@@ -205,19 +205,19 @@ def _signup_and_login(client, email, password="password123"):
 
 
 def test_list_users_rejects_non_admin(client):
-    plain_headers = _signup_and_login(client, "plain-lister@justdial.com")
+    plain_headers = _signup_and_login(client, "plain-lister@acmecorp.com")
     resp = client.get("/api/auth/users", headers=plain_headers)
     assert resp.status_code == 403
 
 
 def test_list_users_returns_full_list_without_password_hash_and_with_is_sso(client, auth_headers):
     users.insert_one({
-        "email": "local-user@justdial.com",
+        "email": "local-user@acmecorp.com",
         "password_hash": auth_module.hash_password("password"),
         "role": "user",
     })
     users.insert_one({
-        "email": "sso-user@justdial.com",
+        "email": "sso-user@acmecorp.com",
         "sso_empcode": "E42",
         "sso_empname": "SSO Person",
         "role": "user",
@@ -228,48 +228,48 @@ def test_list_users_returns_full_list_without_password_hash_and_with_is_sso(clie
     body = resp.json()
 
     emails = {u["email"] for u in body}
-    assert "admin@justdial.com" in emails
-    assert "local-user@justdial.com" in emails
-    assert "sso-user@justdial.com" in emails
+    assert "admin@acmecorp.com" in emails
+    assert "local-user@acmecorp.com" in emails
+    assert "sso-user@acmecorp.com" in emails
 
     for entry in body:
         assert "password_hash" not in entry
 
     by_email = {u["email"]: u for u in body}
-    assert by_email["local-user@justdial.com"]["is_sso"] is False
-    assert by_email["sso-user@justdial.com"]["is_sso"] is True
+    assert by_email["local-user@acmecorp.com"]["is_sso"] is False
+    assert by_email["sso-user@acmecorp.com"]["is_sso"] is True
 
 
 def test_update_user_role_rejects_self_demotion_by_non_default_admin(client):
-    # A second admin (not admin@justdial.com) tries to demote themselves — this hits the
+    # A second admin (not admin@acmecorp.com) tries to demote themselves — this hits the
     # `email == admin["sub"]` guard, distinct from the DEFAULT_ADMIN_EMAIL-specific guard.
     users.insert_one({
-        "email": "self-demoter@justdial.com",
+        "email": "self-demoter@acmecorp.com",
         "password_hash": auth_module.hash_password("password"),
         "role": "admin",
     })
-    resp = client.post("/api/auth/login", json={"email": "self-demoter@justdial.com", "password": "password"})
+    resp = client.post("/api/auth/login", json={"email": "self-demoter@acmecorp.com", "password": "password"})
     assert resp.status_code == 200, resp.text
     self_headers = {"Authorization": f"Bearer {resp.json()['token']}"}
 
     resp = client.patch(
-        "/api/auth/users/self-demoter@justdial.com/role",
+        "/api/auth/users/self-demoter@acmecorp.com/role",
         json={"role": "user"},
         headers=self_headers,
     )
     assert resp.status_code == 400
-    assert users.find_one({"email": "self-demoter@justdial.com"})["role"] == "admin"
+    assert users.find_one({"email": "self-demoter@acmecorp.com"})["role"] == "admin"
 
 
 def test_update_user_role_rejects_non_admin(client):
-    plain_headers = _signup_and_login(client, "plain-role-updater@justdial.com")
+    plain_headers = _signup_and_login(client, "plain-role-updater@acmecorp.com")
     users.insert_one({
-        "email": "some-target@justdial.com",
+        "email": "some-target@acmecorp.com",
         "password_hash": auth_module.hash_password("password"),
         "role": "user",
     })
     resp = client.patch(
-        "/api/auth/users/some-target@justdial.com/role",
+        "/api/auth/users/some-target@acmecorp.com/role",
         json={"role": "admin"},
         headers=plain_headers,
     )
@@ -277,9 +277,9 @@ def test_update_user_role_rejects_non_admin(client):
 
 
 def test_delete_user_rejects_non_admin(client):
-    plain_headers = _signup_and_login(client, "plain-deleter@justdial.com")
-    users.insert_one({"email": "delete-target@justdial.com", "password_hash": auth_module.hash_password("password"), "role": "user"})
-    resp = client.delete("/api/auth/users/delete-target@justdial.com", headers=plain_headers)
+    plain_headers = _signup_and_login(client, "plain-deleter@acmecorp.com")
+    users.insert_one({"email": "delete-target@acmecorp.com", "password_hash": auth_module.hash_password("password"), "role": "user"})
+    resp = client.delete("/api/auth/users/delete-target@acmecorp.com", headers=plain_headers)
     assert resp.status_code == 403
 
 
@@ -287,14 +287,14 @@ def test_role_promotion_takes_effect_on_stale_token_next_request(client, auth_he
     """require_user re-reads the role from the DB on every request instead of trusting the
     (up to 12h-old) JWT payload, so a promotion via the Accounts page takes effect on the
     very next request made with the original, still-valid token — no re-login required."""
-    user_headers = _signup_and_login(client, "promote-me@justdial.com")
+    user_headers = _signup_and_login(client, "promote-me@acmecorp.com")
 
     # Confirm the original token is not yet admin-privileged.
     resp = client.get("/api/auth/users", headers=user_headers)
     assert resp.status_code == 403
 
     resp = client.patch(
-        "/api/auth/users/promote-me@justdial.com/role",
+        "/api/auth/users/promote-me@acmecorp.com/role",
         json={"role": "admin"},
         headers=auth_headers,
     )
@@ -308,12 +308,12 @@ def test_role_promotion_takes_effect_on_stale_token_next_request(client, auth_he
 def test_deleted_users_stale_token_is_rejected_on_next_request(client, auth_headers):
     """Mirror of the promotion test: require_user's live DB re-read also means a deleted
     account's still-valid token stops working on the very next request."""
-    user_headers = _signup_and_login(client, "delete-me@justdial.com")
+    user_headers = _signup_and_login(client, "delete-me@acmecorp.com")
 
     resp = client.get("/api/auth/me", headers=user_headers)
     assert resp.status_code == 200, resp.text
 
-    resp = client.delete("/api/auth/users/delete-me@justdial.com", headers=auth_headers)
+    resp = client.delete("/api/auth/users/delete-me@acmecorp.com", headers=auth_headers)
     assert resp.status_code == 200, resp.text
 
     resp = client.get("/api/auth/me", headers=user_headers)

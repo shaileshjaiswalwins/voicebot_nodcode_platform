@@ -1,6 +1,6 @@
-# LiveKit Native JustDial Bot + No-Code Platform
+# LiveKit Native AcmeCorp Bot + No-Code Platform
 
-Standalone LiveKit-Agents voicebot for JustDial product qualification calls plus a V1 internal no-code platform for PMs and developers. The runtime uses Gemini Live (s2s) via `livekit-agents` natively, while the platform stores bot prompts/settings, versions, campaigns and transcripts in MongoDB.
+Standalone LiveKit-Agents voicebot for AcmeCorp product qualification calls plus a V1 internal no-code platform for PMs and developers. The runtime uses Gemini Live (s2s) via `livekit-agents` natively, while the platform stores bot prompts/settings, versions, campaigns and transcripts in MongoDB.
 
 ## Requirements
 
@@ -75,6 +75,7 @@ See `docs/platform_v1.md` for API routes, handoff notes, observability setup and
 - **Call log**: Saved to backend MongoDB after call ends
 - **Recording**: Written to `call_records/recording_<room>.wav`
 - **No-code config**: Active published bot versions are fetched from MongoDB by `assistant_id`; active calls keep their startup config snapshot.
+- **Post-call judging**: Gemini classifies the call against a 19-outcome disposition rubric. An optional second judge (TypeSafe Jev) returns a probability per outcome and a per-question answered/not-answered signal, off by default — see [JEV_SECOND_OPINION.md](JEV_SECOND_OPINION.md) for the design, tradeoffs and open questions.
 
 ## Notes
 

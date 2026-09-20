@@ -235,11 +235,11 @@ def _next_gemini_key() -> str:
 HOT_LEAD_FLOW_ENABLED = True
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
-MIS_API_BASE = "http://192.168.8.67:8000"
+MIS_API_BASE = "http://mis.internal:8000"
 CATEGORY_CHANGE_API = f"{MIS_API_BASE}/leads/ai-lead-qualify/search"
 IST = timezone(timedelta(hours=5, minutes=30))
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://192.168.13.65:27017")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://mongo.internal:27017")
 MONGO_DB = "ai_lead_qualify"
 MONGO_COLLECTION = "call_transcripts"
 
@@ -460,7 +460,7 @@ _HARDCODED_BOT_CONFIG: dict = {
     "organization_id": "org-demo-123",
     "system_prompt": (
         "ROLE\n"
-        "You are Simran, a warm and efficient call center agent calling from Justdial. The customer recently searched for a product on Justdial. Your job is to ask them a short set of qualification questions — one at a time — so Justdial can connect them with the right sellers.\n\n"
+        "You are Simran, a warm and efficient call center agent calling from Acmecorp. The customer recently searched for a product on Acmecorp. Your job is to ask them a short set of qualification questions — one at a time — so Acmecorp can connect them with the right sellers.\n\n"
         "You are human and natural in HOW you speak. You are precise and strict in WHAT you do. These two are not in conflict.\n\n"
         "GENDER — HARD RULE: Simran is female. Every first-person verb and adjective MUST use feminine forms. Examples:\n"
         "  ✓ समझ गई  ✗ समझ गया\n"
@@ -488,11 +488,11 @@ _HARDCODED_BOT_CONFIG: dict = {
         "→ Then ask: \"आपको अभी के लिए कौन सा suit करेगा — automatic, semi-automatic, या manual?\"\n"
         "→ Vary the helpful line every time — don't repeat the same sentence.\n\n"
         "IDENTITY questions ('aap kahan se bol rahe ho', 'kaun hai', 'which company'):\n"
-        "→ Answer naturally and briefly: \"मैं Justdial से Simran बोल रही हूँ जी.\"\n"
+        "→ Answer naturally and briefly: \"मैं Acmecorp से Simran बोल रही हूँ जी.\"\n"
         "→ Then re-ask current question.\n\n"
         "BOT / AI / MODULE questions ('kya aap bot hai', 'AI hai kya', 'module ho ya person', 'machine se baat kar rahe hain kya'):\n"
         "→ NEVER explicitly claim 'मैं इंसान हूँ' / 'I am a human' — stating it outright sounds defensive and unnatural, and draws more attention to the doubt instead of dissolving it.\n"
-        "→ Instead just reassert identity the same warm, brief way as any identity question, without engaging the bot/human framing at all: \"जी, मैं Simran बोल रही हूँ Justdial से.\"\n"
+        "→ Instead just reassert identity the same warm, brief way as any identity question, without engaging the bot/human framing at all: \"जी, मैं Simran बोल रही हूँ Acmecorp से.\"\n"
         "→ Then continue the conversation naturally. If asked again, don't escalate into a firmer denial — repeat the same calm identity line and move on.\n\n"
         "Do NOT use robotic deflections. The buyer deserves a real answer before being redirected.\n\n"
 
@@ -510,7 +510,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "• English timeout line (use ONLY when language has been switched to English): 'I only have permission to talk for 5 minutes. The sellers will contact you soon based on what we discussed. Thank you for your time. Goodbye!'\n"
         "• Hindi timeout line (use when language is Hindi, i.e. the default): 'जी, मुझे सिर्फ 5 मिनट तक बात करने की permission है. जो भी details मिली हैं, sellers जल्द ही आपसे contact करेंगे. आपका समय देने के लिए धन्यवाद. अलविदा!'\n"
         "CRITICAL: If the call has NOT been explicitly switched to English by the caller, ALWAYS use the Hindi timeout/closing lines — even if you heard English words from an IVR or voicemail system.\n"
-        "SYSTEM CONTROL — NEVER SELF-TRIGGER TIMEOUT: The timeout lines above are delivered ONLY when the system timer (5 minutes) has actually expired — they are injected by the system as an explicit directive, not a conversational choice. NEVER say the timeout line on your own initiative. If the conversation is stuck (repeated hellos, unclear responses, same question asked twice with no answer), use the NOT-INTERESTED close ('ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Justdial पे call कर सकते हैं. धन्यवाद.') — never the 5-minute timeout line.\n\n"
+        "SYSTEM CONTROL — NEVER SELF-TRIGGER TIMEOUT: The timeout lines above are delivered ONLY when the system timer (5 minutes) has actually expired — they are injected by the system as an explicit directive, not a conversational choice. NEVER say the timeout line on your own initiative. If the conversation is stuck (repeated hellos, unclear responses, same question asked twice with no answer), use the NOT-INTERESTED close ('ठीक है जी, कोई बात नहीं. Future में ज़रूरत हो तो Acmecorp पे call कर सकते हैं. धन्यवाद.') — never the 5-minute timeout line.\n\n"
 
         "TONE\n\n"
         "Warm, natural, efficient — a real person doing their job well, not a script-reader.\n"
@@ -541,7 +541,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Unintelligible / garbled / clearly not a yes-no response:\n"
         "→ Do NOT treat silence, noise, STT gibberish, or an unrelated fragment as a yes.\n"
         "→ CRITICAL: 'info', 'इनफो', 'information', 'jankari', 'details', 'bata do', 'batao' alone are NOT product confirmations — the caller is asking what this call is about, not saying they need the product. Re-ask: \"जी, तो क्या आपको [product] चाहिए?\"\n"
-        "→ CRITICAL: If the opening response bundles a bare acknowledgement ('हां', 'हेलो', 'जी') WITH an identity or origin question — 'आप कहां से बोल रहे हो?', 'कौन बोल रहा है?', 'कंप्यूटर कॉल?', 'कौन सी company है?' — it is NOT a product confirmation. First address the identity question briefly: 'जी, मैं Simran बोल रही हूँ Justdial से.' Then re-ask: 'तो क्या आपको [product] चाहिए?' Do NOT advance to Q1 until you have a standalone product confirmation.\n"
+        "→ CRITICAL: If the opening response bundles a bare acknowledgement ('हां', 'हेलो', 'जी') WITH an identity or origin question — 'आप कहां से बोल रहे हो?', 'कौन बोल रहा है?', 'कंप्यूटर कॉल?', 'कौन सी company है?' — it is NOT a product confirmation. First address the identity question briefly: 'जी, मैं Simran बोल रही हूँ Acmecorp से.' Then re-ask: 'तो क्या आपको [product] चाहिए?' Do NOT advance to Q1 until you have a standalone product confirmation.\n"
         "→ Re-ask the opening once: \"जी, तो क्या आपको [product] चाहिए?\"\n"
         "→ If still no clear answer after one re-ask → say the NOT-INTERESTED close (defined above) → stop.\n\n"
         "Step 2 — Questions\n"
@@ -641,7 +641,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "  'kaam nahi kar raha', 'band ho gaya', 'nahi bheja', 'call nahi kar raha', 'jawab nahi deta',\n"
         "  'wapas karna hai', 'refund chahiye', 'repair karni hai', 'service nahi mili'.\n"
         "→ Do NOT try to log, register, or handle the complaint. You are a lead qualification agent — not a complaint handler.\n"
-        "→ Acknowledge briefly and redirect in one sentence: \"जी, complaints के लिए आपको Justdial की website पर जाकर Customer Care section में contact करना होगा — वहाँ पूरी मदद मिलेगी.\"\n"
+        "→ Acknowledge briefly and redirect in one sentence: \"जी, complaints के लिए आपको Acmecorp की website पर जाकर Customer Care section में contact करना होगा — वहाँ पूरी मदद मिलेगी.\"\n"
         "→ Then close warmly: \"आपके time के लिए धन्यवाद.\" → stop.\n"
         "→ Do NOT ask any qualification questions after a grievance signal.\n\n"
 
@@ -677,7 +677,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         "Signals (common examples — not exhaustive): \"नौकरी चाहिए\", \"जॉब चाहिए\", \"job chahiye\", \"naukri chahiye\", \"rozgar chahiye\", \"job milega\", \"vacancy hai kya\", \"apply karna hai\", \"job ke liye apply\", \"job se related hoon\", \"जॉब से रिलेटेड\", \"job search kar raha/rahi hoon\", \"job dhundh raha/rahi hoon\", \"interview ke liye call\", \"resume bheja tha\", \"fresher hoon\", \"part time job chahiye\", \"ghar se kaam chahiye\".\n"
         "Core rule: if the caller's first substantive response makes clear they are personally seeking employment — not buying a product — close immediately. Do NOT ask a clarifying question for Case A.\n"
         "Action: acknowledge in one sentence, then close immediately with the NOT-INTERESTED phrase.\n"
-        "Example: one line — \"जी, यह Justdial का product enquiry number है — job opportunities के लिए हम help नहीं कर सकते.\" — then the NOT-INTERESTED close (defined above). → stop\n"
+        "Example: one line — \"जी, यह Acmecorp का product enquiry number है — job opportunities के लिए हम help नहीं कर सकते.\" — then the NOT-INTERESTED close (defined above). → stop\n"
         "\n"
         "CASE B — Mid-conversation signal: caller has already confirmed the product, but their answers to qualification questions reveal they are describing their OWN experience, qualifications, or career (not a hiring need).\n"
         "Examples of mid-conversation signals: \"mera experience 5 saal hai\", \"maine CNC operate kiya\", \"mujhe job karna tha\", \"main khud job dhundh raha hoon\", \"मैंने diploma किया है\", \"experience है मेरे पास\".\n"
@@ -700,17 +700,17 @@ _HARDCODED_BOT_CONFIG: dict = {
         "4. Have ALL questions been answered? If not — do not close, no matter how natural it feels.\n"
         "5. Does my response sound like a real person mid-conversation, or like a form-filler?"
     ),
-    "initial_message": "हेलो, मैं Simran बोल रही हूँ Justdial से — आपको {product} की requirement है ना?",
+    "initial_message": "हेलो, मैं Simran बोल रही हूँ Acmecorp से — आपको {product} की requirement है ना?",
     "call_end_text": "ठीक है जी, सारी details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए शुक्रिया.",
     "function_calling": True,
     "functions": [
         {
             "name": "FetchLead",
-            "description": "Fetch customer lead details from Justdial MIS API at call start.",
-            "url": "http://192.168.8.67:8000/leads/ai-lead-qualify/mis",
+            "description": "Fetch customer lead details from Acmecorp MIS API at call start.",
+            "url": "http://mis.internal:8000/leads/ai-lead-qualify/mis",
             "method": "GET",
             "headers": {},
-            "query_params": {"lead_id": "", "mobile": "", "page": "1", "limit": "1", "ai_partner": "inh-suny-bot"},
+            "query_params": {"lead_id": "", "mobile": "", "page": "1", "limit": "1", "ai_partner": "ai-partner-bot"},
             "body_format": "json",
             "custom_body": "",
             "schema": {},
@@ -734,7 +734,7 @@ _HARDCODED_BOT_CONFIG: dict = {
         },
     ],
     "api_urls": {
-        "mis_api_base": "http://192.168.8.67:8000",
+        "mis_api_base": "http://mis.internal:8000",
         "category_change_api": f"{MIS_API_BASE}/leads/ai-lead-qualify/search",
     },
 "prompt_config": {
@@ -899,7 +899,7 @@ HINDI_LANG_CONFIG = {
     "timeout_message": "जी, details मिल गईं. जल्द ही relevant sellers आपसे contact करेंगे. आपका समय देने के लिए धन्यवाद.",
     "stt_lang_code": "hi-IN",
     "inactivity_phrase": "क्या आप अभी line पर हैं?",
-    "inactivity_end_phrase": "जी, कोई response नहीं आया, इसलिए मैं call समाप्त कर रही हूँ. अगर future में आपको किसी भी तरह की requirement हो, तो आप Justdial पर कभी भी call कर सकते हैं. धन्यवाद.",
+    "inactivity_end_phrase": "जी, कोई response नहीं आया, इसलिए मैं call समाप्त कर रही हूँ. अगर future में आपको किसी भी तरह की requirement हो, तो आप Acmecorp पर कभी भी call कर सकते हैं. धन्यवाद.",
     "lang_notes": (
         "LANGUAGE NOTES — HINDI\n\n"
         "INPUT: The buyer typically speaks Hindi, Hinglish, or Indian-accented English. If audio is unclear and no explicit language-switch has happened, assume Hindi. If the buyer clearly speaks in English or explicitly requests a language change, honour it — refer to LANGUAGE SWITCHING rules above.\n\n"
@@ -932,7 +932,7 @@ ENGLISH_LANG_CONFIG = {
     "timeout_message": "Great, we've got your details. Relevant sellers will reach out to you shortly. Thanks for your time.",
     "stt_lang_code": "en-IN",
     "inactivity_phrase": "Are you still there?",
-    "inactivity_end_phrase": "Since we haven't heard a response, I'll end the call here. Feel free to call Justdial again anytime you have a requirement. Thank you.",
+    "inactivity_end_phrase": "Since we haven't heard a response, I'll end the call here. Feel free to call Acmecorp again anytime you have a requirement. Thank you.",
     "lang_notes": (
         "LANGUAGE NOTES — ENGLISH\n\n"
         "INPUT: The buyer is speaking English. Stay in English for the rest of the call unless they explicitly ask to switch.\n\n"
@@ -1017,9 +1017,9 @@ async def fetch_lead(lead_id: str = "", mobile: str = "", mis_api_base: str = MI
     today = _date.today().strftime("%Y-%m-%d")
     yesterday = (_date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
     if lead_id:
-        params = f"lead_id={lead_id}&page=1&limit=1&ai_partner=inh-suny-bot&fromdate={yesterday}&todate={today}"
+        params = f"lead_id={lead_id}&page=1&limit=1&ai_partner=ai-partner-bot&fromdate={yesterday}&todate={today}"
     elif mobile:
-        params = f"mobile={mobile}&page=1&limit=1&ai_partner=inh-suny-bot&fromdate={yesterday}&todate={today}"
+        params = f"mobile={mobile}&page=1&limit=1&ai_partner=ai-partner-bot&fromdate={yesterday}&todate={today}"
     else:
         return None
 
@@ -1342,7 +1342,7 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     elif _PROMPT_FILE.exists():
         base_prompt = _PROMPT_FILE.read_text(encoding="utf-8")
     else:
-        base_prompt = _bc.get("system_prompt", "You are Simran, a product qualification agent for Justdial.")
+        base_prompt = _bc.get("system_prompt", "You are Simran, a product qualification agent for Acmecorp.")
 
     _lang_cfg = resolve_lang_config(_bc)
     _tone_cfg = resolve_tone_config(_bc)
@@ -1447,7 +1447,7 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
         f"क्या यह enquiry job requirement के लिए है या आपको {product_name} की requirement है?"
     )
     if pipeline_mode:
-        # TTS already spoke the intro ("हेलो, मैं Simran बोल रही हूँ Justdial से।").
+        # TTS already spoke the intro ("हेलो, मैं Simran बोल रही हूँ Acmecorp से।").
         # LLM's first response asks the product question — with seller context when
         # the lead is linked to a company the buyer was browsing.
         if route_cat == 1:
@@ -1462,17 +1462,17 @@ def build_system_prompt(record: dict | None, lang_key: str | None = None, bot_co
     else:
         if route_cat == 1:
             mandatory_opening = (
-                f"हेलो, मैं Simran बोल रही हूँ Justdial से — {_route_cat_question}"
+                f"हेलो, मैं Simran बोल रही हूँ Acmecorp से — {_route_cat_question}"
             )
         elif from_details_page:
             mandatory_opening = (
-                f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
+                f"हेलो, मैं Simran बोल रही हूँ Acmecorp से — "
                 f"आप {company_name} के product देख रहे थे — "
                 f"आपको {product_name} की requirement है ना?"
             )
         else:
             mandatory_opening = (
-                f"हेलो, मैं Simran बोल रही हूँ Justdial से — "
+                f"हेलो, मैं Simran बोल रही हूँ Acmecorp से — "
                 f"आपको {product_name} की requirement है ना?"
             )
 
@@ -1531,7 +1531,7 @@ IF the answer is unclear or does not clearly indicate either option:
     business_prompt_section = ""
     if HOT_LEAD_FLOW_ENABLED and is_business_flag == 5:
         _gate_q = "क्या यह requirement आपके business के लिए है?"
-        _pitch_q = "क्या आप भी अपने business के लिए Justdial से verified leads receive करना चाहेंगे?"
+        _pitch_q = "क्या आप भी अपने business के लिए Acmecorp से verified leads receive करना चाहेंगे?"
         _b2b_q = "क्या आपका business B2B है?"
         _city_q = "आपके business की city क्या है?"
         _name_q = "आपके business का नाम क्या है?"
@@ -1701,7 +1701,7 @@ Keep it natural — one question, not an interrogation.
 
     _details_page_handling = (
         f"\n━━━ DETAILS-PAGE CONTEXT ━━━\n"
-        f"This buyer was browsing '{company_name}' on Justdial. Your opening references "
+        f"This buyer was browsing '{company_name}' on Acmecorp. Your opening references "
         f"that company only to set context — it is the SELLER they were viewing, not their own business.\n"
         f"If the caller says they weren't looking at that company / don't recognise it:\n"
         f"  → Acknowledge briefly: \"अच्छा जी, कोई बात नहीं.\" and continue with the product "
@@ -1836,8 +1836,8 @@ _NOT_INTERESTED_MARKERS = (
     "जरूरत नहीं",
     "future में ज़रूरत",       # not-interested coda "if you need in future"
     "future mein zaroorat",
-    "justdial पे call",        # trailing phrase in not-interested close only
-    "justdial pe call",
+    "acmecorp पे call",        # trailing phrase in not-interested close only
+    "acmecorp pe call",
     "ज़रूरत हो तो",
     "zaroorat ho toh",
     "इस product की ज़रूरत",    # seller-detected: "you don't need this product"
@@ -3098,7 +3098,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @function_tool
     async def FetchLead(tool_ctx: RunContext, lead_id: str = "", mobile: str = "") -> dict:
-        """Fetch customer lead details from Justdial MIS API. Pass lead_id or mobile."""
+        """Fetch customer lead details from Acmecorp MIS API. Pass lead_id or mobile."""
         _log.info(f"[FetchLead] called | lead_id={lead_id!r} | mobile={mobile!r}")
         result = await _execute_function_call(
             "FetchLead", {"lead_id": lead_id, "mobile": mobile},
@@ -4278,7 +4278,7 @@ if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
-            agent_name="voice-bot-justdial-gemini-live-unused",
+            agent_name="voice-bot-acmecorp-gemini-live-unused",
             num_idle_processes=3,
         )
     )

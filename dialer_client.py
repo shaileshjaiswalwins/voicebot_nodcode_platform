@@ -1,5 +1,5 @@
 """Push a queued campaign lead to TSPL's outbound-dialer API — the piece that actually
-causes a real phone call to happen. TSPL resolves the lead's `jduid` (Justdial's internal
+causes a real phone call to happen. TSPL resolves the lead's `jduid` (Acmecorp's internal
 per-user ID) to a real phone number on their side; we never see the number itself.
 
 `campaign_type`/`trigger_reason` are static per Avi's dev sample. Everything else is either
@@ -20,7 +20,7 @@ import aiohttp
 from loguru import logger
 
 DIALER_PUSH_API_URL = os.getenv(
-    "DIALER_PUSH_API_URL", "http://192.168.14.101:3006/leads/ai-lead-qualify/save"
+    "DIALER_PUSH_API_URL", "http://mis-dev.internal:3006/leads/ai-lead-qualify/save"
 )
 
 STATIC_CAMPAIGN_TYPE = "TARGET_AI_CALL"

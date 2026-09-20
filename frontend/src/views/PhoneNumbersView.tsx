@@ -280,7 +280,7 @@ export function PhoneNumbersView({
                   <HelpCircle size={12} style={{ color: 'var(--muted)', cursor: 'help' }} />
                 </Tooltip>
               </span>
-              <input value={newNumber} onChange={(e) => setNewNumber(e.target.value)} placeholder="08069625582" />
+              <input value={newNumber} onChange={(e) => setNewNumber(e.target.value)} placeholder="08000000000" />
             </label>
             <label>
               Environment
@@ -309,15 +309,15 @@ export function PhoneNumbersView({
             </label>
             <label>
               IP
-              <input value={newIp} onChange={(e) => setNewIp(e.target.value)} placeholder="192.168.29.196" />
+              <input value={newIp} onChange={(e) => setNewIp(e.target.value)} placeholder="dev-server.internal" />
             </label>
             <label>
               SIP trunk
-              <input value={newSipTrunk} onChange={(e) => setNewSipTrunk(e.target.value)} placeholder="9017" />
+              <input value={newSipTrunk} onChange={(e) => setNewSipTrunk(e.target.value)} placeholder="9000" />
             </label>
             <label>
               SIP username
-              <input value={newSipUsername} onChange={(e) => setNewSipUsername(e.target.value)} placeholder="voice_bot_nocode" />
+              <input value={newSipUsername} onChange={(e) => setNewSipUsername(e.target.value)} placeholder="voice_bot_user" />
             </label>
             <label className="full">
               SIP password

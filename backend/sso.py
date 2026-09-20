@@ -1,4 +1,4 @@
-"""Justdial IAM SSO (OAuth2 + PKCE) client — ported from search_mis's SecurityController.php
+"""Acmecorp IAM SSO (OAuth2 + PKCE) client — ported from search_mis's SecurityController.php
 per the integration doc (SSO_Integration_Reference.docx, section 3/7). Only the IdP contract
 is reused (PKCE generation, the auth/token/validate-token calls); role derivation and session
 shape are this platform's own, not search_mis's hardcoded rules.
@@ -18,7 +18,8 @@ import requests
 
 from .db import db
 
-SSO_IAM_BASE_URL = os.getenv("SSO_IAM_BASE_URL", "https://accounts.justdial.com/jdiam")
+# Production MUST set SSO_IAM_BASE_URL — this fallback is a placeholder, not a real IdP.
+SSO_IAM_BASE_URL = os.getenv("SSO_IAM_BASE_URL", "https://accounts.acmecorp.com/iam")
 SSO_CLIENT_ID = os.getenv("SSO_CLIENT_ID", "")
 SSO_CLIENT_SECRET = os.getenv("SSO_CLIENT_SECRET", "")
 SSO_REDIRECT_URL = os.getenv("SSO_REDIRECT_URL", "")
@@ -107,4 +108,4 @@ def exchange_code_for_profile(code: str, state: str) -> dict:
 def logout_redirect_url() -> str:
     """Doc section 3, step 14 — end the IdP-side session too, so a fresh login doesn't
     silently reuse it."""
-    return f"{SSO_IAM_BASE_URL.rsplit('/jdiam', 1)[0]}/logout/logoutServiceAuth?logout_param={SSO_LOGOUT_SERVICE_PARAM}"
+    return f"{SSO_IAM_BASE_URL.rsplit('/iam', 1)[0]}/logout/logoutServiceAuth?logout_param={SSO_LOGOUT_SERVICE_PARAM}"

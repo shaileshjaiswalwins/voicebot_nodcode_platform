@@ -5,7 +5,7 @@ def test_start_test_call_without_livekit_credentials_returns_helpful_500(client,
 
     bot = client.post(
         "/api/bots",
-        json={"name": "Test Bot", "description": "d", "config": {"organization_name": "Justdial"}},
+        json={"name": "Test Bot", "description": "d", "config": {"organization_name": "Acmecorp"}},
         headers=auth_headers,
     ).json()
 

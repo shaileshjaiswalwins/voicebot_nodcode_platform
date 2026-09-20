@@ -119,9 +119,9 @@ function mockAuthedDataLoads(bots: Bot[] = []) {
 }
 
 async function signIn(user: ReturnType<typeof userEvent.setup>) {
-  mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@justdial.com' });
+  mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@acmecorp.com' });
   render(<App />);
-  await user.type(screen.getByLabelText(/email/i), 'user@justdial.com');
+  await user.type(screen.getByLabelText(/email/i), 'user@acmecorp.com');
   await user.type(screen.getByLabelText(/password/i), 'correct-password');
   await user.click(screen.getByRole('button', { name: /sign in/i }));
   await waitFor(() => expect(screen.getAllByText('Voice AI Platform').length).toBeGreaterThan(0));
@@ -147,7 +147,7 @@ describe('Agent workspace', () => {
     await user.click(await screen.findByRole('button', { name: /create first agent/i }));
 
     const dialog = await screen.findByRole('dialog');
-    await user.type(within(dialog).getByPlaceholderText(/JD Outbound/i), 'Riya — HR Screening');
+    await user.type(within(dialog).getByPlaceholderText(/Acme Outbound/i), 'Riya — HR Screening');
     await user.type(within(dialog).getByPlaceholderText(/Tarun, Priya, Aman/i), 'Riya');
 
     // The list re-fetch after creation must include the new agent, or selecting it is a no-op.

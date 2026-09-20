@@ -63,7 +63,7 @@ from callback_worker.analysis import (
 )
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-MIS_API_BASE = "http://192.168.8.67:8000"
+MIS_API_BASE = "http://mis.internal:8000"
 MIS_LEADS_URL = f"{MIS_API_BASE}/leads/ai-lead-qualify/mis"
 MIS_PAGE_SIZE = 100
 MIS_MAX_PAGES = 100  # safety cap — 100 * 100 = 10 000 leads max
@@ -122,7 +122,7 @@ async def fetch_mis_leads(
     for page in range(1, MIS_MAX_PAGES + 1):
         params = {
             "lead_id": "", "ref_id": "", "jduid": "", "city": "",
-            "ai_partner": "inh-suny-bot", "disposition_type": "latest",
+            "ai_partner": "ai-partner-bot", "disposition_type": "latest",
             "disposition": "", "ncatid": "", "whatsapp_flag": "", "medium": "",
             "flow": "all", "page_name": "", "fromdate": date_label,
             "todate": date_label, "page": str(page), "limit": str(MIS_PAGE_SIZE),

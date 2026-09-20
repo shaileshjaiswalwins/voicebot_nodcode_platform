@@ -13,7 +13,11 @@ JWT_SECRET = os.getenv("DASHBOARD_JWT_SECRET", "dev-only-secret-change-me-32-byt
 JWT_ALGO = "HS256"
 TOKEN_TTL_SEC = 60 * 60 * 12
 
-DEFAULT_ADMIN_EMAIL = "admin@justdial.com"
+# Identity values are env-driven so the source carries no real company domain.
+# Production MUST set DEFAULT_ADMIN_EMAIL and SSO_EMAIL_DOMAIN to the real values —
+# an existing admin row in Mongo is matched by this exact string.
+DEFAULT_ADMIN_EMAIL = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@acmecorp.com")
+SSO_EMAIL_DOMAIN = os.getenv("SSO_EMAIL_DOMAIN", "acmecorp.com")
 DEFAULT_ADMIN_PASSWORD = "password"
 
 _bearer = HTTPBearer(auto_error=False)
@@ -85,10 +89,10 @@ def create_user(email: str, password: str, role: str = "user") -> str | None:
 
 def issue_token_for_sso_profile(profile: dict) -> str:
     """Mint this platform's own JWT for an SSO-authenticated employee. Only
-    admin@justdial.com is an admin — every other SSO login is a regular user by default,
+    Only DEFAULT_ADMIN_EMAIL is an admin — every other SSO login is a regular user by default,
     same as local signup. Uses $setOnInsert for role so a first-time login doesn't clobber
     a role an admin later granted through the Accounts page."""
-    email = _normalize_email(profile.get("email") or f"{profile.get('empcode')}@justdial.com")
+    email = _normalize_email(profile.get("email") or f"{profile.get('empcode')}@{SSO_EMAIL_DOMAIN}")
     default_role = "admin" if email == DEFAULT_ADMIN_EMAIL else "user"
     user = users.find_one_and_update(
         {"email": email},

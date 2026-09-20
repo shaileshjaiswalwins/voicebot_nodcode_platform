@@ -38,7 +38,7 @@ VERIFY_TRANSCRIPTS_FROM_RECORDING = os.getenv(
 ).lower() in {"1", "true", "yes", "on"}
 DIALER_RECORDING_API_URL = os.getenv(
     "DIALER_RECORDING_API_URL",
-    "http://192.168.8.121:8082/jdboxNode/dashboard/fetchFilteredCallData",
+    "http://dialer.internal:8082/acmeboxNode/dashboard/fetchFilteredCallData",
 )
 DIALER_RECORDING_CITY = os.getenv("DIALER_RECORDING_CITY", "bangalore")
 DIALER_RECORDING_SERVICE_ID = os.getenv("DIALER_RECORDING_SERVICE_ID", "")

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Your credentials
-HOST="192.168.29.196"
+HOST="dev-server.internal"
 USER="sunnys_004098"
 PASS="SunnY@123$987"
 

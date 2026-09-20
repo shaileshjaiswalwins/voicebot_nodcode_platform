@@ -15,7 +15,7 @@ PLATFORM_DB = os.getenv("VOICEBOT_PLATFORM_DB", "ai_voice_bot_management")
 # NOTE: ai_lead_qualify is a separate live production DB — do not read/write it from this
 # codebase. Call transcripts live in tbl_ai_vb_call_transcripts in PLATFORM_DB instead.
 
-# Opt-in local demo mode: the real Mongo (MONGO_URI) lives on Justdial's internal network
+# Opt-in local demo mode: the real Mongo (MONGO_URI) lives on Acmecorp's internal network
 # and is unreachable off-VPN. Set USE_INMEMORY_DB=true to run the admin API against an
 # in-process mongomock instance instead, so the UI is fully clickable without VPN access.
 # Off by default — production/dev-on-VPN behavior is completely unchanged.

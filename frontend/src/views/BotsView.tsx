@@ -432,7 +432,7 @@ export function NewAgentWizard({
           <div className="form-grid">
             <label>
               <span>Bot name <span style={{ color: 'var(--danger)' }}>*</span></span>
-              <input value={form.name} onChange={set('name')} placeholder="e.g. JD Outbound — Hindi" autoFocus />
+              <input value={form.name} onChange={set('name')} placeholder="e.g. Acme Outbound — Hindi" autoFocus />
               <small>A label for the agent</small>
             </label>
           </div>

@@ -39,7 +39,7 @@ def test_extract_recording_url_supports_media_path_sample_shape():
             {
                 "call_disposition": "ANSWERED",
                 "call_duration": 24,
-                "media_path": "http://172.29.26.148/Recordings/2026/May/21May2026/293/call.mp3",
+                "media_path": "http://recordings.internal/Recordings/2026/May/21May2026/293/call.mp3",
             },
         ],
     }

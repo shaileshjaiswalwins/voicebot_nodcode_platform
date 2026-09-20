@@ -4,15 +4,15 @@
 
 Boss's demo ask (email), to be delivered on our own platform (`voicebot_nodcode_platform`),
 using our own MongoDB tables/collections — explicitly not the ones in
-`amitrajputfff/backend-Jd-Dashboard` / `amitrajputfff/JD-Dashboard`, which are a separate
+`amitrajputfff/backend-Jd-Dashboard` / `amitrajputfff/Acme-Dashboard`, which are a separate
 teammate's parallel nocode-platform effort we have read-only reference access to (cloned
-locally to `/Users/justdial/nocode_platform_compare/` for comparison only, not to depend on).
+locally to `/Users/acmecorp/nocode_platform_compare/` for comparison only, not to depend on).
 
 MIS APIs are shared/identical between both efforts and should stay that way.
 
 ## Comparative findings (own platform vs. amitrajputfff's repos)
 
-| Capability (from boss's email) | Ours (`voicebot_nodcode_platform`) | Theirs (`backend-Jd-Dashboard`/`JD-Dashboard`) | Verdict |
+| Capability (from boss's email) | Ours (`voicebot_nodcode_platform`) | Theirs (`backend-Jd-Dashboard`/`Acme-Dashboard`) | Verdict |
 |---|---|---|---|
 | Multilingual bot config | Partial — DB-backed, PM-editable (`voicebot_platform/language_settings.py`), prompt-driven switching | Partial — hardcoded in `simran_prompt.txt`, prompt-driven | **Ours more mature** |
 | Multi-agent flows (real handoff per stage) | **Full** — `workflow_engine.py` (just merged from our own `Own_TTS` branch): each conversation node is its own LiveKit `Agent`, real handoff via function-tool return | **Absent** — no execution engine at all in this repo; workflow config is inert JSON without a runtime | **Ours — and theirs literally cannot run without borrowing our engine** |
@@ -24,7 +24,7 @@ MIS APIs are shared/identical between both efforts and should stay that way.
 | Smart escalation / human handoff | Partial — graceful fake-transfer (apologizes, ends call), honest docstring about the gap | Stub — schema field only, nothing executes it | **Ours, barely** — real SIP transfer missing in both |
 | Zero-code webhooks (mid-call actions) | **Full** — CRUD, schema-build, LiveKit tool exec, tests (`custom_functions.py`, `custom_function_tools.py`) | Partial — config + "validate" UI only, no execution | **Ours** |
 | Payload ingestion + analytics + export | **Full** — lead ingestion, `callback_worker` analysis+callback pipeline, working CSV export endpoints | Broken — "Export" button calls `/api/export/data`, which **doesn't exist** on their backend (404 trap) | **Ours** |
-| Appointment-flow demo bot | **Absent** — no seed data, no appointment bot anywhere in our repo | Full seed script (`seed_justdial_appointment_workflow_bot.py`) — 12-stage vendor-outreach script, but calendar "booking" is just a recorded string variable, not a real calendar API call | **Theirs has the content; we have no equivalent yet** |
+| Appointment-flow demo bot | **Absent** — no seed data, no appointment bot anywhere in our repo | Full seed script (`seed_acmecorp_appointment_workflow_bot.py`) — 12-stage vendor-outreach script, but calendar "booking" is just a recorded string variable, not a real calendar API call | **Theirs has the content; we have no equivalent yet** |
 
 ## What's missing, prioritized
 
@@ -71,5 +71,5 @@ MIS APIs are shared/identical between both efforts and should stay that way.
 - Keep all of this inside our own Mongo collections/tables per explicit instruction — no writes
   to `amitrajputfff`'s DB or repos at any point.
 - MIS APIs stay shared/identical — no changes needed there.
-- `/Users/justdial/nocode_platform_compare/` (local shallow clones of both their repos) is
+- `/Users/acmecorp/nocode_platform_compare/` (local shallow clones of both their repos) is
   read-only reference material for this comparison — not a dependency, not to be deployed from.
