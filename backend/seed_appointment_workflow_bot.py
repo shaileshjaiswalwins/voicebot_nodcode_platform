@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Seed the "Justdial Vendor Appointment Scheduling (Ishita)" workflow bot into
+"""Seed the "AcmeCorp Vendor Appointment Scheduling (Ishita)" workflow bot into
 OUR OWN Mongo collections (tbl_ai_vb_bots / tbl_ai_vb_bot_versions in the
 ai_voice_bot_management DB — see backend/db.py), for the "Live Feature Showcase:
 Appointment Flow" demo item.
 
 Script content (node prompts/labels/closing messages, built from
 Revised_Script_30062024.pdf) reproduced verbatim from the reference platform's
-seed_justdial_appointment_workflow_bot.py — this is Justdial's own internal
+seed_acmecorp_appointment_workflow_bot.py — this is AcmeCorp's own internal
 outbound call script, shared across both teams' platforms for the same demo, not
 third-party content. Graph shape/schema and storage are entirely our own
 (WorkflowGraphDef in backend/models.py, workflow_engine.py's runtime), and vendor
@@ -59,7 +59,7 @@ from .models import (
     WorkflowVariableSpec,
 )
 
-BOT_NAME = "Justdial Vendor Appointment Scheduling (Ishita)"
+BOT_NAME = "AcmeCorp Vendor Appointment Scheduling (Ishita)"
 
 _BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 MOCK_MIS_API_URL = f"{_BACKEND_URL}/api/mock/vendor-lookup"
@@ -110,7 +110,7 @@ NODES: list[WorkflowNode] = [
     WorkflowNode(id="conv-1b", position={"x": 400, "y": 320}, data=WorkflowNodeData(
         kind="conversation", label="Stage 1B — Owner + Decision Maker Check",
         prompt=(
-            "Say: 'Main Ishita bol rahi hoon JustDial se. Kya meri baat {{mis.owner_name}} ji se ho "
+            "Say: 'Main Ishita bol rahi hoon AcmeCorp se. Kya meri baat {{mis.owner_name}} ji se ho "
             "rahi hai?' If they confirm being {{mis.owner_name}}, ask: 'Toh iss business ke decisions "
             "jaise ki advertisement ya promotion aap hi lete honge?' If they confirm they ARE the "
             "decision-maker for ads/promotion, call the 'decision_maker' transition.\n"
@@ -160,7 +160,7 @@ NODES: list[WorkflowNode] = [
             "Say: 'Dekhiye, pichle mahine aapke area mein {{mis.business_category}} ki "
             "{{mis.category_searches}} se zyada enquiries aayi thin. Yeh saari enquiries aapke "
             "competitors jaise {{mis.competitor_name_1}} aur {{mis.competitor_name_2}} ko ja rahi hain "
-            "kyunki woh JustDial se jude hain. Aap jude nahi hain toh yeh leads aapke paas nahi aa "
+            "kyunki woh AcmeCorp se jude hain. Aap jude nahi hain toh yeh leads aapke paas nahi aa "
             "rahi. Aap chahenge ki aapko bhi aisi leads milne lagein?' Once the vendor acknowledges "
             "or agrees, call the 'acknowledged' transition."
         ),
@@ -172,7 +172,7 @@ NODES: list[WorkflowNode] = [
         kind="conversation", label="Stage 3.1 — Verification + Free Visit",
         prompt=(
             "Say: 'Hamare Marketing Manager aaj aapke area mein hi visit kar rahe hain. Woh aakar "
-            "aapki JustDial profile verify kar lenge aur aapke business ke photos, location, timing "
+            "aapki AcmeCorp profile verify kar lenge aur aapke business ke photos, location, timing "
             "sab update karenge. Yeh visit bilkul free hai, koi charge nahi.' After saying this line, "
             "call the 'continue' transition."
         ),
@@ -191,7 +191,7 @@ NODES: list[WorkflowNode] = [
             "aapki category ke liye special discount coupons bhi hain jo limited hain,' pitch the "
             "next available slot, then record the time they accept.\n"
             "- If they say it's expensive: say 'Bilkul samajh sakti hoon — isliye hi manager free "
-            "demo denge taaki aap khud dekh sakein JustDial kaise kaam karta hai. Abhi sirf meeting "
+            "demo denge taaki aap khud dekh sakein AcmeCorp kaise kaam karta hai. Abhi sirf meeting "
             "book ho rahi hai, koi payment nahi. Aaj ka time fix kar lein?' then record the time.\n"
             "As soon as a specific time is agreed AND recorded via set_variable, call the "
             "'time_agreed' transition."
@@ -314,8 +314,8 @@ EDGES: list[WorkflowEdge] = [
 ]
 
 GLOBAL_PROMPT = (
-    "You are Ishita, an outbound telecaller for JustDial. You are calling a business (vendor) to pitch "
-    "JustDial's paid listing membership and book a free manager visit. Speak natural, warm, persistent "
+    "You are Ishita, an outbound telecaller for AcmeCorp. You are calling a business (vendor) to pitch "
+    "AcmeCorp's paid listing membership and book a free manager visit. Speak natural, warm, persistent "
     "Hinglish — like a real telecaller, never robotic or formal. Keep each turn short (1-2 sentences). "
     "Follow this call's stages in order, but adapt phrasing naturally to how the vendor actually responds — "
     "don't recite lines verbatim if the vendor has already answered part of it."

@@ -31,7 +31,7 @@ _DISPATCH_ASSIGN_TIMEOUT_S = 10
 # to read LIVEKIT_AGENT_NAME, which meant the pairing depended on two processes happening to
 # load the same value from .env — and a machine whose env named a different worker got no bot
 # at all. Fixed here so clicking Test Call always reaches the worker that handles test calls.
-TESTCALL_AGENT_NAME = "voice-bot-justdial-dashboard-test"
+TESTCALL_AGENT_NAME = "voice-bot-acmecorp-dashboard-test"
 
 
 async def _watch_dispatch_assignment(room_name: str, agent_name: str, bot_id: str) -> None:

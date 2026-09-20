@@ -139,7 +139,7 @@ DISPOSITION_MAP: dict[str, str] = {
     "Already Spoken":                   "The customer has already discussed or interacted about the requirement with JD or the seller, OR the customer's requirement has already been fulfilled.",
     "Will do it Myself":                "The customer still has the requirement but will source/handle it themselves without JD's help — they explicitly declined seller connections (e.g. 'मैं खुद देख लूँगा', 'I'll manage it myself'). The need exists; only JD's assistance is rejected. Distinct from Not Interested.",
     "Call Rescheduled":                 "The customer asked to call at a specific date and time.",
-    "Seller Intent":                    "The caller is a seller or vendor trying to offer their own products/services — they are NOT a buyer with a requirement. They may want to list on JustDial or pitch their business. This is the opposite of a buyer lead.",
+    "Seller Intent":                    "The caller is a seller or vendor trying to offer their own products/services — they are NOT a buyer with a requirement. They may want to list on AcmeCorp or pitch their business. This is the opposite of a buyer lead.",
     "Job Seeker":                       "The caller is seeking employment/a job rather than the product or service being inquired about — this is not a genuine buyer lead. No further call attempts or WhatsApp follow-ups should be made.",
     "Abusive Lead":                     "The recipient exhibited abusive or inappropriate behavior during the call.",
     "DNC Client : Don't Call Further":  "The customer explicitly requested not to be contacted again.",
@@ -559,7 +559,7 @@ async def generate_call_analysis(
         }
 
     # Pre-LLM: detect agent's not-interested closing phrase.
-    # The bot emits "कोई बात नहीं जी, future में ज़रूरत हो तो Justdial पे call कर सकते हैं"
+    # The bot emits "कोई बात नहीं जी, future में ज़रूरत हो तो AcmeCorp पे call कर सकते हैं"
     # most commonly when the buyer rejected the product, but also (incorrectly) when the
     # buyer is a seller/distributor or has already spoken to a seller. Bypass the short-circuit
     # for those cases so the LLM can assign the correct outcome.
@@ -567,8 +567,8 @@ async def generate_call_analysis(
         "कोई बात नहीं",
         "future में ज़रूरत",
         "future mein zaroorat",
-        "justdial पे call",
-        "justdial pe call",
+        "acmecorp पे call",
+        "acmecorp pe call",
         "ज़रूरत हो तो",
         "zaroorat ho toh",
     ]
@@ -892,7 +892,7 @@ async def generate_call_analysis(
         }
 
     # Pre-LLM: detect caller who dialled to contact a company/seller directly
-    # rather than to purchase through Justdial sellers.
+    # rather than to purchase through AcmeCorp sellers.
     # "बात करना था" / "contact karna tha" = "I wanted to talk TO [company]"
     # combined with an opening rejection ("ना"/"नहीं") signals the caller was
     # trying to reach the company directly — not a product purchase intent.
@@ -925,7 +925,7 @@ async def generate_call_analysis(
             "call_outcome_description": DISPOSITION_MAP["Could Not Confirm"],
             "call_summary": (
                 "Caller's intent was to contact the company/seller directly — "
-                "this was not a product purchase inquiry through Justdial."
+                "this was not a product purchase inquiry through AcmeCorp."
             ),
             "is_business": "", "business_city": "", "business_name": "", "business_intent": "", "b2b_user": "",
             "qna": [], "product_change": {}, "rescheduled_to": "",
@@ -1537,7 +1537,7 @@ STEP 2C — EXTRACT HOT LEAD FIELDS
 ━━━━━━━━━━━━━━━━━━━━━━━━
 
 The agent runs a fixed sequence for this call (is_business_flag=5): GATE question ("is this
-requirement for your business?") → LEADS PITCH ("do you want Justdial leads for your
+requirement for your business?") → LEADS PITCH ("do you want AcmeCorp leads for your
 business?") → B2B question → business city → business name. Extract these fields from the full
 transcript. Do NOT infer or guess — only extract values explicitly stated or clearly implied by
 the buyer's direct response, OR by where the transcript cuts off relative to this sequence (see

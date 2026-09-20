@@ -384,7 +384,7 @@ def test_network_exception_tagged_as_network_category(captured_log_messages):
 def _create_bot(client, auth_headers, name="Analysis Fields Bot", config=None):
     resp = client.post(
         "/api/bots",
-        json={"name": name, "description": "d", "config": config or {"organization_name": "Justdial"}},
+        json={"name": name, "description": "d", "config": config or {"organization_name": "AcmeCorp"}},
         headers=auth_headers,
     )
     return resp
@@ -395,7 +395,7 @@ def test_duplicate_analysis_field_keys_rejected(client, auth_headers):
         client,
         auth_headers,
         config={
-            "organization_name": "Justdial",
+            "organization_name": "AcmeCorp",
             "analysis_fields": [
                 {"key": "dup", "label": "A", "type": "text"},
                 {"key": "dup", "label": "B", "type": "text"},
@@ -410,7 +410,7 @@ def test_enum_field_without_enum_options_rejected(client, auth_headers):
         client,
         auth_headers,
         config={
-            "organization_name": "Justdial",
+            "organization_name": "AcmeCorp",
             "analysis_fields": [{"key": "sentiment", "label": "Sentiment", "type": "enum"}],
         },
     )
@@ -422,7 +422,7 @@ def test_enum_field_with_empty_enum_options_list_rejected(client, auth_headers):
         client,
         auth_headers,
         config={
-            "organization_name": "Justdial",
+            "organization_name": "AcmeCorp",
             "analysis_fields": [
                 {"key": "sentiment", "label": "Sentiment", "type": "enum", "enum_options": []}
             ],
@@ -438,7 +438,7 @@ def test_exceeding_max_analysis_fields_cap_rejected(client, auth_headers):
         {"key": f"field_{i}", "label": f"Field {i}", "type": "text"}
         for i in range(MAX_ANALYSIS_FIELDS_PER_BOT + 1)
     ]
-    resp = _create_bot(client, auth_headers, config={"organization_name": "Justdial", "analysis_fields": fields})
+    resp = _create_bot(client, auth_headers, config={"organization_name": "AcmeCorp", "analysis_fields": fields})
     assert resp.status_code == 400
 
 
@@ -455,7 +455,7 @@ def test_valid_analysis_fields_schema_saves_and_round_trips(client, auth_headers
         {"key": "summary", "label": "Summary", "type": "text"},
         {"key": "score", "label": "Score", "type": "number"},
     ]
-    resp = _create_bot(client, auth_headers, config={"organization_name": "Justdial", "analysis_fields": valid_fields})
+    resp = _create_bot(client, auth_headers, config={"organization_name": "AcmeCorp", "analysis_fields": valid_fields})
     assert resp.status_code == 200, resp.text
     bot = resp.json()
 
@@ -478,7 +478,7 @@ def test_at_max_cap_boundary_is_accepted(client, auth_headers):
         {"key": f"field_{i}", "label": f"Field {i}", "type": "text"}
         for i in range(MAX_ANALYSIS_FIELDS_PER_BOT)
     ]
-    resp = _create_bot(client, auth_headers, config={"organization_name": "Justdial", "analysis_fields": fields})
+    resp = _create_bot(client, auth_headers, config={"organization_name": "AcmeCorp", "analysis_fields": fields})
     assert resp.status_code == 200, resp.text
 
 
@@ -865,7 +865,7 @@ def test_analysis_field_key_with_double_quote_rejected(client, auth_headers):
         client,
         auth_headers,
         config={
-            "organization_name": "Justdial",
+            "organization_name": "AcmeCorp",
             "analysis_fields": [{"key": 'bad"key', "label": "Bad", "type": "text"}],
         },
     )
@@ -877,7 +877,7 @@ def test_analysis_field_key_with_newlines_rejected(client, auth_headers):
         client,
         auth_headers,
         config={
-            "organization_name": "Justdial",
+            "organization_name": "AcmeCorp",
             "analysis_fields": [{"key": "key\nwith\nnewlines", "label": "Bad", "type": "text"}],
         },
     )
@@ -890,7 +890,7 @@ def test_analysis_field_key_alphanumeric_underscore_still_accepted(client, auth_
         client,
         auth_headers,
         config={
-            "organization_name": "Justdial",
+            "organization_name": "AcmeCorp",
             "analysis_fields": [{"key": "sentiment_v2", "label": "Sentiment", "type": "text"}],
         },
     )
@@ -908,7 +908,7 @@ def test_whitespace_variant_duplicate_keys_rejected(client, auth_headers):
         client,
         auth_headers,
         config={
-            "organization_name": "Justdial",
+            "organization_name": "AcmeCorp",
             "analysis_fields": [
                 {"key": " dup", "label": "A", "type": "text"},
                 {"key": "dup ", "label": "B", "type": "text"},
@@ -923,7 +923,7 @@ def test_whitespace_only_key_rejected_as_empty(client, auth_headers):
         client,
         auth_headers,
         config={
-            "organization_name": "Justdial",
+            "organization_name": "AcmeCorp",
             "analysis_fields": [{"key": "   ", "label": "A", "type": "text"}],
         },
     )
@@ -1068,7 +1068,7 @@ def test_non_workflow_bot_with_analysis_fields_saves_successfully(client, auth_h
         client,
         auth_headers,
         config={
-            "organization_name": "Justdial",
+            "organization_name": "AcmeCorp",
             "bot_type": "standard",
             "analysis_fields": [
                 {"key": "resolved", "label": "Resolved", "type": "boolean"},

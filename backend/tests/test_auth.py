@@ -1,19 +1,19 @@
 def test_login_with_default_admin_succeeds(client):
-    resp = client.post("/api/auth/login", json={"email": "admin@justdial.com", "password": "password"})
+    resp = client.post("/api/auth/login", json={"email": "admin@acmecorp.com", "password": "password"})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["email"] == "admin@justdial.com"
+    assert body["email"] == "admin@acmecorp.com"
     assert body["token"]
 
 
 def test_login_with_wrong_password_returns_helpful_401(client):
-    resp = client.post("/api/auth/login", json={"email": "admin@justdial.com", "password": "wrong"})
+    resp = client.post("/api/auth/login", json={"email": "admin@acmecorp.com", "password": "wrong"})
     assert resp.status_code == 401
     assert "Invalid email or password" in resp.json()["detail"]
 
 
 def test_login_with_unknown_email_returns_401_not_500(client):
-    resp = client.post("/api/auth/login", json={"email": "nobody@justdial.com", "password": "password"})
+    resp = client.post("/api/auth/login", json={"email": "nobody@acmecorp.com", "password": "password"})
     assert resp.status_code == 401
 
 
@@ -39,30 +39,30 @@ def test_signup_with_new_email_succeeds_and_returns_usable_token(client):
     from backend import auth as auth_module
 
     resp = client.post(
-        "/api/auth/signup", json={"email": "new.user@justdial.com", "password": "password123"}
+        "/api/auth/signup", json={"email": "new.user@acmecorp.com", "password": "password123"}
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["email"] == "new.user@justdial.com"
+    assert body["email"] == "new.user@acmecorp.com"
     assert body["token"]
 
     decoded = auth_module.jwt.decode(body["token"], auth_module.JWT_SECRET, algorithms=[auth_module.JWT_ALGO])
-    assert decoded["sub"] == "new.user@justdial.com"
+    assert decoded["sub"] == "new.user@acmecorp.com"
     assert decoded["role"] == "user"
 
 
 def test_signup_with_duplicate_email_returns_409(client):
-    resp1 = client.post("/api/auth/signup", json={"email": "dup@justdial.com", "password": "password123"})
+    resp1 = client.post("/api/auth/signup", json={"email": "dup@acmecorp.com", "password": "password123"})
     assert resp1.status_code == 200, resp1.text
 
-    resp2 = client.post("/api/auth/signup", json={"email": "dup@justdial.com", "password": "password123"})
+    resp2 = client.post("/api/auth/signup", json={"email": "dup@acmecorp.com", "password": "password123"})
     assert resp2.status_code == 409
     assert "already exists" in resp2.json()["detail"]
 
 
 def test_signup_with_too_short_password_returns_422(client):
     resp = client.post(
-        "/api/auth/signup", json={"email": "shortpw@justdial.com", "password": "short"}
+        "/api/auth/signup", json={"email": "shortpw@acmecorp.com", "password": "short"}
     )
     assert resp.status_code == 422
 
@@ -92,20 +92,20 @@ def test_sso_login_and_password_signup_with_different_case_resolve_to_same_user(
     from backend.db import users
 
     signup_resp = client.post(
-        "/api/auth/signup", json={"email": "Shared.User@JustDial.com", "password": "password123"}
+        "/api/auth/signup", json={"email": "Shared.User@AcmeCorp.com", "password": "password123"}
     )
     assert signup_resp.status_code == 200, signup_resp.text
 
     sso_token = auth_module.issue_token_for_sso_profile(
-        {"empcode": "E100", "empname": "Shared User", "email": "shared.user@justdial.com"}
+        {"empcode": "E100", "empname": "Shared User", "email": "shared.user@acmecorp.com"}
     )
     decoded = auth_module.jwt.decode(sso_token, auth_module.JWT_SECRET, algorithms=[auth_module.JWT_ALGO])
-    assert decoded["sub"] == "shared.user@justdial.com"
+    assert decoded["sub"] == "shared.user@acmecorp.com"
 
     # Only one user document should exist for this address, and it should carry both the
     # password hash (from signup) and the SSO empcode (from the SSO login) — proof they
     # resolved to the same document rather than two separate ones due to case mismatch.
-    matching = list(users.find({"email": "shared.user@justdial.com"}))
+    matching = list(users.find({"email": "shared.user@acmecorp.com"}))
     assert len(matching) == 1
     assert matching[0].get("password_hash")
     assert matching[0].get("sso_empcode") == "E100"

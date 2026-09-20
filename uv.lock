@@ -1277,7 +1277,7 @@ wheels = [
 ]
 
 [[package]]
-name = "livekit-native-justdial-bot"
+name = "livekit-native-acmecorp-bot"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

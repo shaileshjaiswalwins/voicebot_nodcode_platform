@@ -24,7 +24,7 @@
 }
 
 :root {
-  /* ── Justdial Design System tokens ──
+  /* ── AcmeCorp Design System tokens ──
      JD Blue (#116DB6) primary, JD Orange (#F26600) accent. Custom-property NAMES kept
      identical to the pre-existing token set so the hundreds of var(--x) call sites across
      this file need no changes — only the underlying values were remapped. */

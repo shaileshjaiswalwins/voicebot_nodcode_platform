@@ -1,4 +1,4 @@
-# JustDial Voice AI No-Code Platform V1
+# AcmeCorp Voice AI No-Code Platform V1
 
 ## What Was Added
 
@@ -17,7 +17,7 @@ Install dependencies:
 uv sync
 ```
 
-Seed the current hardcoded JustDial bot into Mongo:
+Seed the current hardcoded AcmeCorp bot into Mongo:
 
 ```bash
 uv run python -m voicebot_platform.seed_default
@@ -55,13 +55,13 @@ Required `.env` values:
 LIVEKIT_URL=ws://your-livekit-server:7880
 LIVEKIT_API_KEY=...
 LIVEKIT_API_SECRET=...
-LIVEKIT_AGENT_NAME=voice-bot-justdial
+LIVEKIT_AGENT_NAME=voice-bot-acmecorp
 ```
 
 Flow:
 
 1. Frontend calls `POST /api/bots/{bot_id}/webrtc-test-session`.
-2. FastAPI creates a LiveKit room with bot metadata and dispatches the agent named `voice-bot-justdial`.
+2. FastAPI creates a LiveKit room with bot metadata and dispatches the agent named `voice-bot-acmecorp`.
 3. FastAPI returns `livekit_url`, `room_name` and a short-lived browser token.
 4. React connects with `livekit-client`, publishes microphone audio and plays bot audio.
 5. `bot.py` treats this like a normal LiveKit room and stores the transcript/config snapshot after the test ends.
@@ -102,7 +102,7 @@ Frontend developer:
 
 - Replace the JSON editor in `frontend/src/main.tsx` with structured controls for prompt, model, voice, language, VAD, tools and publishing.
 - Add transcript detail, filters and trace links.
-- Wire JustDial SSO headers instead of the local `X-JD-User` placeholder.
+- Wire AcmeCorp SSO headers instead of the local `X-JD-User` placeholder.
 
 Backend developer:
 

@@ -72,7 +72,7 @@ MODEL_COMPANY: dict[str, str] = {
     "google_neural2": "Google",
     "google_chirp3_hd": "Google",
     "google_studio": "Google",
-    "indic_f5": "Justdial",
+    "indic_f5": "AcmeCorp",
     "inhouse_dialer": "Platform",
     "sip_direct": "Platform",
     "plivo": "Plivo",

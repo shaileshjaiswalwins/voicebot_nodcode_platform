@@ -42,7 +42,7 @@ If the user just wants a pre-landing quick review, use `/ultrareview` or the `re
 ## Phase 1 — discover the diff
 
 ```bash
-cd /Users/justdial/voicebot_nodcode_platform
+cd /Users/acmecorp/voicebot_nodcode_platform
 git status -uno
 git rev-parse --abbrev-ref HEAD
 BASE=${AUDIT_BASE:-main}
