@@ -23,7 +23,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 _log = logging.getLogger("indic5-tts")
 
-_DEFAULT_WS_URL = os.getenv("INDIC_TTS_WS_URL", "ws://10.10.0.14:8404/ws")
+_DEFAULT_WS_URL = os.getenv("INDIC_TTS_WS_URL", "ws://tts.internal:8404/ws")
 
 
 class IndicF5TTS(tts.TTS):

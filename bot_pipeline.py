@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pipeline (STT → LLM → TTS) version of the Justdial voice bot.
+Pipeline (STT → LLM → TTS) version of the Acmecorp voice bot.
 
 Unlike bot.py (which uses Gemini Live s2s / RealtimeModel), this file runs a
 classic three-stage pipeline:
@@ -113,7 +113,7 @@ from pipeline_providers import build_llm, build_stt, build_tts, resolve_provider
 load_dotenv(override=True)
 
 # Dev API (mirrors bot_dev.py) — overrides the live URLs imported from bot.py
-MIS_API_BASE = "http://192.168.8.67:8000"
+MIS_API_BASE = "http://mis.internal:8000"
 CATEGORY_CHANGE_API = f"{MIS_API_BASE}/leads/ai-lead-qualify/search"
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
@@ -1207,7 +1207,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @function_tool
     async def FetchLead(tool_ctx: RunContext, lead_id: str = "", mobile: str = "") -> dict:
-        """Fetch customer lead details from Justdial MIS API. Pass lead_id or mobile."""
+        """Fetch customer lead details from Acmecorp MIS API. Pass lead_id or mobile."""
         _log.info(f"[FetchLead] called | lead_id={lead_id!r} | mobile={mobile!r}")
         result = await _execute_function_call(
             "FetchLead", {"lead_id": lead_id, "mobile": mobile},
@@ -2297,7 +2297,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # product confirmations.
     def _build_greeting(rec: dict) -> str:
         """Identity-only opening line. Product question is asked by the LLM as its first response."""
-        return "हेलो, मैं Simran बोल रही हूँ Justdial से।"
+        return "हेलो, मैं Simran बोल रही हूँ Acmecorp से।"
 
     _greeting_text = _build_greeting(record)
     _log.info(f"[GREETING] Text: {_greeting_text!r}")
@@ -2378,12 +2378,12 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 # Worker entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    start_worker_heartbeat("voice-bot-justdial")
+    start_worker_heartbeat("voice-bot-acmecorp")
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm_fnc,
-            agent_name="voice-bot-justdial",
+            agent_name="voice-bot-acmecorp",
             num_idle_processes=3,
         )
     )

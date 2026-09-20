@@ -225,7 +225,7 @@ Frontend assistance is needed in these areas:
 - Add real transcript filters and a transcript detail page using `GET /api/transcripts` and `GET /api/transcripts/{transcript_id}`.
 - Add campaign screens for mapping outbound campaigns to bot versions and existing lead APIs.
 - Add a test-call screen that displays the generated LiveKit room metadata and, later, starts a controlled call through the external orchestration server.
-- Integrate JustDial SSO and role-aware UI once security provides role group names.
+- Integrate AcmeCorp SSO and role-aware UI once security provides role group names.
 - Add Langfuse trace links and LiveKit room status once infra provides endpoints.
 
 Frontend information needed:

@@ -1,5 +1,7 @@
 # Frontend + Backend FastAPI Handoff
 
+> Hostnames such as `mis.internal` and `mongo.internal` in this file are placeholders. The real values live in `.env` — see `.env.example`.
+
 This guide is for teammates who are new to FastAPI and need to connect the React dashboard to the Python backend in simple steps.
 
 ## What We Have
@@ -23,7 +25,7 @@ flowchart LR
 Mongo server:
 
 ```txt
-mongodb://192.168.13.65:27017
+mongodb://mongo.internal:27017
 ```
 
 Database:
@@ -47,14 +49,14 @@ tbl_ai_vb_call_transcripts
 From project root:
 
 ```bash
-cd /Users/justdial/voicebot_nodcode_platform
+cd /Users/acmecorp/voicebot_nodcode_platform
 uv run python -m voicebot_platform.seed_default
 ```
 
 Expected output:
 
 ```txt
-Seeded default bot JustDial Lead Qualification assistant_id=e8c0fd31-2d60-4531-a029-2047b17988c4 version=1
+Seeded default bot AcmeCorp Lead Qualification assistant_id=e8c0fd31-2d60-4531-a029-2047b17988c4 version=1
 ```
 
 This creates:
@@ -122,7 +124,7 @@ curl http://localhost:8000/api/options/languages
 In another terminal:
 
 ```bash
-cd /Users/justdial/voicebot_nodcode_platform/frontend
+cd /Users/acmecorp/voicebot_nodcode_platform/frontend
 npm install
 npm run dev
 ```
@@ -197,7 +199,7 @@ Response:
   {
     "_id": "...",
     "assistant_id": "...",
-    "name": "JustDial Lead Qualification",
+    "name": "AcmeCorp Lead Qualification",
     "description": "...",
     "owner": "system",
     "status": "active",
@@ -217,7 +219,7 @@ await fetch('/api/bots', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
-    'X-JD-User': 'tahir@justdial.com'
+    'X-Acme-User': 'tahir@acmecorp.com'
   },
   body: JSON.stringify({
     name: 'AC Lead Bot',
@@ -355,7 +357,7 @@ Response:
     "test_session": true,
     "room_name": "test-e8c0fd31-a1b2c3d4e5"
   },
-  "agent_name": "voice-bot-justdial",
+  "agent_name": "voice-bot-acmecorp",
   "expires_in_sec": 1800
 }
 ```
@@ -366,7 +368,7 @@ Required backend `.env` values:
 LIVEKIT_URL=ws://your-livekit-server:7880
 LIVEKIT_API_KEY=...
 LIVEKIT_API_SECRET=...
-LIVEKIT_AGENT_NAME=voice-bot-justdial
+LIVEKIT_AGENT_NAME=voice-bot-acmecorp
 ```
 
 Frontend behavior:

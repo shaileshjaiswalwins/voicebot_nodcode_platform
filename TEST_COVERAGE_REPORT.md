@@ -339,7 +339,7 @@ def platform_db(monkeypatch):
 def test_number_variants_handles_plus91_and_bare_forms():
     variants = agent_resolver._number_variants("+918069625582")
     assert "8069625582" in variants
-    assert "08069625582" in variants
+    assert "08000000000" in variants
 
 
 def test_number_variants_empty_input_returns_empty_list():
@@ -357,10 +357,10 @@ def test_config_for_bot_malformed_object_id_returns_none(platform_db):
 
 def test_resolve_mapping_falls_back_to_room_prefix_when_number_unmatched(platform_db):
     platform_db["tbl_ai_vb_sip_dispatch_rules"].insert_one(
-        {"room_prefix": "Campaign_8_5060", "phone_number": "08069625582"}
+        {"room_prefix": "Campaign_8_5060", "phone_number": "08000000000"}
     )
     platform_db["tbl_ai_vb_agent_number_mapping"].insert_one(
-        {"phone_number": "08069625582", "bot_id": "abc123"}
+        {"phone_number": "08000000000", "bot_id": "abc123"}
     )
     result = agent_resolver._resolve_mapping(
         dialed_number="", room_name="Campaign_8_5060__caller123_xyz"
@@ -528,10 +528,10 @@ def shared_platform_client(monkeypatch):
 def test_mapping_written_via_backend_shape_is_resolvable_by_agent_resolver(shared_platform_client):
     db = shared_platform_client[agent_resolver._PLATFORM_DB]
     db["tbl_ai_vb_sip_dispatch_rules"].insert_one(
-        {"phone_number": "08069625582", "agent_name": "wp1", "environment": "prod"}
+        {"phone_number": "08000000000", "agent_name": "wp1", "environment": "prod"}
     )
     db["tbl_ai_vb_agent_number_mapping"].insert_one(
-        {"phone_number": "08069625582", "bot_id": "abc123", "bot_name": "Bot A"}
+        {"phone_number": "08000000000", "bot_id": "abc123", "bot_name": "Bot A"}
     )
     assert agent_resolver.resolve_bot_id(dialed_number="+918069625582") == "abc123"
 ```

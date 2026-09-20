@@ -177,7 +177,7 @@ class WorkflowNodeData(BaseModel):
     without a backend schema change; workflow_engine.py only ever reads the fields
     relevant to a given node's own `kind`, ignoring the rest.
 
-    `kind` mirrors JD-Dashboard's workflow-canvas node types (start / conversation /
+    `kind` mirrors Acme-Dashboard's workflow-canvas node types (start / conversation /
     condition / function / end_call / global) — see workflow_engine.py's module
     docstring for the full node-kind → runtime-behavior mapping this must match.
     """
@@ -349,11 +349,11 @@ class BotConfig(BaseModel):
     stt_provider: Literal["", "sarvam", "deepgram"] = ""
     stt_model: str = ""
     stt_language: str = ""
-    # "justdial" = our own in-house IndicF5 TTS (livekit_indic5_tts.py); only relevant to
+    # "acmecorp" = our own in-house IndicF5 TTS (livekit_indic5_tts.py); only relevant to
     # bot_type="workflow" today (workflow_engine.py's run_workflow_call), which treats
     # anything other than "sarvam" as the IndicF5 path — added here so a workflow bot's
     # saved config round-trips through BotConfig without this field being silently dropped.
-    tts_provider: Literal["", "sarvam", "elevenlabs", "justdial"] = ""
+    tts_provider: Literal["", "sarvam", "elevenlabs", "acmecorp"] = ""
     tts_model: str = ""
     tts_voice: str = ""
     tts_language: str = ""
@@ -519,7 +519,7 @@ class CampaignLead(BaseModel):
     column beyond phone_number/name/jduid verbatim, so the prompt injector (`{{col}}`)
     can reference any of them without the schema knowing column names in advance.
 
-    `jduid` (Justdial's internal per-user ID, which TSPL's dialer resolves to a real
+    `jduid` (Acmecorp's internal per-user ID, which TSPL's dialer resolves to a real
     phone number on their side) is the primary identifier for TSPL-pushed campaigns —
     we never see the real number. `phone_number` is kept for direct-dial leads and is
     now optional; a row needs at least one of the two (enforced at CSV-upload time,
@@ -767,7 +767,7 @@ PhoneEnvironment = Literal["dev", "preprod", "prod"]
 
 
 class PhoneNumberCreate(BaseModel):
-    """Fields mirror Justdial's SIP trunk provisioning sheet (service_id/aod_ports/name/ip/
+    """Fields mirror Acmecorp's SIP trunk provisioning sheet (service_id/aod_ports/name/ip/
     dni/sip_trunk/username/password per trunk line) — `number` is the DNI (Dialed Number
     Identification), the actual number that gets dialed/answered. `sip_password` is
     write-only: accepted here but never echoed back by GET/list — see PhoneNumberOut."""

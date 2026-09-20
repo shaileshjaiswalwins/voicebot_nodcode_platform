@@ -64,7 +64,7 @@ export function AccountsView({ currentUserEmail }: { currentUserEmail?: string }
         <div className="panel-header">
           <div>
             <h2>Accounts</h2>
-            <p>Everyone who can sign in — local signups and Justdial SSO. Admins see and manage every bot; regular users only see their own.</p>
+            <p>Everyone who can sign in — local signups and Acmecorp SSO. Admins see and manage every bot; regular users only see their own.</p>
           </div>
         </div>
 

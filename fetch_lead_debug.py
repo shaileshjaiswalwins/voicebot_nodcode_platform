@@ -36,7 +36,7 @@ LEAD_IDS = [
     "6a16d33bbdf65621e0e6b629",
 ]
 
-LOG_API = "http://192.168.41.116:9090/search?q={lead_id}"
+LOG_API = "http://voice-host.internal:9090/search?q={lead_id}"
 
 
 async def fetch_logs(session: aiohttp.ClientSession, lead_id: str) -> dict:

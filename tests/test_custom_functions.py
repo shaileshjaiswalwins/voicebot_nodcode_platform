@@ -341,8 +341,8 @@ def test_run_lifecycle_none_response_is_not_stored():
 
 def test_interpolate_replaces_known_vars():
     from custom_functions import interpolate_vars
-    out = interpolate_vars("Hello {{lead_name}} from {{org}}", {"lead_name": "Priya", "org": "JD"})
-    assert out == "Hello Priya from JD"
+    out = interpolate_vars("Hello {{lead_name}} from {{org}}", {"lead_name": "Priya", "org": "Acme"})
+    assert out == "Hello Priya from Acme"
 
 
 def test_interpolate_supports_vars_prefix():

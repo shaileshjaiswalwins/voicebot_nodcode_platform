@@ -92,7 +92,7 @@ class LangfuseRecorder:
             event_metadata = {
                 **metadata,
                 "environment": environment,
-                "service": "justdial-voicebot",
+                "service": "acmecorp-voicebot",
                 "trace_url": client.get_trace_url(trace_id=trace_id),
             }
             if not settings.get("send_transcripts", True):

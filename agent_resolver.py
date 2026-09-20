@@ -15,7 +15,7 @@ import re
 from bson import ObjectId
 from pymongo import MongoClient
 
-_PLATFORM_MONGO_URI = os.getenv("PLATFORM_MONGO_URI") or os.getenv("MONGO_URI", "mongodb://192.168.13.65:27017")
+_PLATFORM_MONGO_URI = os.getenv("PLATFORM_MONGO_URI") or os.getenv("MONGO_URI", "mongodb://mongo.internal:27017")
 _PLATFORM_DB = os.getenv("VOICEBOT_PLATFORM_DB", "ai_voice_bot_management")
 
 _client: MongoClient | None = None
@@ -31,7 +31,7 @@ def _db():
 def _number_variants(number: str) -> list[str]:
     """Every plausible spelling of a number.
 
-    The stored DNI is landline-style (08069625582) but LiveKit's sip.trunkPhoneNumber may
+    The stored DNI is landline-style (08000000000) but LiveKit's sip.trunkPhoneNumber may
     arrive as +918069625582 or 8069625582 — the exact format is not yet confirmed on these
     trunks, so match them all rather than guess one.
     """
@@ -126,9 +126,9 @@ def render_greeting(config: dict, product: str = "") -> str:
     line = (config.get("initial_message") or "").strip()
     if not line:
         return ""
-    # Organization defaults to Justdial when the agent leaves it blank, so the bot never
+    # Organization defaults to Acmecorp when the agent leaves it blank, so the bot never
     # says "मैं Riya बोल रही हूँ  से" with a gap where the company name belongs.
-    org = (config.get("organization_name") or "").strip() or "Justdial"
+    org = (config.get("organization_name") or "").strip() or "Acmecorp"
     filled = (
         line.replace("{agent_name}", config.get("agent_name") or "")
         .replace("{organization_name}", org)

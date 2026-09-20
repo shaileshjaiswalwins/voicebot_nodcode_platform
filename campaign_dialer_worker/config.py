@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 DIALER_PUSH_API_URL = os.getenv(
-    "DIALER_PUSH_API_URL", "http://192.168.14.101:3006/leads/ai-lead-qualify/save"
+    "DIALER_PUSH_API_URL", "http://mis-dev.internal:3006/leads/ai-lead-qualify/save"
 )
 
 POLL_INTERVAL_SEC = int(os.getenv("CAMPAIGN_DIALER_POLL_INTERVAL_SEC", "30"))

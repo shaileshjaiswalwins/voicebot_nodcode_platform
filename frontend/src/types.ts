@@ -111,7 +111,7 @@ export type RuntimeConfig = {
   stt_provider?: '' | 'sarvam' | 'deepgram';
   stt_model?: string;
   stt_language?: string;
-  tts_provider?: '' | 'sarvam' | 'elevenlabs' | 'justdial';
+  tts_provider?: '' | 'sarvam' | 'elevenlabs' | 'acmecorp';
   tts_model?: string;
   tts_voice?: string;
   tts_language?: string;

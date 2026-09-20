@@ -29,7 +29,7 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 from callback_worker.config import MONGO_URI, MONGO_DB, MONGO_COLLECTION
 
 IST = timezone(timedelta(hours=5, minutes=30))
-MIS_LEADS_URL = "http://192.168.8.67:8000/leads/ai-lead-qualify/mis"
+MIS_LEADS_URL = "http://mis.internal:8000/leads/ai-lead-qualify/mis"
 MIS_PAGE_SIZE = 100
 
 
@@ -52,7 +52,7 @@ async def fetch_mis_leads(date_label, session, limit=0):
     for page in range(1, 101):
         params = {
             "lead_id": "", "ref_id": "", "jduid": "", "city": "",
-            "ai_partner": "inh-suny-bot", "disposition_type": "latest",
+            "ai_partner": "ai-partner-bot", "disposition_type": "latest",
             "disposition": "", "ncatid": "", "whatsapp_flag": "", "medium": "",
             "flow": "all", "page_name": "", "fromdate": date_label,
             "todate": date_label, "page": str(page), "limit": str(MIS_PAGE_SIZE),

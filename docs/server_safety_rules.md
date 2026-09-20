@@ -11,13 +11,13 @@ Do not edit, restart, or deploy to the live folder unless the program head expli
 Safe staging folder:
 
 ```txt
-/home/yogeshv_10011835/voicebot_nodcode_platform_ai_mgmt
+/home/<deploy-user>/voicebot_nodcode_platform_ai_mgmt
 ```
 
 Live/current runtime folder:
 
 ```txt
-/home/yogeshv_10011835/voicebot_nodcode_platform
+/home/<deploy-user>/voicebot_nodcode_platform
 ```
 
 Any work for the dashboard branch should happen in the safe staging folder only.
@@ -63,7 +63,7 @@ Avoid these unless engineering explicitly schedules it:
 Use this worker for test calls from the dashboard:
 
 ```txt
-voice-bot-justdial-test
+voice-bot-acmecorp-test
 ```
 
 Do not point dashboard tests at the live worker unless engineering explicitly approves.
@@ -73,7 +73,7 @@ Do not point dashboard tests at the live worker unless engineering explicitly ap
 From local Mac repo:
 
 ```bash
-cd /Users/justdial/voicebot_nodcode_platform
+cd /Users/acmecorp/voicebot_nodcode_platform
 git checkout ai_voice_bot_management
 git status --short
 ./ops/deploy_safe_server.sh
@@ -117,5 +117,5 @@ curl -s http://127.0.0.1:8010/health/ready | python3 -m json.tool
 Check safe test worker:
 
 ```bash
-grep 'registered worker' /home/yogeshv_10011835/voicebot_nodcode_platform_ai_mgmt/logs/worker-test-8091.log | tail -1
+grep 'registered worker' /home/<deploy-user>/voicebot_nodcode_platform_ai_mgmt/logs/worker-test-8091.log | tail -1
 ```

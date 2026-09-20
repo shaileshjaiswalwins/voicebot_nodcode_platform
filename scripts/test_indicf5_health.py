@@ -25,7 +25,7 @@ from pathlib import Path
 
 import websockets
 
-WS_URL = os.getenv("INDIC_TTS_WS_URL", "ws://10.10.0.14:8404/ws")
+WS_URL = os.getenv("INDIC_TTS_WS_URL", "ws://tts.internal:8404/ws")
 SPEAKERS = ["simran", "anushka", "niharika"]
 DEFAULT_TEXT = "नमस्ते, मैं जस्टडायल की तरफ़ से बोल रही हूँ। क्या आप मुझे सुन पा रहे हैं?"
 SAMPLE_RATE = 24000

@@ -47,7 +47,7 @@ def client():
 
 @pytest.fixture
 def auth_headers(client):
-    resp = client.post("/api/auth/login", json={"email": "admin@justdial.com", "password": "password"})
+    resp = client.post("/api/auth/login", json={"email": "admin@acmecorp.com", "password": "password"})
     assert resp.status_code == 200, resp.text
     token = resp.json()["token"]
     return {"Authorization": f"Bearer {token}"}

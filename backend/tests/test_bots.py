@@ -1,7 +1,7 @@
 def _create_bot(client, auth_headers, name="Test Bot"):
     resp = client.post(
         "/api/bots",
-        json={"name": name, "description": "d", "config": {"organization_name": "Justdial"}},
+        json={"name": name, "description": "d", "config": {"organization_name": "Acmecorp"}},
         headers=auth_headers,
     )
     assert resp.status_code == 200, resp.text
@@ -14,7 +14,7 @@ def test_create_bot_rejects_analysis_prompt_missing_required_placeholder(client,
         json={
             "name": "Bad Analysis Prompt Bot",
             "description": "d",
-            "config": {"organization_name": "Justdial", "analysis_prompt": "No placeholders here."},
+            "config": {"organization_name": "Acmecorp", "analysis_prompt": "No placeholders here."},
         },
         headers=auth_headers,
     )
@@ -25,7 +25,7 @@ def test_update_version_rejects_invalid_analysis_prompt_override(client, auth_he
     bot = _create_bot(client, auth_headers)
     resp = client.put(
         f"/api/bots/{bot['_id']}/versions/{bot['draft_version_id']}",
-        json={"config": {"organization_name": "Justdial", "analysis_prompt": "still missing placeholders"}},
+        json={"config": {"organization_name": "Acmecorp", "analysis_prompt": "still missing placeholders"}},
         headers=auth_headers,
     )
     assert resp.status_code == 400
@@ -35,7 +35,7 @@ def test_update_version_accepts_empty_analysis_prompt_as_use_global_default(clie
     bot = _create_bot(client, auth_headers)
     resp = client.put(
         f"/api/bots/{bot['_id']}/versions/{bot['draft_version_id']}",
-        json={"config": {"organization_name": "Justdial", "analysis_prompt": ""}},
+        json={"config": {"organization_name": "Acmecorp", "analysis_prompt": ""}},
         headers=auth_headers,
     )
     assert resp.status_code == 200, resp.text
@@ -50,7 +50,7 @@ def test_update_version_accepts_valid_analysis_prompt_override_with_all_required
     )
     resp = client.put(
         f"/api/bots/{bot['_id']}/versions/{bot['draft_version_id']}",
-        json={"config": {"organization_name": "Justdial", "analysis_prompt": valid_override}},
+        json={"config": {"organization_name": "Acmecorp", "analysis_prompt": valid_override}},
         headers=auth_headers,
     )
     assert resp.status_code == 200, resp.text
@@ -173,7 +173,7 @@ def test_publishing_new_version_does_not_mutate_previous_published_snapshot(clie
 
     detail = client.get(f"/api/bots/{bot['_id']}", headers=auth_headers).json()
     v1_snapshot = next(v for v in detail["versions"] if v["_id"] == v1_id)
-    assert v1_snapshot["config"]["organization_name"] == "Justdial"
+    assert v1_snapshot["config"]["organization_name"] == "Acmecorp"
     assert v1_snapshot["state"] == "published"
 
 
@@ -250,7 +250,7 @@ def test_saving_a_draft_persists_every_field_the_pipeline_actually_reads(client,
     values for these, always falling back to hardcoded defaults."""
     bot = _create_bot(client, auth_headers)
     full_config = {
-        "organization_name": "Justdial",
+        "organization_name": "Acmecorp",
         "agent_name": "Priya",
         "temperature": 0.85,
         "function_calling": True,

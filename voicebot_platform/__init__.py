@@ -1,2 +1,2 @@
-"""Internal JustDial voice bot platform helpers."""
+"""Internal AcmeCorp voice bot platform helpers."""
 

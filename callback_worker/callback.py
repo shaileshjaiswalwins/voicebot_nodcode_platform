@@ -37,7 +37,7 @@ async def send_callback(
     _qs = urlencode({
         "lead_id": payload.get("lead_id", ""),
         "call_id": payload.get("call_id", ""),
-        "callsrc": "inh-suny-bot",
+        "callsrc": "ai-partner-bot",
         "call_outcome": payload.get("call_outcome", ""),
     })
     _url = f"{callback_api_url}?{_qs}"
@@ -118,7 +118,7 @@ async def send_callback_update(
     payload = {
         "call_id": call_id,
         "lead_id": str(lead_id),
-        "ai_partner": "inh-suny-bot",
+        "ai_partner": "ai-partner-bot",
         **updates,
     }
     delays = [0, 2, 4]
@@ -165,13 +165,13 @@ async def send_callback_update(
     payload = {
         "call_id": call_id,
         "lead_id": str(lead_id),
-        "ai_partner": "inh-suny-bot",
+        "ai_partner": "ai-partner-bot",
         **updates,
     }
     _qs = urlencode({
         "lead_id": str(lead_id),
         "call_id": call_id,
-        "callsrc": "inh-suny-bot",
+        "callsrc": "ai-partner-bot",
         "call_outcome": updates.get("call_outcome", ""),
     })
     _url = f"{callback_update_api_url}?{_qs}"
@@ -229,7 +229,7 @@ def build_callback_payload(doc: dict, analysis: dict, b2b_score: dict | None = N
         "deal_value": _b2b.get("deal_value", ""),
         "lead_intent_score": _b2b.get("lead_intent_score", ""),
         "urgency_flag": _b2b.get("urgency_flag", "no"),
-        "ai_partner": "inh-suny-bot",
+        "ai_partner": "ai-partner-bot",
         "call_outcome": outcome,
         "call_outcome_desc": analysis.get("call_outcome_description", DISPOSITION_MAP.get(outcome, "")),
         "call_summary": analysis.get("call_summary", ""),

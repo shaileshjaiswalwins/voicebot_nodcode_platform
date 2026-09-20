@@ -3,7 +3,7 @@
 Writes one line per request to loguru with method, path, actor, status,
 duration. For mutations on platform resources (bots, versions, campaigns,
 settings, library) also writes an audit document to Mongo so we can answer
-"who changed X and when" even with the X-JD-User header trust gap.
+"who changed X and when" even with the X-Acme-User header trust gap.
 
 Once real SSO ships, swap the actor source from the header to the verified
 identity — the rest of this module doesn't change.

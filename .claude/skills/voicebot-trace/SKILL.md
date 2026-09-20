@@ -56,7 +56,7 @@ A break in **any** layer can produce "missing data". The skill's job is to ident
 This is the highest-signal step. Run from the project root, on a machine that can reach the Mongo cluster:
 
 ```bash
-cd /Users/justdial/voicebot_nodcode_platform
+cd /Users/acmecorp/voicebot_nodcode_platform
 uv run python - <<'PY'
 import os
 from voicebot_platform.mongo import get_client
@@ -126,7 +126,7 @@ A frequent failure pattern: user changed `.env` for the platform but the bot wor
 
 ```bash
 # Locate worker logs (default path matches bot.py:65)
-LOGDIR=${BOT_LOG_DIR:-/home/yogeshv_10011835/voicebot_nodcode_platform/logs}/${BOT_PORT:-8081}
+LOGDIR=${BOT_LOG_DIR:-/home/<deploy-user>/voicebot_nodcode_platform/logs}/${BOT_PORT:-8081}
 LATEST=$(ls -t $LOGDIR 2>/dev/null | head -1)
 [ -n "$LATEST" ] && tail -300 $LOGDIR/$LATEST \
   | grep -E "CALL START|test_session|SAVE_CALL|MONGO|insert failed|callback" \
@@ -150,7 +150,7 @@ If the doc exists in the right collection but the dashboard shows empty:
    - 200 with the doc → frontend cache. Hard-reload (Cmd+Shift+R) to clear `jd-vb:v2:*` keys.
 
 2. **If platform API can't reach Mongo** — common when running the dashboard on a laptop but Mongo is on the corporate `192.168.x.x` network. Either:
-   - SSH tunnel: `ssh -L 27017:192.168.13.65:27017 <jumpbox> -N`, then `MONGO_URI=mongodb://localhost:27017 ./start_api.sh`
+   - SSH tunnel: `ssh -L 27017:mongo.internal:27017 <jumpbox> -N`, then `MONGO_URI=mongodb://localhost:27017 ./start_api.sh`
    - Run `start_api.sh` on the same server as the bot worker.
 
 ## Output format

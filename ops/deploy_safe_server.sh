@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TARGET_HOST="${TARGET_HOST:-192.168.41.116}"
+TARGET_HOST="${TARGET_HOST:-voice-host.internal}"
 TARGET_USER="${TARGET_USER:-yogeshv_10011835}"
 TARGET_DIR="${TARGET_DIR:-/home/yogeshv_10011835/voicebot_nodcode_platform_ai_mgmt}"
 BRANCH="${BRANCH:-ai_voice_bot_management}"

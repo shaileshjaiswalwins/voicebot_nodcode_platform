@@ -1,7 +1,7 @@
 def _create_bot(client, auth_headers, name="Test Bot"):
     resp = client.post(
         "/api/bots",
-        json={"name": name, "description": "d", "config": {"organization_name": "Justdial"}},
+        json={"name": name, "description": "d", "config": {"organization_name": "Acmecorp"}},
         headers=auth_headers,
     )
     assert resp.status_code == 200, resp.text
@@ -135,15 +135,15 @@ def test_create_phone_number_persists_sip_trunk_fields_but_never_echoes_password
     resp = client.post(
         "/api/phone-numbers",
         json={
-            "number": "08069625582",
+            "number": "08000000000",
             "environment": "prod",
             "service_id": "300",
             "aod_ports": 1,
             "name": "AI_Boot_15",
-            "ip": "192.168.29.196",
-            "sip_trunk": "9017",
-            "sip_username": "voice_bot_nocode",
-            "sip_password": "justdial",
+            "ip": "dev-server.internal",
+            "sip_trunk": "9000",
+            "sip_username": "voice_bot_user",
+            "sip_password": "test-sip-secret",
         },
         headers=auth_headers,
     )
@@ -152,9 +152,9 @@ def test_create_phone_number_persists_sip_trunk_fields_but_never_echoes_password
     assert body["service_id"] == "300"
     assert body["aod_ports"] == 1
     assert body["name"] == "AI_Boot_15"
-    assert body["ip"] == "192.168.29.196"
+    assert body["ip"] == "dev-server.internal"
     assert body["sip_trunk"] == "9017"
-    assert body["sip_username"] == "voice_bot_nocode"
+    assert body["sip_username"] == "voice_bot_user"
     assert "sip_password" not in body
 
     listed = client.get("/api/phone-numbers", headers=auth_headers).json()
@@ -190,13 +190,13 @@ def test_update_phone_number_details(client, auth_headers):
 
     resp = client.put(
         f"/api/phone-numbers/{phone['_id']}",
-        json={"name": "Renamed", "ip": "10.0.0.5", "sip_trunk": "9017", "service_id": "301", "aod_ports": 2},
+        json={"name": "Renamed", "ip": "203.0.113.5", "sip_trunk": "9000", "service_id": "301", "aod_ports": 2},
         headers=auth_headers,
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["name"] == "Renamed"
-    assert body["ip"] == "10.0.0.5"
+    assert body["ip"] == "203.0.113.5"
     assert body["sip_trunk"] == "9017"
     assert body["service_id"] == "301"
     assert body["aod_ports"] == 2

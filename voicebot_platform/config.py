@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 
 _MONGO_URI_FROM_ENV = "MONGO_URI" in os.environ
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://192.168.13.65:27017")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://mongo.internal:27017")
 MONGO_DB = os.getenv("VOICEBOT_PLATFORM_DB", "ai_voice_bot_management")
 MONGO_SERVER_SELECTION_TIMEOUT_MS = int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS", "5000"))
 
@@ -42,7 +42,7 @@ LIVEKIT_API_URL = os.getenv("LIVEKIT_API_URL") or LIVEKIT_URL
 LIVEKIT_BROWSER_URL = os.getenv("LIVEKIT_BROWSER_URL") or LIVEKIT_URL
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "")
-LIVEKIT_AGENT_NAME = os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial")
+LIVEKIT_AGENT_NAME = os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-acmecorp")
 
 LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")

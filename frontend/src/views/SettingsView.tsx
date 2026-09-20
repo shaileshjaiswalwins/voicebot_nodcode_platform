@@ -279,7 +279,7 @@ export function SettingsView({
                 <input
                   value={adminDraft.mis_api_base}
                   onChange={(e) => setAdminDraft({ ...adminDraft, mis_api_base: e.target.value })}
-                  placeholder="http://192.168.8.67:8000"
+                  placeholder="http://mis.internal:8000"
                   aria-invalid={misApiBaseInvalid}
                 />
                 {misApiBaseInvalid ? (
