@@ -93,12 +93,12 @@ function mockAuthedDataLoads() {
 }
 
 async function login(user: ReturnType<typeof userEvent.setup>) {
-  mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@voicedesk.com' });
+  mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@acmecorp.com' });
   mockAuthedDataLoads();
   mockedApi.bots.mockResolvedValue([makeBot()]);
 
   render(<App />);
-  await user.type(screen.getByLabelText(/email/i), 'user@voicedesk.com');
+  await user.type(screen.getByLabelText(/email/i), 'user@acmecorp.com');
   await user.type(screen.getByLabelText(/password/i), 'correct-password');
   await user.click(screen.getByRole('button', { name: /sign in/i }));
   await screen.findByText('Sales Bot');
@@ -158,12 +158,12 @@ describe('App routing', () => {
   it('renders the correct view when navigating directly to a URL (deep link / refresh)', async () => {
     window.history.pushState({}, '', '/settings');
     const user = userEvent.setup();
-    mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@voicedesk.com' });
+    mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@acmecorp.com' });
     mockAuthedDataLoads();
     mockedApi.bots.mockResolvedValue([makeBot()]);
 
     render(<App />);
-    await user.type(screen.getByLabelText(/email/i), 'user@voicedesk.com');
+    await user.type(screen.getByLabelText(/email/i), 'user@acmecorp.com');
     await user.type(screen.getByLabelText(/password/i), 'correct-password');
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 

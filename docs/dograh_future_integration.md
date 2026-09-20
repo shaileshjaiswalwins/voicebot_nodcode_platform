@@ -32,4 +32,4 @@ Recommended future path:
 4. Store the published Dograh flow id on the bot version/config snapshot.
 5. Keep transcripts, campaigns, callbacks, and Langfuse tracing in this platform.
 
-This prevents Dograh from owning the whole product. It becomes the visual flow editor, while this app remains the VoiceDesk control plane.
+This prevents Dograh from owning the whole product. It becomes the visual flow editor, while this app remains the AcmeCorp control plane.

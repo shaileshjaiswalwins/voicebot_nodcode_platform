@@ -6,11 +6,11 @@ Wants=mongod.service
 [Service]
 Type=simple
 ; DEPLOY NOTE: change User to the actual Linux user running the app on the server
-User=voicedesk
-WorkingDirectory=/Users/voicedesk/voicebot_nodcode_platform
-EnvironmentFile=/Users/voicedesk/voicebot_nodcode_platform/.env
+User=acmecorp
+WorkingDirectory=/Users/acmecorp/voicebot_nodcode_platform
+EnvironmentFile=/Users/acmecorp/voicebot_nodcode_platform/.env
 ; DEPLOY NOTE: find the full uv path on server with: which uv
-ExecStart=/Users/voicedesk/.local/bin/uv run python bot.py start
+ExecStart=/Users/acmecorp/.local/bin/uv run python bot.py start
 Restart=always
 RestartSec=5s
 StartLimitIntervalSec=60

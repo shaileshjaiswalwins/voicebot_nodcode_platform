@@ -1,15 +1,15 @@
 # AGENTS.md
 
-This file is the onboarding brief for coding agents working on the VoiceDesk
+This file is the onboarding brief for coding agents working on the AcmeCorp
 Voicebot platform. Read it before changing code, running server commands, or
 debugging runtime behavior.
 
 ## Project Overview
 
 This repository contains a standalone LiveKit-native voicebot runtime plus an
-internal PM/developer dashboard for managing VoiceDesk voicebots.
+internal PM/developer dashboard for managing AcmeCorp voicebots.
 
-The current core product is the VoiceDesk lead qualification voice agent
+The current core product is the AcmeCorp lead qualification voice agent
 ("Tanya"/"Simran" in prompts). The platform goal is to let PMs configure,
 draft, publish, test, monitor, and review voicebots without repeatedly touching
 server files.
@@ -20,9 +20,9 @@ Important product boundaries:
   catalog, test-call, transcript, observability, and dialing-strategy platform.
 - The runtime is LiveKit Agents native with Gemini Live. Do not assume this is a
   Pipecat runtime unless a specific file proves it.
-- MIS, dialer, CRM, and recording APIs are external VoiceDesk systems. Keep this
+- MIS, dialer, CRM, and recording APIs are external AcmeCorp systems. Keep this
   platform standalone and integrate through explicit APIs/config.
-- Dialing strategies are authored here but executed by the external VoiceDesk
+- Dialing strategies are authored here but executed by the external AcmeCorp
   dialer; the platform stores the config and the dialer/callback system reads it.
 
 ## Repository Map
@@ -187,7 +187,7 @@ Avoid these unless engineering explicitly schedules it:
 Safe test worker name:
 
 ```txt
-voice-bot-voicedesk-test
+voice-bot-acmecorp-test
 ```
 
 Never edit, restart, or deploy the live folder/ports without explicit approval
@@ -262,7 +262,7 @@ dashboard API can reach Mongo from its process.
 
 Each campaign can carry a `dialing_strategy` sub-document stored directly on
 the `tbl_ai_vb_campaigns` document. It is authored through the dashboard
-Campaigns → Edit Strategy UI and consumed by the external VoiceDesk dialer /
+Campaigns → Edit Strategy UI and consumed by the external AcmeCorp dialer /
 callback pipeline.
 
 ### Schema
@@ -323,7 +323,7 @@ value. The builder does NOT execute the strategy — it only stores the config.
 ## Recording And Verified Transcript Flow
 
 For production/outbound calls, the callback worker can fetch call recording
-metadata from the VoiceDesk recording API. The API may return multiple rows for a
+metadata from the AcmeCorp recording API. The API may return multiple rows for a
 mobile number; prefer an answered row with a non-empty `media_path` closest to
 the call time.
 
@@ -380,7 +380,7 @@ For server validation:
 
 - Use port `8010` for API and `8091` for test worker.
 - Confirm the test session response returns `agent_name:
-  voice-bot-voicedesk-test`.
+  voice-bot-acmecorp-test`.
 - Confirm worker logs show a matching `registered worker` and `[CALL START]`.
 
 ## Known Runtime Failure Modes

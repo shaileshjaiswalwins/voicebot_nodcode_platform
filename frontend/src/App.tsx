@@ -139,7 +139,7 @@ function LoginForm({ onLoggedIn, ssoError }: { onLoggedIn: () => void; ssoError?
     <div className="login-screen" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
       <form onSubmit={submit} className="panel" style={{ maxWidth: 360, width: '100%', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         <div>
-          <h2>VoiceDesk Voice AI Platform</h2>
+          <h2>AcmeCorp Voice AI Platform</h2>
           <p>
             {mode === 'signup'
               ? 'Create an account to manage voice agents, campaigns and transcripts.'
@@ -171,7 +171,7 @@ function LoginForm({ onLoggedIn, ssoError }: { onLoggedIn: () => void; ssoError?
           <>
             <div className="sso-divider"><span>or</span></div>
             <a className="sso-button" href={`${API_BASE}/api/auth/sso/login`}>
-              Sign in with VoiceDesk SSO
+              Sign in with AcmeCorp SSO
             </a>
           </>
         )}
@@ -1644,7 +1644,7 @@ function AppShell() {
           <Menu size={18} />
         </button>
         <button className="sidebar-brand sidebar-brand-btn" style={{ padding: 0 }} onClick={handleGoHome} aria-label="Go to home">
-          <img src="/voicedesk-logo.png" alt="VoiceDesk" className="sidebar-logo sidebar-logo-full" />
+          <img src="/acmecorp-logo.png" alt="AcmeCorp" className="sidebar-logo sidebar-logo-full" />
           <span className="sidebar-brand-subtitle">Voice AI Platform</span>
         </button>
       </div>
@@ -1655,8 +1655,8 @@ function AppShell() {
         <div className="sidebar-brand">
           <div className="sidebar-brand-text">
             <button className="sidebar-brand-btn" onClick={handleGoHome} aria-label="Go to home" title="Home">
-              <img src="/voicedesk-logo.png" alt="VoiceDesk" className="sidebar-logo sidebar-logo-full" />
-              <img src="/favicon.jpeg" alt="VoiceDesk" className="sidebar-logo sidebar-logo-mono" />
+              <img src="/acmecorp-logo.png" alt="AcmeCorp" className="sidebar-logo sidebar-logo-full" />
+              <img src="/favicon.jpeg" alt="AcmeCorp" className="sidebar-logo sidebar-logo-mono" />
             </button>
             <span className="sidebar-brand-subtitle">Voice AI Platform</span>
           </div>

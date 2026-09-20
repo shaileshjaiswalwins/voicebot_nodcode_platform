@@ -2,7 +2,7 @@
 
 ## Context
 User shared screenshots + a "How workflow nodes work" guide dialog from a reference internal
-app (VoiceDesk Vendor Appointment Scheduler flow builder, also built on React Flow). Ask: make
+app (AcmeCorp Vendor Appointment Scheduler flow builder, also built on React Flow). Ask: make
 our own flow builder (`frontend/src/views/FlowBuilderView.tsx`) look and work as close to it as
 possible. Confirmed via AskUserQuestion: full redesign including the outcome-pill/transition
 edge model, not just a visual reskin.

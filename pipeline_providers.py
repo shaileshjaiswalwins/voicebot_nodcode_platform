@@ -62,7 +62,7 @@ def build_stt(bot_config: dict):
 
 def build_tts(bot_config: dict):
     provider = (bot_config.get("tts_provider") or DEFAULT_TTS_PROVIDER).lower()
-    if provider not in ("sarvam", "elevenlabs", "voicedesk"):
+    if provider not in ("sarvam", "elevenlabs", "acmecorp"):
         logger.warning(f"[PIPELINE-PROVIDERS] Unknown tts_provider {provider!r}, falling back to {DEFAULT_TTS_PROVIDER!r}")
         provider = DEFAULT_TTS_PROVIDER
     if provider == "sarvam":
@@ -78,10 +78,10 @@ def build_tts(bot_config: dict):
             voice_id=bot_config.get("tts_voice") or "l7kNoIfnJKPg7779LI2t",
             api_key=ELEVENLABS_API_KEY or None,
         )
-    if provider == "voicedesk":
+    if provider == "acmecorp":
         # Our own fine-tuned IndicF5 TTS (livekit_indic5_tts.py) — previously only wired
         # into workflow_engine.py's run_workflow_call, never into this standard-pipeline
-        # factory, so a "standard" bot picking tts_provider="voicedesk" silently fell back
+        # factory, so a "standard" bot picking tts_provider="acmecorp" silently fell back
         # to Sarvam. INDIC_TTS_WS_URL points at the internal IndicF5 WebSocket server.
         from livekit_indic5_tts import IndicF5TTS
 
@@ -98,7 +98,7 @@ def resolve_provider_summary(bot_config: dict) -> dict:
     if stt_provider not in ("sarvam", "deepgram"):
         stt_provider = DEFAULT_STT_PROVIDER
     tts_provider = (bot_config.get("tts_provider") or DEFAULT_TTS_PROVIDER).lower()
-    if tts_provider not in ("sarvam", "elevenlabs", "voicedesk"):
+    if tts_provider not in ("sarvam", "elevenlabs", "acmecorp"):
         tts_provider = DEFAULT_TTS_PROVIDER
     llm_provider = (bot_config.get("llm_provider") or DEFAULT_LLM_PROVIDER).lower()
     if llm_provider not in ("gemini", "openai"):

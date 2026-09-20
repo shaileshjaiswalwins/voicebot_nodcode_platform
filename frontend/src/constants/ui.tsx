@@ -70,13 +70,13 @@ export const SARVAM_TTS_VOICES: string[] = [
 // Values here are two different things depending on use: '' and 'sarvam' set the real
 // tts_model sent to pipeline_providers.py (must match provider_params.py's SARVAM_TTS_SPEC
 // default exactly — "bulbul:v3", not the pricing catalog's underscore key), while
-// 'elevenlabs'/'voicedesk' are catalog keys only used for the cost-estimate lookup (agentCost.ts
+// 'elevenlabs'/'acmecorp' are catalog keys only used for the cost-estimate lookup (agentCost.ts
 // normalizes them back via normalizeModelKey) since those providers don't read tts_model at all.
 export const TTS_PROVIDER_MODEL_KEY: Record<string, string> = {
   '': 'bulbul:v3',
   sarvam: 'bulbul:v3',
   elevenlabs: 'elevenlabs_turbo',
-  voicedesk: 'indic_f5',
+  acmecorp: 'indic_f5',
 };
 
 export const SARVAM_TTS_LANGUAGES: { id: string; label: string }[] = [

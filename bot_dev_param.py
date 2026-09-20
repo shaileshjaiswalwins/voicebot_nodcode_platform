@@ -99,7 +99,7 @@ _PORT               = int(os.getenv("BOT_PORT", "8085"))
 # dashboard's Test Call dispatches to, and LiveKit pairs job to worker on this string alone.
 # Previously both sides read env vars independently, so a machine whose .env named a
 # different worker silently got no bot: dispatch accepted, nothing registered, call hangs.
-_AGENT_NAME         = "voice-bot-voicedesk-dashboard-test"
+_AGENT_NAME         = "voice-bot-acmecorp-dashboard-test"
 _NUM_IDLE_PROCESSES = int(os.getenv("NUM_IDLE_PROCESSES", "2"))
 
 # Language — env vars are deployment-level fallbacks only; per-bot DB config
@@ -608,7 +608,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
         _log.warning(f"[QUESTIONS] could not read qualification_schema: {_q_ex}")
 
     # ── 5. Pipeline plugins: provider-selectable via pipeline_providers.py, so a bot's
-    # stt_provider/tts_provider/llm_provider (Deepgram, ElevenLabs, our own IndicF5 "voicedesk"
+    # stt_provider/tts_provider/llm_provider (Deepgram, ElevenLabs, our own IndicF5 "acmecorp"
     # TTS, OpenAI, ...) actually take effect here — previously this block hardcoded Sarvam
     # STT / Gemini LLM / Sarvam TTS inline and never read those fields at all. A bot with no
     # provider fields set still gets exactly the same hardcoded stack (see
@@ -1457,7 +1457,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @function_tool
     async def FetchLead(tool_ctx: RunContext, lead_id: str = "", mobile: str = "") -> dict:
-        """Fetch customer lead details from VoiceDesk MIS API. Pass lead_id or mobile."""
+        """Fetch customer lead details from AcmeCorp MIS API. Pass lead_id or mobile."""
         _log.info(f"[FetchLead] called | lead_id={lead_id!r} | mobile={mobile!r}")
         result = await _execute_function_call(
             "FetchLead", {"lead_id": lead_id, "mobile": mobile},
@@ -2407,7 +2407,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     # A dashboard-created agent mapped to this number owns the opening line. Nothing
     # mapped (or platform DB unreachable) falls back to the built-in persona below.
     def _build_greeting(rec: dict) -> str:
-        return "हेलो, मैं Simran बोल रही हूँ VoiceDesk से।"
+        return "हेलो, मैं Simran बोल रही हूँ AcmeCorp से।"
 
     def _product_for(rec: dict) -> str:
         sc = (rec or {}).get("search_context") or {}

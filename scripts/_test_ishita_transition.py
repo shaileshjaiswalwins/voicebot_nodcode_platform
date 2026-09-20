@@ -29,7 +29,7 @@ node = next(n for n in wf["nodes"] if n["id"] == "conv-1a")
 data = node["data"]
 
 # Mirrors WorkflowGraph.compile_instructions() for this node — global_prompt + node prompt +
-# transliteration hint (tts_provider defaults to "voicedesk" here, matching Ishita's config).
+# transliteration hint (tts_provider defaults to "acmecorp" here, matching Ishita's config).
 business_name = "Sunrise Electronics"
 prompt = data["prompt"].replace("{{mis.business_name}}", business_name)
 global_prompt = cfg.get("global_prompt", "")

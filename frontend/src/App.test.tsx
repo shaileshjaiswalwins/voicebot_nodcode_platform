@@ -12,7 +12,7 @@ vi.mock('./api', async () => {
     api: {
       login: vi.fn(),
       logout: vi.fn(),
-      me: vi.fn().mockResolvedValue({ email: 'user@voicedesk.com', role: 'admin' }),
+      me: vi.fn().mockResolvedValue({ email: 'user@acmecorp.com', role: 'admin' }),
       bots: vi.fn(),
       createBot: vi.fn(),
       bot: vi.fn(),
@@ -120,7 +120,7 @@ beforeEach(() => {
 describe('Login journey', () => {
   it('renders the login form when not authenticated', () => {
     render(<App />);
-    expect(screen.getByRole('heading', { name: /voicedesk voice ai platform/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /acmecorp voice ai platform/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /sign in/i })).toBeInTheDocument();
@@ -128,12 +128,12 @@ describe('Login journey', () => {
 
   it('logs in with valid credentials and renders the authenticated shell', async () => {
     const user = userEvent.setup();
-    mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@voicedesk.com' });
+    mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@acmecorp.com' });
     mockAuthedDataLoads();
 
     render(<App />);
 
-    await user.type(screen.getByLabelText(/email/i), 'user@voicedesk.com');
+    await user.type(screen.getByLabelText(/email/i), 'user@acmecorp.com');
     await user.type(screen.getByLabelText(/password/i), 'correct-password');
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -143,7 +143,7 @@ describe('Login journey', () => {
     // Sidebar nav items rendered — confirms authenticated shell, not login screen.
     expect(screen.getByRole('button', { name: /agents/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /shortcuts/i })).toBeInTheDocument();
-    expect(mockedApi.login).toHaveBeenCalledWith('user@voicedesk.com', 'correct-password');
+    expect(mockedApi.login).toHaveBeenCalledWith('user@acmecorp.com', 'correct-password');
   });
 
   it('shows a specific human-readable error on invalid credentials, not a raw error dump', async () => {
@@ -152,7 +152,7 @@ describe('Login journey', () => {
 
     render(<App />);
 
-    await user.type(screen.getByLabelText(/email/i), 'user@voicedesk.com');
+    await user.type(screen.getByLabelText(/email/i), 'user@acmecorp.com');
     await user.type(screen.getByLabelText(/password/i), 'wrong-password');
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -174,14 +174,14 @@ describe('Login journey', () => {
 
     render(<App />);
 
-    await user.type(screen.getByLabelText(/email/i), 'user@voicedesk.com');
+    await user.type(screen.getByLabelText(/email/i), 'user@acmecorp.com');
     await user.type(screen.getByLabelText(/password/i), 'correct-password');
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 
     const pendingButton = await screen.findByRole('button', { name: /signing in/i });
     expect(pendingButton).toBeDisabled();
 
-    resolveLogin({ token: 'tok-123', email: 'user@voicedesk.com' });
+    resolveLogin({ token: 'tok-123', email: 'user@acmecorp.com' });
 
     await waitFor(() => {
       expect(screen.getAllByText('Voice AI Platform').length).toBeGreaterThan(0);
@@ -192,11 +192,11 @@ describe('Login journey', () => {
 describe('Empty states', () => {
   it('renders the EmptyState component with its real heading/description/action when there are zero bots', async () => {
     const user = userEvent.setup();
-    mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@voicedesk.com' });
+    mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@acmecorp.com' });
     mockAuthedDataLoads(); // bots() resolves []
 
     render(<App />);
-    await user.type(screen.getByLabelText(/email/i), 'user@voicedesk.com');
+    await user.type(screen.getByLabelText(/email/i), 'user@acmecorp.com');
     await user.type(screen.getByLabelText(/password/i), 'correct-password');
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -214,11 +214,11 @@ describe('Empty states', () => {
 describe('Error handling surfaced via DiagnosticsBar', () => {
   it('shows "Dashboard diagnostics clear" when nothing has failed', async () => {
     const user = userEvent.setup();
-    mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@voicedesk.com' });
+    mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@acmecorp.com' });
     mockAuthedDataLoads();
 
     render(<App />);
-    await user.type(screen.getByLabelText(/email/i), 'user@voicedesk.com');
+    await user.type(screen.getByLabelText(/email/i), 'user@acmecorp.com');
     await user.type(screen.getByLabelText(/password/i), 'correct-password');
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -227,13 +227,13 @@ describe('Error handling surfaced via DiagnosticsBar', () => {
 
   it('surfaces a specific human-readable message in the DiagnosticsBar when loading campaigns fails, without crashing', async () => {
     const user = userEvent.setup();
-    mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@voicedesk.com' });
+    mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@acmecorp.com' });
     mockAuthedDataLoads();
     mockedApi.campaigns.mockReset();
     mockedApi.campaigns.mockRejectedValue(new Error('Failed to fetch'));
 
     render(<App />);
-    await user.type(screen.getByLabelText(/email/i), 'user@voicedesk.com');
+    await user.type(screen.getByLabelText(/email/i), 'user@acmecorp.com');
     await user.type(screen.getByLabelText(/password/i), 'correct-password');
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -254,26 +254,26 @@ describe('Error handling surfaced via DiagnosticsBar', () => {
 
   it('logs the user out (returns to login) when bots() rejects with a 401 ApiError', async () => {
     const user = userEvent.setup();
-    mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@voicedesk.com' });
+    mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@acmecorp.com' });
     mockAuthedDataLoads();
     const { ApiError } = await vi.importActual<typeof import('./api')>('./api');
     mockedApi.bots.mockReset();
     mockedApi.bots.mockRejectedValue(new ApiError(401, 'Unauthorized'));
 
     render(<App />);
-    await user.type(screen.getByLabelText(/email/i), 'user@voicedesk.com');
+    await user.type(screen.getByLabelText(/email/i), 'user@acmecorp.com');
     await user.type(screen.getByLabelText(/password/i), 'correct-password');
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /voicedesk voice ai platform/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /acmecorp voice ai platform/i })).toBeInTheDocument();
     });
   });
 });
 
 describe('Bot select -> builder -> EvalsPanel microinteractions', () => {
   async function loginAndOpenBuilder(user: ReturnType<typeof userEvent.setup>, bot: Bot, versions?: any[]) {
-    mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@voicedesk.com' });
+    mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@acmecorp.com' });
     mockAuthedDataLoads();
     mockedApi.bots.mockResolvedValue([bot]);
     mockedApi.bot.mockResolvedValue({
@@ -285,7 +285,7 @@ describe('Bot select -> builder -> EvalsPanel microinteractions', () => {
     mockedApi.listEvals.mockResolvedValue([]);
 
     render(<App />);
-    await user.type(screen.getByLabelText(/email/i), 'user@voicedesk.com');
+    await user.type(screen.getByLabelText(/email/i), 'user@acmecorp.com');
     await user.type(screen.getByLabelText(/password/i), 'correct-password');
     await user.click(screen.getByRole('button', { name: /sign in/i }));
 

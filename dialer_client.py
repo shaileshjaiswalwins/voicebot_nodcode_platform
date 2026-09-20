@@ -1,5 +1,5 @@
 """Push a queued campaign lead to TSPL's outbound-dialer API — the piece that actually
-causes a real phone call to happen. TSPL resolves the lead's `jduid` (VoiceDesk's internal
+causes a real phone call to happen. TSPL resolves the lead's `jduid` (AcmeCorp's internal
 per-user ID) to a real phone number on their side; we never see the number itself.
 
 `campaign_type`/`trigger_reason` are static per Avi's dev sample. Everything else is either

@@ -1,7 +1,7 @@
 def _create_bot(client, auth_headers, name="Test Bot"):
     resp = client.post(
         "/api/bots",
-        json={"name": name, "description": "d", "config": {"organization_name": "VoiceDesk"}},
+        json={"name": name, "description": "d", "config": {"organization_name": "AcmeCorp"}},
         headers=auth_headers,
     )
     assert resp.status_code == 200, resp.text
@@ -143,7 +143,7 @@ def test_create_phone_number_persists_sip_trunk_fields_but_never_echoes_password
             "ip": "192.168.29.196",
             "sip_trunk": "9017",
             "sip_username": "voice_bot_nocode",
-            "sip_password": "voicedesk",
+            "sip_password": "acmecorp",
         },
         headers=auth_headers,
     )

@@ -120,9 +120,9 @@ class TestProviderSelection:
         mock_tts.assert_called_once()
         assert result is mock_tts.return_value
 
-    def test_tts_provider_voicedesk_selected(self):
+    def test_tts_provider_acmecorp_selected(self):
         with patch("livekit_indic5_tts.IndicF5TTS") as mock_tts:
-            result = pp.build_tts({"tts_provider": "voicedesk"})
+            result = pp.build_tts({"tts_provider": "acmecorp"})
         mock_tts.assert_called_once()
         assert result is mock_tts.return_value
 
@@ -166,9 +166,9 @@ class TestProviderSpecificSettings:
         assert kwargs["speaker"] == "shubh"
         assert kwargs["target_language_code"] == "ta-IN"
 
-    def test_voicedesk_reads_speaker_from_legacy_tts_voice(self):
+    def test_acmecorp_reads_speaker_from_legacy_tts_voice(self):
         with patch("livekit_indic5_tts.IndicF5TTS") as mock_tts:
-            pp.build_tts({"tts_provider": "voicedesk", "tts_voice": "anushka"})
+            pp.build_tts({"tts_provider": "acmecorp", "tts_voice": "anushka"})
         _, kwargs = mock_tts.call_args
         assert kwargs["speaker"] == "anushka"
         assert kwargs["sample_rate"] == 24000

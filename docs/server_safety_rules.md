@@ -63,7 +63,7 @@ Avoid these unless engineering explicitly schedules it:
 Use this worker for test calls from the dashboard:
 
 ```txt
-voice-bot-voicedesk-test
+voice-bot-acmecorp-test
 ```
 
 Do not point dashboard tests at the live worker unless engineering explicitly approves.
@@ -73,7 +73,7 @@ Do not point dashboard tests at the live worker unless engineering explicitly ap
 From local Mac repo:
 
 ```bash
-cd /Users/voicedesk/voicebot_nodcode_platform
+cd /Users/acmecorp/voicebot_nodcode_platform
 git checkout ai_voice_bot_management
 git status --short
 ./ops/deploy_safe_server.sh

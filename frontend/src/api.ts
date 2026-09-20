@@ -203,7 +203,7 @@ export type CampaignLead = {
   campaign_id: string;
   /** Direct-dial leads only. TSPL-pushed leads use jduid instead — a row has one or the other. */
   phone_number?: string | null;
-  /** VoiceDesk's internal per-user ID — the primary identifier for TSPL-pushed campaigns,
+  /** AcmeCorp's internal per-user ID — the primary identifier for TSPL-pushed campaigns,
    * which never see the real phone number. */
   jduid?: string | null;
   name?: string;

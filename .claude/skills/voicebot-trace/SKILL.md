@@ -56,7 +56,7 @@ A break in **any** layer can produce "missing data". The skill's job is to ident
 This is the highest-signal step. Run from the project root, on a machine that can reach the Mongo cluster:
 
 ```bash
-cd /Users/voicedesk/voicebot_nodcode_platform
+cd /Users/acmecorp/voicebot_nodcode_platform
 uv run python - <<'PY'
 import os
 from voicebot_platform.mongo import get_client

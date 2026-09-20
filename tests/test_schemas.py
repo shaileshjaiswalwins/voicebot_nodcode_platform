@@ -74,14 +74,14 @@ def test_publish_payload_rejects_garbage_id():
 def test_runtime_settings_agent_name_validates():
     with pytest.raises(ValidationError):
         RuntimeSettingsUpdatePayload(livekit_agent_name="bad name with spaces!")
-    RuntimeSettingsUpdatePayload(livekit_agent_name="voice-bot-voicedesk-test")
+    RuntimeSettingsUpdatePayload(livekit_agent_name="voice-bot-acmecorp-test")
 
 
 def test_test_session_worker_agent_name_validates():
     with pytest.raises(ValidationError):
         SessionPayload(test_worker_agent_name="bad name with spaces!")
-    payload = SessionPayload(test_worker_agent_name="voice-bot-voicedesk-test")
-    assert payload.test_worker_agent_name == "voice-bot-voicedesk-test"
+    payload = SessionPayload(test_worker_agent_name="voice-bot-acmecorp-test")
+    assert payload.test_worker_agent_name == "voice-bot-acmecorp-test"
 
 
 def test_assert_object_id_validates():

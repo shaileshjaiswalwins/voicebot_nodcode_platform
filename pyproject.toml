@@ -1,7 +1,7 @@
 [project]
-name = "livekit-native-voicedesk-bot"
+name = "livekit-native-acmecorp-bot"
 version = "0.1.0"
-description = "Standalone LiveKit-Agents replica of the Pipecat VoiceDesk bot"
+description = "Standalone LiveKit-Agents replica of the Pipecat AcmeCorp bot"
 requires-python = ">=3.10"
 dependencies = [
     "livekit-agents[google,silero]>=1.0",
