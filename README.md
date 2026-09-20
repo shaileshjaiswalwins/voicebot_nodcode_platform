@@ -1,6 +1,6 @@
-# LiveKit Native JustDial Bot + No-Code Platform
+# LiveKit Native VoiceDesk Bot + No-Code Platform
 
-Standalone LiveKit-Agents voicebot for JustDial product qualification calls plus a V1 internal no-code platform for PMs and developers. The runtime uses Gemini Live (s2s) via `livekit-agents` natively, while the platform stores bot prompts/settings, versions, campaigns and transcripts in MongoDB.
+Standalone LiveKit-Agents voicebot for VoiceDesk product qualification calls plus a V1 internal no-code platform for PMs and developers. The runtime uses Gemini Live (s2s) via `livekit-agents` natively, while the platform stores bot prompts/settings, versions, campaigns and transcripts in MongoDB.
 
 ## Requirements
 

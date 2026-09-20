@@ -308,7 +308,7 @@ export function TestCallPanel({
   // used to display runtimeSettings.livekit_agent_name, which the test-call endpoint never
   // reads — so the panel could confidently show one worker while the dispatch went to
   // another, and a call that reached nobody looked correctly configured on screen.
-  const defaultWorker = 'voice-bot-justdial-dashboard-test';
+  const defaultWorker = 'voice-bot-voicedesk-dashboard-test';
   const effectiveWorker = form.test_worker_agent_name || defaultWorker;
   // Once LiveKit reports its own real AgentState (liveAgentState), prefer it over the
   // heuristic below — deriveAgentState only approximates from the status string and

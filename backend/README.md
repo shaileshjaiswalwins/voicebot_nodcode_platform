@@ -7,7 +7,7 @@ source .venv/bin/activate
 uvicorn backend.main:app --reload --port 8000
 ```
 
-First login seeds a hardcoded admin user (`admin@justdial.com` / `password`) in the
+First login seeds a hardcoded admin user (`admin@voicedesk.com` / `password`) in the
 `tbl_ai_vb_users` Mongo collection on first startup — see `backend/auth.py`.
 
 Env vars (all optional, fall back to `.env` at repo root):

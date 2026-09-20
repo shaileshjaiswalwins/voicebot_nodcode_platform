@@ -1,4 +1,4 @@
-"""Justdial IAM SSO (OAuth2 + PKCE) client — ported from search_mis's SecurityController.php
+"""VoiceDesk IAM SSO (OAuth2 + PKCE) client — ported from search_mis's SecurityController.php
 per the integration doc (SSO_Integration_Reference.docx, section 3/7). Only the IdP contract
 is reused (PKCE generation, the auth/token/validate-token calls); role derivation and session
 shape are this platform's own, not search_mis's hardcoded rules.
@@ -18,7 +18,7 @@ import requests
 
 from .db import db
 
-SSO_IAM_BASE_URL = os.getenv("SSO_IAM_BASE_URL", "https://accounts.justdial.com/jdiam")
+SSO_IAM_BASE_URL = os.getenv("SSO_IAM_BASE_URL", "https://accounts.voicedesk.com/jdiam")
 SSO_CLIENT_ID = os.getenv("SSO_CLIENT_ID", "")
 SSO_CLIENT_SECRET = os.getenv("SSO_CLIENT_SECRET", "")
 SSO_REDIRECT_URL = os.getenv("SSO_REDIRECT_URL", "")

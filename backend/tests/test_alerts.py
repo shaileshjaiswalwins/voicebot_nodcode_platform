@@ -21,7 +21,7 @@ VALID_RULE_PAYLOAD = {
 }
 
 
-def _other_user_headers(client, email="pm@justdial.com", role="user"):
+def _other_user_headers(client, email="pm@voicedesk.com", role="user"):
     auth_module.create_user(email, "password", role=role)
     resp = client.post("/api/auth/login", json={"email": email, "password": "password"})
     assert resp.status_code == 200, resp.text
@@ -113,8 +113,8 @@ def test_create_rule_rejects_an_11th_rule_for_a_user_at_the_cap(client, auth_hea
 
 
 def test_create_rule_rejects_bot_the_caller_does_not_own(client, auth_headers):
-    other_headers, other_email = _other_user_headers(client, email="pm-validation@justdial.com")
-    someone_elses_bot = _insert_bot(owner="not-pm-validation@justdial.com")
+    other_headers, other_email = _other_user_headers(client, email="pm-validation@voicedesk.com")
+    someone_elses_bot = _insert_bot(owner="not-pm-validation@voicedesk.com")
 
     resp = client.post(
         "/api/alerts/rules",
@@ -130,24 +130,24 @@ def test_create_rule_rejects_bot_the_caller_does_not_own(client, auth_headers):
 
 
 def test_resolve_owned_bot_ids_restricts_non_admin_to_their_own_bots():
-    owned_bot = _insert_bot(owner="scoped-pm@justdial.com")
-    _insert_bot(owner="someone-else@justdial.com")
+    owned_bot = _insert_bot(owner="scoped-pm@voicedesk.com")
+    _insert_bot(owner="someone-else@voicedesk.com")
 
-    owned = auth_module.resolve_owned_bot_ids("scoped-pm@justdial.com", "user")
+    owned = auth_module.resolve_owned_bot_ids("scoped-pm@voicedesk.com", "user")
     assert owned == [owned_bot]
 
 
 def test_resolve_owned_bot_ids_is_unrestricted_for_admin():
-    _insert_bot(owner="whoever@justdial.com")
-    _insert_bot(owner="someone-else@justdial.com")
+    _insert_bot(owner="whoever@voicedesk.com")
+    _insert_bot(owner="someone-else@voicedesk.com")
 
-    assert auth_module.resolve_owned_bot_ids("admin@justdial.com", "admin") is None
+    assert auth_module.resolve_owned_bot_ids("admin@voicedesk.com", "admin") is None
 
 
 def test_platform_wide_rule_for_non_admin_evaluates_only_their_own_bots(client, auth_headers):
-    other_headers, other_email = _other_user_headers(client, email="pm-scope@justdial.com")
+    other_headers, other_email = _other_user_headers(client, email="pm-scope@voicedesk.com")
     own_bot = _insert_bot(owner=other_email)
-    _insert_bot(owner="not-pm-scope@justdial.com")
+    _insert_bot(owner="not-pm-scope@voicedesk.com")
 
     # Platform-wide (empty bot_ids filter) for this non-admin creator.
     resp = client.post(
@@ -165,8 +165,8 @@ def test_platform_wide_rule_for_non_admin_evaluates_only_their_own_bots(client, 
 
 
 def test_platform_wide_rule_for_admin_is_unrestricted(client, auth_headers):
-    _insert_bot(owner="admin@justdial.com")
-    _insert_bot(owner="anyone@justdial.com")
+    _insert_bot(owner="admin@voicedesk.com")
+    _insert_bot(owner="anyone@voicedesk.com")
 
     resp = client.post(
         "/api/alerts/rules",
@@ -174,7 +174,7 @@ def test_platform_wide_rule_for_admin_is_unrestricted(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 200, resp.text
-    rule_doc = db_module.alert_rules.find_one({"created_by": "admin@justdial.com"})
+    rule_doc = db_module.alert_rules.find_one({"created_by": "admin@voicedesk.com"})
 
     from alert_worker.worker import _resolve_rule_bot_ids
 
@@ -341,7 +341,7 @@ def test_breach_opens_incident_and_recovery_resolves_it(client, auth_headers):
         headers=auth_headers,
     )
     rule_id = create_resp.json()["_id"]
-    rule_doc = db_module.alert_rules.find_one({"created_by": "admin@justdial.com"})
+    rule_doc = db_module.alert_rules.find_one({"created_by": "admin@voicedesk.com"})
 
     now = datetime.now(timezone.utc)
 
@@ -380,7 +380,7 @@ def test_only_one_open_incident_per_rule_at_a_time(client, auth_headers):
         headers=auth_headers,
     )
     rule_id = create_resp.json()["_id"]
-    rule_doc = db_module.alert_rules.find_one({"_id": db_module.alert_rules.find_one({"created_by": "admin@justdial.com"})["_id"]})
+    rule_doc = db_module.alert_rules.find_one({"_id": db_module.alert_rules.find_one({"created_by": "admin@voicedesk.com"})["_id"]})
 
     now = datetime.now(timezone.utc)
     _seed_transcript(bot_id="any-bot", created_at=now - timedelta(seconds=1))
@@ -399,7 +399,7 @@ def test_editing_a_rule_clears_its_active_incident(client, auth_headers):
         headers=auth_headers,
     )
     rule_id = create_resp.json()["_id"]
-    rule_doc = db_module.alert_rules.find_one({"created_by": "admin@justdial.com"})
+    rule_doc = db_module.alert_rules.find_one({"created_by": "admin@voicedesk.com"})
 
     now = datetime.now(timezone.utc)
     _seed_transcript(bot_id="any-bot", created_at=now - timedelta(seconds=1))
@@ -424,8 +424,8 @@ def test_editing_a_rule_clears_its_active_incident(client, auth_headers):
 
 
 def test_user_b_cannot_get_user_as_rule_by_id(client):
-    a_headers, _ = _other_user_headers(client, email="idor-a@justdial.com")
-    b_headers, _ = _other_user_headers(client, email="idor-b@justdial.com")
+    a_headers, _ = _other_user_headers(client, email="idor-a@voicedesk.com")
+    b_headers, _ = _other_user_headers(client, email="idor-b@voicedesk.com")
 
     create_resp = client.post("/api/alerts/rules", json=VALID_RULE_PAYLOAD, headers=a_headers)
     assert create_resp.status_code == 200, create_resp.text
@@ -442,8 +442,8 @@ def test_user_b_cannot_get_user_as_rule_by_id(client):
 
 
 def test_user_b_cannot_update_user_as_rule(client):
-    a_headers, _ = _other_user_headers(client, email="idor-upd-a@justdial.com")
-    b_headers, _ = _other_user_headers(client, email="idor-upd-b@justdial.com")
+    a_headers, _ = _other_user_headers(client, email="idor-upd-a@voicedesk.com")
+    b_headers, _ = _other_user_headers(client, email="idor-upd-b@voicedesk.com")
 
     create_resp = client.post("/api/alerts/rules", json=VALID_RULE_PAYLOAD, headers=a_headers)
     rule_id = create_resp.json()["_id"]
@@ -466,8 +466,8 @@ def test_user_b_cannot_update_user_as_rule(client):
 
 
 def test_user_b_cannot_delete_user_as_rule(client):
-    a_headers, _ = _other_user_headers(client, email="idor-del-a@justdial.com")
-    b_headers, _ = _other_user_headers(client, email="idor-del-b@justdial.com")
+    a_headers, _ = _other_user_headers(client, email="idor-del-a@voicedesk.com")
+    b_headers, _ = _other_user_headers(client, email="idor-del-b@voicedesk.com")
 
     create_resp = client.post("/api/alerts/rules", json=VALID_RULE_PAYLOAD, headers=a_headers)
     rule_id = create_resp.json()["_id"]
@@ -480,8 +480,8 @@ def test_user_b_cannot_delete_user_as_rule(client):
 
 
 def test_user_b_cannot_see_user_as_incidents(client):
-    a_headers, a_email = _other_user_headers(client, email="idor-inc-a@justdial.com")
-    b_headers, _ = _other_user_headers(client, email="idor-inc-b@justdial.com")
+    a_headers, a_email = _other_user_headers(client, email="idor-inc-a@voicedesk.com")
+    b_headers, _ = _other_user_headers(client, email="idor-inc-b@voicedesk.com")
 
     own_bot = _insert_bot(owner=a_email)
 
@@ -507,9 +507,9 @@ def test_user_b_cannot_see_user_as_incidents(client):
 
 
 def test_admin_can_get_update_and_delete_a_non_admins_rule(client, auth_headers):
-    """auth_headers is admin@justdial.com per conftest — admin's _owner_filter is {} (see
+    """auth_headers is admin@voicedesk.com per conftest — admin's _owner_filter is {} (see
     alerts.py), so admin must retain full CRUD over rules created by other users."""
-    other_headers, other_email = _other_user_headers(client, email="idor-admin@justdial.com")
+    other_headers, other_email = _other_user_headers(client, email="idor-admin@voicedesk.com")
 
     create_resp = client.post("/api/alerts/rules", json=VALID_RULE_PAYLOAD, headers=other_headers)
     assert create_resp.status_code == 200, create_resp.text
@@ -588,7 +588,7 @@ def test_claim_due_rules_malformed_rule_does_not_starve_a_valid_due_rule(client,
         "filters": {"bot_ids": [], "status": None, "call_outcome": None},
         "notify_via": "in_app",
         "enabled": True,
-        "created_by": "admin@justdial.com",
+        "created_by": "admin@voicedesk.com",
         "next_eval_at": now - timedelta(seconds=1),  # already due, sorts first
         "last_evaluated_at": None,
         "created_at": now,
@@ -630,7 +630,7 @@ def test_incident_created_by_worker_has_rule_name_stored_on_the_document(client,
         headers=auth_headers,
     )
     rule_id = create_resp.json()["_id"]
-    rule_doc = db_module.alert_rules.find_one({"created_by": "admin@justdial.com"})
+    rule_doc = db_module.alert_rules.find_one({"created_by": "admin@voicedesk.com"})
 
     now = datetime.now(timezone.utc)
     _seed_transcript(bot_id="any-bot", created_at=now - timedelta(seconds=1))
@@ -678,7 +678,7 @@ def test_evaluate_rule_with_invalid_schema_skips_without_raising_and_does_not_bl
         "filters": {"bot_ids": [], "status": None, "call_outcome": None},
         "notify_via": "in_app",
         "enabled": True,
-        "created_by": "admin@justdial.com",
+        "created_by": "admin@voicedesk.com",
         "next_eval_at": now,
         "last_evaluated_at": None,
         "created_at": now,

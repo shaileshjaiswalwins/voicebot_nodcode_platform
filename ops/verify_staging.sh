@@ -11,7 +11,7 @@ set -euo pipefail
 API_HOST="${API_HOST:-127.0.0.1}"
 API_PORT="${API_PORT:-8010}"
 WORKER_PORT="${WORKER_PORT:-8091}"
-EXPECTED_AGENT_NAME="${EXPECTED_AGENT_NAME:-voice-bot-justdial-test}"
+EXPECTED_AGENT_NAME="${EXPECTED_AGENT_NAME:-voice-bot-voicedesk-test}"
 TIMEOUT="${TIMEOUT:-5}"
 
 OK=0

@@ -29,7 +29,7 @@ function makeRule(overrides: Partial<AlertRule> = {}): AlertRule {
     filters: { bot_ids: [] },
     notify_via: 'in_app',
     enabled: true,
-    created_by: 'admin@justdial.com',
+    created_by: 'admin@voicedesk.com',
     created_at: new Date().toISOString(),
     ...overrides,
   };
@@ -59,7 +59,7 @@ beforeEach(() => {
     _id: 'rule_1',
     threshold_type: 'absolute',
     notify_via: 'in_app',
-    created_by: 'admin@justdial.com',
+    created_by: 'admin@voicedesk.com',
     created_at: new Date().toISOString(),
   }));
 });

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pipeline (STT → LLM → TTS) version of the Justdial voice bot.
+Pipeline (STT → LLM → TTS) version of the VoiceDesk voice bot.
 
 Unlike bot.py (which uses Gemini Live s2s / RealtimeModel), this file runs a
 classic three-stage pipeline:
@@ -296,7 +296,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     if _bc is None:
         record_fallback_event(
             room_name=room_name, bot_id=_bot_id_meta, test_bot_version_id=_test_version_meta,
-            reason=_fallback_reason, worker=os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-justdial-live-2"),
+            reason=_fallback_reason, worker=os.getenv("LIVEKIT_AGENT_NAME", "voice-bot-voicedesk-live-2"),
         )
         _log.warning(f"[CONFIG] Falling back to hardcoded assistant — reason={_fallback_reason!r}")
 
@@ -1275,7 +1275,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 
     @function_tool
     async def FetchLead(tool_ctx: RunContext, lead_id: str = "", mobile: str = "") -> dict:
-        """Fetch customer lead details from Justdial MIS API. Pass lead_id or mobile."""
+        """Fetch customer lead details from VoiceDesk MIS API. Pass lead_id or mobile."""
         _log.info(f"[FetchLead] called | lead_id={lead_id!r} | mobile={mobile!r}")
         result = await _execute_function_call(
             "FetchLead", {"lead_id": lead_id, "mobile": mobile},
@@ -2327,7 +2327,7 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
     def _build_greeting(rec: dict) -> str:
         """Identity-only opening line. Product question is asked by the LLM as its first response."""
         _agent_name = _bot_config.get("agent_name") or "Simran"
-        _org_name = _bot_config.get("organization_name") or "Justdial"
+        _org_name = _bot_config.get("organization_name") or "VoiceDesk"
         return f"हेलो, मैं {_agent_name} बोल रही हूँ {_org_name} से।"
 
     _greeting_text = _build_greeting(record)
@@ -2413,14 +2413,14 @@ async def entrypoint(ctx: JobContext):  # noqa: C901
 # Worker entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    _agent_name = os.getenv("BOT_DEV_AGENT_NAME", "voice-bot-justdial-live-2")
+    _agent_name = os.getenv("BOT_DEV_AGENT_NAME", "voice-bot-voicedesk-live-2")
     start_worker_heartbeat(_agent_name)
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm_fnc,
             # Production pool, kept distinct from bot_dev_param's test-call pool
-            # (voice-bot-justdial-live-1, which the dashboard dispatches to). Reads its own
+            # (voice-bot-voicedesk-live-1, which the dashboard dispatches to). Reads its own
             # env var, NOT the shared LIVEKIT_AGENT_NAME — a deploy that points
             # LIVEKIT_AGENT_NAME at live-1 to route test calls must not also drag this
             # worker into that pool. Set BOT_DEV_AGENT_NAME to override.

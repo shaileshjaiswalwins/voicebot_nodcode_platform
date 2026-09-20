@@ -119,9 +119,9 @@ function mockAuthedDataLoads(bots: Bot[] = []) {
 }
 
 async function signIn(user: ReturnType<typeof userEvent.setup>) {
-  mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@justdial.com' });
+  mockedApi.login.mockResolvedValue({ token: 'tok-123', email: 'user@voicedesk.com' });
   render(<App />);
-  await user.type(screen.getByLabelText(/email/i), 'user@justdial.com');
+  await user.type(screen.getByLabelText(/email/i), 'user@voicedesk.com');
   await user.type(screen.getByLabelText(/password/i), 'correct-password');
   await user.click(screen.getByRole('button', { name: /sign in/i }));
   await waitFor(() => expect(screen.getAllByText('Voice AI Platform').length).toBeGreaterThan(0));

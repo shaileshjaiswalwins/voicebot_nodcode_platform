@@ -126,9 +126,9 @@ def render_greeting(config: dict, product: str = "") -> str:
     line = (config.get("initial_message") or "").strip()
     if not line:
         return ""
-    # Organization defaults to Justdial when the agent leaves it blank, so the bot never
+    # Organization defaults to VoiceDesk when the agent leaves it blank, so the bot never
     # says "मैं Riya बोल रही हूँ  से" with a gap where the company name belongs.
-    org = (config.get("organization_name") or "").strip() or "Justdial"
+    org = (config.get("organization_name") or "").strip() or "VoiceDesk"
     filled = (
         line.replace("{agent_name}", config.get("agent_name") or "")
         .replace("{organization_name}", org)

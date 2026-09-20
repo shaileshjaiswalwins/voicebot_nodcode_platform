@@ -9,9 +9,9 @@ Run through this top-to-bottom every time you deploy to a new server or after ma
 Run these commands and note the outputs. You'll need them to fill in the config files.
 
 ```bash
-whoami                          # → your Linux username (replaces "justdial")
+whoami                          # → your Linux username (replaces "voicedesk")
 pwd                             # → confirm you're in the right directory
-which uv                        # → full path to uv (replaces /Users/justdial/.local/bin/uv)
+which uv                        # → full path to uv (replaces /Users/voicedesk/.local/bin/uv)
 python3 --version               # → should be 3.10+
 cat /etc/os-release | head -3   # → Ubuntu/Debian/RHEL — affects log dir creation
 ```
@@ -34,17 +34,17 @@ Three values to change — nothing else:
 
 | What | Find | Replace with |
 |------|------|--------------|
-| Working directory | `/Users/justdial/voicebot_nodcode_platform` | `/home/<user>/voicebot_nodcode_platform` |
-| uv path (×3 commands) | `/Users/justdial/.local/bin/uv` | output of `which uv` |
-| HOME env var (×3) | `HOME="/Users/justdial"` | `HOME="/home/<user>"` |
+| Working directory | `/Users/voicedesk/voicebot_nodcode_platform` | `/home/<user>/voicebot_nodcode_platform` |
+| uv path (×3 commands) | `/Users/voicedesk/.local/bin/uv` | output of `which uv` |
+| HOME env var (×3) | `HOME="/Users/voicedesk"` | `HOME="/home/<user>"` |
 
 ```bash
 # Quick sed replacement — substitute your actual values:
 USER=deploy
 UV_PATH=$(which uv)
-sed -i "s|/Users/justdial/voicebot_nodcode_platform|/home/$USER/voicebot_nodcode_platform|g" ops/supervisord.conf
-sed -i "s|/Users/justdial/.local/bin/uv|$UV_PATH|g" ops/supervisord.conf
-sed -i "s|HOME=\"/Users/justdial\"|HOME=\"/home/$USER\"|g" ops/supervisord.conf
+sed -i "s|/Users/voicedesk/voicebot_nodcode_platform|/home/$USER/voicebot_nodcode_platform|g" ops/supervisord.conf
+sed -i "s|/Users/voicedesk/.local/bin/uv|$UV_PATH|g" ops/supervisord.conf
+sed -i "s|HOME=\"/Users/voicedesk\"|HOME=\"/home/$USER\"|g" ops/supervisord.conf
 ```
 
 ---
@@ -56,9 +56,9 @@ Same substitutions as above, plus one more:
 ```bash
 USER=deploy
 UV_PATH=$(which uv)
-sed -i "s|User=justdial|User=$USER|g" ops/voicebot-worker.service
-sed -i "s|/Users/justdial/voicebot_nodcode_platform|/home/$USER/voicebot_nodcode_platform|g" ops/voicebot-worker.service
-sed -i "s|/Users/justdial/.local/bin/uv|$UV_PATH|g" ops/voicebot-worker.service
+sed -i "s|User=voicedesk|User=$USER|g" ops/voicebot-worker.service
+sed -i "s|/Users/voicedesk/voicebot_nodcode_platform|/home/$USER/voicebot_nodcode_platform|g" ops/voicebot-worker.service
+sed -i "s|/Users/voicedesk/.local/bin/uv|$UV_PATH|g" ops/voicebot-worker.service
 ```
 
 ---
@@ -79,7 +79,7 @@ MONGO_URI=mongodb://192.168.13.65:27017   # or your server's MongoDB
 LIVEKIT_URL=ws://192.168.41.116:7880
 LIVEKIT_API_KEY=...
 LIVEKIT_API_SECRET=...
-LIVEKIT_AGENT_NAME=voice-bot-justdial
+LIVEKIT_AGENT_NAME=voice-bot-voicedesk
 GEMINI_API_KEY=...
 SARVAM_API_KEY=...
 MIS_API_BASE=http://192.168.8.67:8000

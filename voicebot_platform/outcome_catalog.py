@@ -38,7 +38,7 @@ DEFAULT_OUTCOMES: list[dict[str, str]] = [
     {"key": "Already Spoken", "description": "The customer has already discussed or interacted about the requirement with JD or the seller, OR the customer's requirement has already been fulfilled."},
     {"key": "Will do it Myself", "description": "The customer still has the requirement but will source/handle it themselves without JD's help — they explicitly declined seller connections (e.g. 'मैं खुद देख लूँगा', 'I'll manage it myself'). The need exists; only JD's assistance is rejected. Distinct from Not Interested."},
     {"key": "Call Rescheduled", "description": "The customer asked to call at a specific date and time."},
-    {"key": "Seller Intent", "description": "The caller is a seller or vendor trying to offer their own products/services — they are NOT a buyer with a requirement. They may want to list on JustDial or pitch their business. This is the opposite of a buyer lead."},
+    {"key": "Seller Intent", "description": "The caller is a seller or vendor trying to offer their own products/services — they are NOT a buyer with a requirement. They may want to list on VoiceDesk or pitch their business. This is the opposite of a buyer lead."},
     {"key": "Abusive Lead", "description": "The recipient exhibited abusive or inappropriate behavior during the call."},
     {"key": "DNC Client : Don't Call Further", "description": "The customer explicitly requested not to be contacted again."},
     {"key": "Other Cases", "description": "The call outcome does not fit into any predefined categories."},

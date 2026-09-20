@@ -562,7 +562,7 @@ export function BotConfigTabs({
             <ChipListEditor
               label="Tags"
               helpText="Used to filter/group the Agents page — no effect on the bot itself. Press Enter to add a tag."
-              placeholder="e.g. Hindi, Justdial, Qualification"
+              placeholder="e.g. Hindi, VoiceDesk, Qualification"
               emptyText="No tags yet"
               items={Array.isArray(value.tags) ? (value.tags as string[]) : []}
               onChange={(v) => onUpdateConfig('tags', v)}
@@ -622,7 +622,7 @@ export function BotConfigTabs({
                 <input
                   ref={openingLineRef}
                   value={String(value.initial_message || '')}
-                  placeholder="e.g. Hello, this is Priya from JustDial…"
+                  placeholder="e.g. Hello, this is Priya from VoiceDesk…"
                   onFocus={() => setLastFocusedPromptField('initial_message')}
                   onChange={(e) => onUpdateConfig('initial_message', e.target.value)}
                 />
@@ -807,7 +807,7 @@ export function BotConfigTabs({
                 <option value="">Sarvam (default)</option>
                 <option value="sarvam">Sarvam</option>
                 <option value="elevenlabs">ElevenLabs</option>
-                <option value="justdial">Justdial (in-house IndicF5)</option>
+                <option value="voicedesk">VoiceDesk (in-house IndicF5)</option>
               </select>
               <small>The voice/provider this bot speaks with — applies to workflow bots too.</small>
             </label>
@@ -836,7 +836,7 @@ export function BotConfigTabs({
                 <small>Find voice IDs at elevenlabs.io under Voices.</small>
               </label>
             )}
-            {value.tts_provider === 'justdial' && (
+            {value.tts_provider === 'voicedesk' && (
               <label>
                 Voice
                 <select value={String(value.tts_voice || 'simran')} onChange={(e) => onUpdateConfig('tts_voice', e.target.value)}>

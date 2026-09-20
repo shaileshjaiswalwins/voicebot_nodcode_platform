@@ -1,2 +1,2 @@
-"""Internal JustDial voice bot platform helpers."""
+"""Internal VoiceDesk voice bot platform helpers."""
 

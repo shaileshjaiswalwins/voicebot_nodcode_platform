@@ -121,7 +121,7 @@ def seed_default_bot(default_config: dict[str, Any], user: str = DEFAULT_USER) -
         {
             "$setOnInsert": {
                 "assistant_id": assistant_id,
-                "name": "JustDial Lead Qualification",
+                "name": "VoiceDesk Lead Qualification",
                 "description": "Default outbound lead qualification bot seeded from the current runtime.",
                 "owner": user,
                 "status": "active",
@@ -160,11 +160,11 @@ def seed_default_bot(default_config: dict[str, Any], user: str = DEFAULT_USER) -
         {"$set": {"active_version_id": version["_id"], "updated_at": now}},
     )
     db[BOT_TEMPLATE_COLLECTION].update_one(
-        {"template_key": "justdial_lead_qualification"},
+        {"template_key": "voicedesk_lead_qualification"},
         {
             "$set": {
-                "template_key": "justdial_lead_qualification",
-                "name": "JustDial Lead Qualification",
+                "template_key": "voicedesk_lead_qualification",
+                "name": "VoiceDesk Lead Qualification",
                 "description": "Outbound product qualification prompt and tool configuration.",
                 "config": config,
                 "updated_at": now,

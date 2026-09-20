@@ -88,7 +88,7 @@ livekit-agents source rather than assumed from the (never-executed) example:
      of the conversation to empty on every transition.
 
 Not modeled (kept intentionally out of scope for this pass, unlike the
-Justdial-specific bots): muted-window noise filtering, per-call Mongo
+VoiceDesk-specific bots): muted-window noise filtering, per-call Mongo
 transcript schema, keyboard/ambience background audio, abusive-language
 detection. A generic engine has no per-bot business logic to hang those on.
 """
@@ -220,17 +220,17 @@ class WorkflowState:
 class WorkflowGraph:
     _MAX_HOPS = 25  # guard against a malformed graph looping forever
 
-    def __init__(self, workflow: dict, global_prompt: str = "", tts_provider: str = "justdial"):
+    def __init__(self, workflow: dict, global_prompt: str = "", tts_provider: str = "voicedesk"):
         nodes = workflow.get("nodes") or []
         self.nodes_by_id: dict[str, dict] = {n["id"]: n for n in nodes}
         self.edges: list[dict] = workflow.get("edges") or []
         self.global_prompt = global_prompt or ""
-        # "justdial" (our own IndicF5) can only pronounce Devanagari — see the
+        # "voicedesk" (our own IndicF5) can only pronounce Devanagari — see the
         # transliteration hint appended in compile_instructions() below.
         # "sarvam" (bulbul:v3) is a hosted TTS that pronounces Latin/Hinglish
         # natively, so it skips the hint (mirrors bot_dev.py's identical
         # tts_provider != "sarvam" gate).
-        self.tts_provider = tts_provider or "justdial"
+        self.tts_provider = tts_provider or "voicedesk"
         self.global_nodes = [n for n in nodes if (n.get("data") or {}).get("kind") == "global"]
         starts = [n for n in nodes if (n.get("data") or {}).get("kind") == "start"]
         self.start_node: dict | None = starts[0] if starts else None
@@ -614,11 +614,11 @@ async def run_workflow_call(
     max_call_duration = int(bot_config.get("max_call_duration") or 300)
     post_speech_hold_ms = int(bot_config.get("post_speech_hold_ms") or 300)
 
-    # TTS provider/voice — "justdial" (our own IndicF5) or "sarvam" (bulbul:v3),
+    # TTS provider/voice — "voicedesk" (our own IndicF5) or "sarvam" (bulbul:v3),
     # resolved server-side from voice_id via backend/voice_catalog.py (see
     # backend/routers/workflow_bots.py's get_workflow_bot_config). Same
     # selection bot_dev.py makes for regular assistants.
-    tts_provider = bot_config.get("tts_provider") or "justdial"
+    tts_provider = bot_config.get("tts_provider") or "voicedesk"
     tts_voice = bot_config.get("tts_voice") or "simran"
     # How easily a caller can interrupt this bot — see interruption_presets.py.
     interruption_preset = resolve_interruption_preset(bot_config.get("interruption_sensitivity"))

@@ -8,7 +8,7 @@ import backend.routers.bots as bots_router
 def _create_bot(client, auth_headers, name="Test Bot"):
     resp = client.post(
         "/api/bots",
-        json={"name": name, "description": "d", "config": {"organization_name": "Justdial"}},
+        json={"name": name, "description": "d", "config": {"organization_name": "VoiceDesk"}},
         headers=auth_headers,
     )
     assert resp.status_code == 200, resp.text

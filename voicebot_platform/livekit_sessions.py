@@ -66,7 +66,7 @@ async def create_webrtc_test_room(
     livekit_agent_name = (
         (agent_name_override or "").strip()
         or runtime.get("livekit_agent_name")
-        or "voice-bot-justdial"
+        or "voice-bot-voicedesk"
     )
 
     room_name = f"test-{room_metadata['assistant_id'][:8]}-{uuid4().hex[:10]}"

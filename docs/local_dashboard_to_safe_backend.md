@@ -7,7 +7,7 @@ Use this when you want the React dashboard on your Mac to talk to the safe stagi
 Create `frontend/.env.local`:
 
 ```bash
-cd /Users/justdial/voicebot_nodcode_platform
+cd /Users/voicedesk/voicebot_nodcode_platform
 printf 'VITE_API_BASE=http://localhost:8010\n' > frontend/.env.local
 ```
 
@@ -44,7 +44,7 @@ Expected output:
 Run this from your Mac in another terminal:
 
 ```bash
-cd /Users/justdial/voicebot_nodcode_platform/frontend
+cd /Users/voicedesk/voicebot_nodcode_platform/frontend
 node node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5173
 ```
 
@@ -74,6 +74,6 @@ curl 'http://localhost:8010/api/call-events?limit=5'
 
 Expected runtime values:
 
-- `livekit_agent_name` should be `voice-bot-justdial-test`
+- `livekit_agent_name` should be `voice-bot-voicedesk-test`
 - `livekit_api_url` should be `http://192.168.41.116:7880`
 - `livekit_browser_url` should be `ws://192.168.41.116:7880`

@@ -51,7 +51,7 @@ Python file returns zero hits. The existing dispatch rules were created by hand 
 
 This is the most important confusion to clear up, because it invalidates the obvious design.
 
-- **`WorkerOptions(agent_name="voice-bot-justdial-fallback")`** (`bot_dev.py:2365`,
+- **`WorkerOptions(agent_name="voice-bot-voicedesk-fallback")`** (`bot_dev.py:2365`,
   `bot_dev_param.py:2207`, `bot_pipeline.py:2378`, `bot.py:3845`) is a LiveKit *routing
   label for an OS process*. It is read once at process start, inside
   `if __name__ == "__main__"`, alongside a hardcoded port. It never reaches the LLM.
@@ -146,7 +146,7 @@ himself as a woman and stays feminine for the entire call.
 **Principle: LiveKit routes a call to a *pool*. Mongo decides *which bot* answers.**
 
 One agent name per **environment**, not per bot. The two existing dispatch rules become two
-pools (`voice-bot-justdial-live-1`, `voice-bot-justdial-fallback`). No rule, trunk, or
+pools (`voice-bot-voicedesk-live-1`, `voice-bot-voicedesk-fallback`). No rule, trunk, or
 process is ever created when a PM makes a bot. The per-bot decision happens in Mongo, at
 call time, keyed on the dialed number.
 
@@ -158,7 +158,7 @@ already built (`PUT /api/phone-numbers/{id}/reassign`).
 ### Target call flow
 
 1. Call hits a number on trunk `ST_LDzA29BwCipF`.
-2. The dispatch rule fires; LiveKit hands the job to any free `voice-bot-justdial-live-1`
+2. The dispatch rule fires; LiveKit hands the job to any free `voice-bot-voicedesk-live-1`
    worker.
 3. The worker reads the dialed number from the participant's `sip.trunkPhoneNumber`.
 4. The worker looks that number up in `phone_numbers` → resolves the bot → loads that
@@ -175,9 +175,9 @@ Steps 3 and 4 are the entire feature.
    (`bot.py:299`) into a root-level `persona_template.py`, importable by both `bot.py` and
    the backend via the defensive-import pattern already used at
    `backend/routers/bots.py:23` for `flow_compiler`. Every hardcoded identity becomes a slot:
-   - `"You are Simran, ... calling from Justdial"` → `{agent_name}`, `{organization_name}`
+   - `"You are Simran, ... calling from VoiceDesk"` → `{agent_name}`, `{organization_name}`
    - the `GENDER — HARD RULE` block → `{gender_rule}`
-   - `"जी, मैं Simran बोल रही हूँ Justdial से"` → needs a `{speaking_verb}` slot
+   - `"जी, मैं Simran बोल रही हूँ VoiceDesk से"` → needs a `{speaking_verb}` slot
      (`बोल रही हूँ` / `बोल रहा हूँ`); the feminine conjugation is baked inline into the
      Hindi example lines, not confined to the gender section
 
@@ -235,7 +235,7 @@ again, hear Priya — no restart, no LiveKit change.
 
 10. **Decide on `bot_dev.py`** — the `fallback` pool on trunk `ST_9yF7oqF4WQHU` is a separate
     file and inherits none of this. Either point both dispatch rules at
-    `voice-bot-justdial-live-1`, or port the resolution across.
+    `voice-bot-voicedesk-live-1`, or port the resolution across.
 
 11. **The Language dropdown** is decorative (`bot_dev_param.py:359`). Either wire it or
     remove it; the form's own helper text already admits it does nothing.
